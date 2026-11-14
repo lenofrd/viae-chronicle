@@ -200,3 +200,25 @@
 - 附身时是“每 tick 替 ta 做一个选择”就够，还是要连续多轮对话式操控、每句话即时看到反应。
 - 第一版要不要就区分“客观重要性”和“主观感知重要性”，让角色可以误判。
 - 制度规则第一版固定，还是允许人物通过事件修改规则（你倾向先固定，预留接口）。
+
+---
+
+## 十四、文档地图与横切层约定
+
+### 文档地图
+
+设计文档位于 `docs/design/`，子系统设计文档统一放在 `docs/design/systems/` 下，共 4 个子系统：
+
+- **natural-environment（自然环境）**：`00-overview.md` + 模块 `01-spatial-skeleton`、`02-climate`、`03-hydrology`、`04-terrain`、`05-soil-and-fields`、`06-vegetation`、`07-fauna`、`08-hazards` + 横切层 `09-dynamics/`、`10-state-and-records/`。
+- **human-environment（人文环境）**：`00-overview.md` + 模块 `01-social-spaces`、`02-institutions`、`03-relationships`、`04-information`、`05-education`、`06-stratification`、`07-conflicts`、`08-rituals-beliefs` + 横切层 `09-dynamics/`、`10-state-and-records/`。
+- **agents（人物）**：`00-overview.md`、`01-physical-state.md` … `06-actions.md` + 横切层 `09-dynamics.md`、`10-state-and-records.md`。
+- **interaction（交互）**：`00-overview.md`、`01-session-structure.md`、`02-negotiation-dynamics.md`、`03-importance-and-pacing.md`、`04-outcomes-and-consequences.md` + 横切层 `09-dynamics.md`、`10-state-and-records.md`。
+
+### 横切层编号约定
+
+全局统一使用两个横切层编号，**每个子系统都必须实现**：
+
+- **09（动力学 / dynamics）**：该子系统状态变量的变化速率、滞后与累积、空间传播、可逆性规则。内容少的子系统用单文件 `09-dynamics.md`，内容多的用目录 `09-dynamics/`。
+- **10（状态与记录 / state-and-records）**：该子系统的快照结构、事件流规范、查询接口。可用单文件 `10-state-and-records.md` 或目录 `10-state-and-records/`。
+
+每个子系统的 `00-overview.md` 末尾都应设"横切机制引用"段，指向本子系统的 09 / 10，保证跨子系统引用不迷路。
