@@ -47,3 +47,10 @@
       若违背软限制（如女性进深山），执行成功但产生角色冲突压力和舆论风险
       满足条件则执行，修改状态，生成 action_executed 事件。
 ```
+
+## 4. 可行性门控（任务 08 补充）
+
+### 4.1 farm 长势封顶
+- 当前作物模型为简化标量：`world.state.field_growth` 以节点为键存 0–100 的长势值，agent 取其 `work_node` 对应值作为感知字段 `work_field_growth`。完整作物模型见 `human-environment/01-production/...` 下的作物设计（未来落地），当前以标量近似。
+- 当 `work_field_growth >= agriculture.max_field_growth`（长势封顶）时，`farm` 在**决策评分阶段即判为不可行**（返回 `IMPOSSIBLE`），而非仅降分——避免长势已满仍无效劳作、白白消耗体力，且封顶后不再产生 `farm` 事件。
+- 所有动作均不可行时，沿用现有兜底（无动作、不崩溃），可通过观察层排查。

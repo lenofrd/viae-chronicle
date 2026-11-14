@@ -13,6 +13,7 @@ from config.schema.natural_params import Season
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
+from vale.core.state import DebtRecord
 from vale.core.world import World
 from vale.modules.agents import AgentModule
 from vale.modules.climate import ClimateModule
@@ -188,23 +189,29 @@ def test_farm_raises_growth_does_not_produce_grain(world):
 
 
 def test_harvest_autumn_grains_growth_and_redeems_debt(world):
-    """秋季 harvest：长势清零、存粮 +30、偿还部分债务。"""
+    """秋季 harvest：长势清零、存粮 +30，并按债务记录还给债主（粮守恒，不凭空消债）。"""
     run_tick(world)
     module = _agent_module(world)
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
+    li_quan = world.state.agents["li_quan"]
     lin.stamina = 80.0
     lin.grain = 10.0
-    lin.debt = 20.0
+    lin.debts = [DebtRecord(creditor_id="li_quan", amount=20.0, originated_tick=0, due_tick=90)]
+    lq_grain_before = li_quan.grain
     world.state.climate.season = Season.AUTUMN
     world.state.field_growth[lin.work_node] = 90.0
     p = module._perceive(world, lin)  # noqa: SLF001
 
     module._execute(world, lin, "harvest", p, tuning)
 
-    assert lin.grain == pytest.approx(40.0)   # 10 + 30
-    assert lin.debt == pytest.approx(10.0)    # 20 - 10
+    assert lin.grain == pytest.approx(30.0)   # 10 + 30(秋收) - 10(还债给李全)
+    assert lin.debt == pytest.approx(10.0)    # 20 - 10（派生聚合）
+    assert li_quan.grain == pytest.approx(lq_grain_before + 10.0)  # 债主收粮，总粮守恒
     assert world.state.field_growth[lin.work_node] == pytest.approx(0.0)
+    repaid = world.event_log.by_type("debt_repaid")
+    assert repaid and repaid[-1]["payload"]["creditor_id"] == "li_quan"
+    assert repaid[-1]["payload"]["amount"] == pytest.approx(10.0)
 
 
 def test_harvest_feasibility_gated_by_season_and_growth(world):
@@ -234,7 +241,7 @@ def test_borrow_grain_triggers_when_low_grain(world):
     lin.grain = 1.0      # < 阈值 2
     lin.stamina = 80.0
     lin.hunger = 30.0
-    lin.debt = 0.0
+    # debt 为派生值（computed_field），不可赋值；开局无债务即 0
 
     run_tick(world)
 
@@ -242,7 +249,17 @@ def test_borrow_grain_triggers_when_low_grain(world):
                   if e["payload"]["agent_name"] == "林远"]
     assert lin_events[-1]["payload"]["action"] == "borrow_grain"
     assert lin.grain == pytest.approx(6.0)  # 1 + 5
-    assert lin.debt == pytest.approx(5.0)   # 等额计入债务
+    assert lin.debt == pytest.approx(5.0)   # 等额计入债务（派生聚合）
+
+    # 借粮闭合：债主扣粮、借粮者加粮，总粮不变；事件载荷足以重建债务记录
+    formed = [e for e in world.event_log.by_type("debt_formed")
+              if e["payload"]["debtor_name"] == "林远"]
+    assert formed, "应产生 debt_formed 事件"
+    payload = formed[-1]["payload"]
+    assert payload["amount"] == pytest.approx(5.0)
+    assert payload["creditor_id"]  # 非空
+    assert payload["debtor_grain_after"] - payload["debtor_grain_before"] == pytest.approx(5.0)
+    assert payload["creditor_grain_after"] - payload["creditor_grain_before"] == pytest.approx(-5.0)
 
 
 def test_borrow_not_feasible_when_grain_sufficient(world):

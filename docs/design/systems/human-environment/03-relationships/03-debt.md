@@ -96,3 +96,30 @@
 - 违约的 trust 惩罚
 - obligation 压力系数
 - 债务纠纷的触发条件
+
+## 8. 实现状态（任务 08）
+
+> 本节记录任务 08 已落地的粮食债务闭环；利息/人情、债务转移与豁免、trust/obligation 联动、07-conflicts 债务纠纷触发等为未来完整模型，当前未实现。
+
+### 8.1 数据结构（已实现）
+- `DebtRecord`（见 `src/vale/core/state.py`）：`creditor_id`、`amount`（≥0）、`originated_tick`、`due_tick`、`last_collected_tick`（可空）、`overdue`。
+- `AgentState.debts: list[DebtRecord]` 为唯一事实源；`AgentState.debt` 改为 `@computed_field` 派生值（= 各记录 `amount` 求和），**只读不可赋值**，消除双写不一致。任何对 `agent.debt = X` 的赋值会抛 `AttributeError`，须操作 `.debts` 列表。
+
+### 8.2 演化规则（已实现）
+- **债务形成**（`borrow_grain` 动作）：在他人中按存粮降序选存粮 ≥ 借出量的债主（纯函数 `select_creditor`，感知与执行共用保证一致）；扣债主粮、加借粮者粮（世界总粮守恒），append `DebtRecord`，`due_tick = 当前 tick + debt.due_days`。无债主 → 动作不可行。
+- **每日结算**（`AgentModule._settle`，在全部 agent 动作循环之后统一执行，避免迭代中改状态）：
+  - 到期催收：`tick >= due_tick` 且（首次 或 `tick - last_collected_tick >= collection_interval_days`）时触发；有粮足额 → 扣粮还债主、记录减少/清零；部分 → 扣尽存粮、剩余标 `overdue`；零粮 → 标 `overdue`。
+  - 逾期者 `borrow_grain` 在评分阶段判为不可行，直至逾期债务清零。
+- **秋收还款**（`_repay_debts`，秋收动作内调用）：按 `(due_tick, originated_tick)` 升序，单笔还 `min(rec.amount, 预算, 存粮)`，预算上限复用已批准的 `agriculture.harvest_debt_repayment`；清偿记录移出列表。
+- 逐人 try/except，失败写 `agent_error`（`phase="daily_settlement"`），不拖垮主循环。
+- **守恒与非负**：粮只在角色间转移，不凭空产粮/直接消债；断言粮与债不为负。
+
+### 8.3 事件载荷（已实现，观察层可读）
+| event_type | 触发 | 关键字段 |
+|---|---|---|
+| `debt_formed` | 借粮成功 | creditor/debtor 的 id+name, debt_type, amount, due_tick, originated_tick, 双方 grain_before/after, debt_before/after |
+| `debt_collected` | 到期催收（足额或部分） | creditor/debtor 的 id+name, amount_paid, remaining, overdue, 双方 grain_after |
+| `debt_defaulted` | 到期零粮 | creditor/debtor 的 id+name, amount, overdue_ticks |
+| `debt_repaid` | 秋收还款 | creditor/debtor 的 id+name, amount, remaining, source, 双方 grain_after |
+
+> 1 tick = 1 天（`time.tu_per_tick=10`），`due_days` / `collection_interval_days` 直接映射为 tick 差。

@@ -69,6 +69,26 @@ class BorrowTuning(BaseModel):
     borrow_grain_amount: float = Field(5.0, ge=0, description="每次借粮数量（石），同时计入等额债务")
 
 
+class DebtTuning(BaseModel):
+    """债务到期与催收节奏（任务 08 新增）。数值全部来自 agents.yaml，代码不写死。"""
+
+    due_days: int = Field(90, ge=1, description="借粮后多少天到期（1 tick = 1 天）")
+    collection_interval_days: int = Field(30, ge=1, description="到期后每隔多少天催收一次")
+    # 秋收还款上限复用 AgricultureTuning.harvest_debt_repayment（已批准参数），避免双源
+
+
+class HealthTuning(BaseModel):
+    """健康回血（任务 08 新增）。数值全部来自 agents.yaml，代码不写死。"""
+
+    health_recovery_per_day: float = Field(0.5, ge=0, description="每日健康回血速率")
+    health_recovery_hunger_threshold: float = Field(
+        40.0, ge=0, le=100, description="饥饿低于此值才允许回血"
+    )
+    health_recovery_stamina_threshold: float = Field(
+        50.0, ge=0, le=100, description="体力高于此值才允许回血"
+    )
+
+
 class TimeTuning(BaseModel):
     tu_per_tick: float = Field(10.0, ge=0)
     farm_tu: float = Field(5.0, ge=0)
@@ -80,6 +100,8 @@ class AgentTuning(BaseModel):
     action: ActionTuning = Field(default_factory=ActionTuning)
     agriculture: AgricultureTuning = Field(default_factory=AgricultureTuning)
     borrow: BorrowTuning = Field(default_factory=BorrowTuning)
+    debt: DebtTuning = Field(default_factory=DebtTuning)
+    health: HealthTuning = Field(default_factory=HealthTuning)
     time: TimeTuning = Field(default_factory=TimeTuning)
 
 

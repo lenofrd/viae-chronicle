@@ -124,6 +124,63 @@ def _safe_diff(after: Any, before: Any) -> str:
         return "?"
 
 
+def _render_debt_formed(payload: dict) -> tuple[str, bool]:
+    debtor = payload.get("debtor_name") or payload.get("debtor_id") or "?"
+    creditor = payload.get("creditor_name") or payload.get("creditor_id") or "?"
+    amount = _num(payload.get("amount"))
+    due = payload.get("due_tick")
+    text = f"[{debtor}] 向 [{creditor}] 借粮 {amount} 石（到期 tick {due}）"
+    degraded = not all(k in payload for k in ("creditor_id", "debtor_id", "amount", "due_tick"))
+    return text, degraded
+
+
+def _render_debt_collected(payload: dict) -> tuple[str, bool]:
+    debtor = payload.get("debtor_name") or payload.get("debtor_id") or "?"
+    creditor = payload.get("creditor_name") or payload.get("creditor_id") or "?"
+    paid = _num(payload.get("amount_paid"))
+    remaining = _num(payload.get("remaining"))
+    if payload.get("overdue"):
+        suffix = "（仍逾期）"
+    else:
+        try:
+            suffix = "（已结清）" if float(payload.get("remaining", 0)) == 0 else ""
+        except (TypeError, ValueError):
+            suffix = ""
+    text = f"[{creditor}] 向 [{debtor}] 催收，收回 {paid} 石（剩余 {remaining}）{suffix}"
+    degraded = not all(k in payload for k in ("creditor_id", "debtor_id", "amount_paid"))
+    return text, degraded
+
+
+def _render_debt_defaulted(payload: dict) -> tuple[str, bool]:
+    debtor = payload.get("debtor_name") or payload.get("debtor_id") or "?"
+    creditor = payload.get("creditor_name") or payload.get("creditor_id") or "?"
+    amount = _num(payload.get("amount"))
+    overdue = payload.get("overdue_ticks")
+    text = f"[{debtor}] 欠 [{creditor}] {amount} 石无力偿还，违约（逾期 {overdue} 天）"
+    degraded = not all(k in payload for k in ("creditor_id", "debtor_id", "amount"))
+    return text, degraded
+
+
+def _render_debt_repaid(payload: dict) -> tuple[str, bool]:
+    debtor = payload.get("debtor_name") or payload.get("debtor_id") or "?"
+    creditor = payload.get("creditor_name") or payload.get("creditor_id") or "?"
+    amount = _num(payload.get("amount"))
+    remaining = _num(payload.get("remaining"))
+    src = "（秋收）" if payload.get("source") == "harvest" else ""
+    text = f"[{debtor}] 还 [{creditor}] {amount} 石{src}（剩余 {remaining}）"
+    degraded = not all(k in payload for k in ("creditor_id", "debtor_id", "amount"))
+    return text, degraded
+
+
+def _render_health_recovered(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    before = _num(payload.get("before"))
+    after = _num(payload.get("after"))
+    text = f"[{name}] 健康回升 {before} → {after}"
+    degraded = not all(k in payload for k in ("agent_id", "before", "after"))
+    return text, degraded
+
+
 def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderResult:
     """渲染单条事件为一行中文摘要。永不抛出。"""
     if evt.get("_payload_broken"):
@@ -155,6 +212,21 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "agent_error":
             text, degraded = _render_agent_error(payload)
             reason = "missing_error_field" if degraded else None
+        elif event_type == "debt_formed":
+            text, degraded = _render_debt_formed(payload)
+            reason = "missing_debt_field" if degraded else None
+        elif event_type == "debt_collected":
+            text, degraded = _render_debt_collected(payload)
+            reason = "missing_debt_field" if degraded else None
+        elif event_type == "debt_defaulted":
+            text, degraded = _render_debt_defaulted(payload)
+            reason = "missing_debt_field" if degraded else None
+        elif event_type == "debt_repaid":
+            text, degraded = _render_debt_repaid(payload)
+            reason = "missing_debt_field" if degraded else None
+        elif event_type == "health_recovered":
+            text, degraded = _render_health_recovered(payload)
+            reason = "missing_health_field" if degraded else None
         else:
             # 未知事件类型兜底：展示原始载荷键（截断），不崩
             keys = ", ".join(list(payload.keys())[:8])

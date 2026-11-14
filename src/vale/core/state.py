@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from config.schema.agents import AgentSex
 from config.schema.natural_params import (
@@ -45,6 +45,21 @@ class ClimateSnapshot(BaseModel):
     weather_trend: list[str] = Field(default_factory=list)
 
 
+class DebtRecord(BaseModel):
+    """单笔粮食债务记录（任务 08）。
+
+    事件溯源投影：债务的创建/变更/清偿都先写事件，再由此结构镜像。
+    「总负债」由 AgentState.debt 派生求和（computed_field），本结构是唯一真相源，避免双写不一致。
+    """
+
+    creditor_id: str
+    amount: float = Field(..., ge=0)
+    originated_tick: int = Field(..., ge=0)
+    due_tick: int = Field(..., ge=0)
+    last_collected_tick: Optional[int] = Field(default=None, ge=0)
+    overdue: bool = False
+
+
 class AgentState(BaseModel):
     """单个人物的状态快照，写入 world.state.agents[agent_id]。"""
 
@@ -60,9 +75,16 @@ class AgentState(BaseModel):
     stamina: float = Field(..., ge=0, le=100)
     fatigue: float = Field(default=0.0, ge=0, le=100)
     grain: float = Field(default=0.0, ge=0)
-    debt: float = Field(default=0.0, ge=0, description="欠富户的粮食债务（石），后续里程碑实现纠纷/利息")
+    # 债务列表为唯一真相源；debt 为派生聚合（见下方 computed_field）
+    debts: list[DebtRecord] = Field(default_factory=list)
     last_action: Optional[str] = None
     recent_actions: list[str] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def debt(self) -> float:
+        """总负债 = 各笔债务金额之和（派生值，只读；不可直接赋值）。"""
+        return float(sum(d.amount for d in self.debts))
 
 
 class WorldState(BaseModel):

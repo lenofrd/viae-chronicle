@@ -56,6 +56,16 @@ tuning:
     borrow_grain_threshold: 2           # 存粮 < 此值触发借粮
     borrow_grain_amount: 5              # 每次借 5 石，同时等额计入债务
 
+  debt:                                 # 任务08 新增：债务到期与催收节奏
+    due_days: 90                        # [调参] 借粮后 90 天到期
+    collection_interval_days: 30        # [调参] 到期后每 30 天催收一次
+    # 秋收还款上限复用 agriculture.harvest_debt_repayment(=10)；长势封顶复用 max_field_growth(=100)
+
+  health:                               # 任务08 新增：健康回血
+    health_recovery_per_day: 0.5        # [调参] 每日回血速率
+    health_recovery_hunger_threshold: 40  # [调参] 饥饿低于此值才回血
+    health_recovery_stamina_threshold: 50 # [调参] 体力高于此值才回血
+
   time:
     tu_per_tick: 10                     # 1 Tick = 1 天 = 10 TU
     farm_tu: 5

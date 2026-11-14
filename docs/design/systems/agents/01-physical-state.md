@@ -68,6 +68,17 @@
       生成 death 事件，触发人文环境的丧葬、继承
 ```
 
+### 4.6 健康回血（任务 08）
+```
+条件：每日结算阶段，hunger < health_recovery_hunger_threshold
+                 且 stamina > health_recovery_stamina_threshold
+效果：health = min(100, health + health_recovery_per_day)
+      仅数值实际变化时生成 health_recovered 事件（含 before/after/reason/hunger/stamina）
+滞后：每 tick 结算后
+影响范围：单人
+```
+说明：回血在 `AgentModule._settle` 结算阶段执行，**不覆盖** `_process_one` 中的饥饿扣血（4.2）——二者同日可并存（先扣后回，或条件不满足只扣不回）。健康上限 100 为域常量，非调参；回血速率/两阈值外置为 `health:` 调参块。长期饥饿或体力耗尽时条件不满足，不回血、不写事件。
+
 ## 5. 与其他系统的接口
 - 读：食物存量、休息场所。
 - 写：决策系统（重体力劳作受怀孕和疲劳限制）、人文环境（生育率影响人口结构）。

@@ -15,7 +15,7 @@ from typing import Callable, Optional
 
 from config.schema.agents import AgentConfig, AgentTuning
 from config.schema.natural_params import Season, WeatherType
-from vale.core.state import AgentState
+from vale.core.state import AgentState, DebtRecord
 
 # 视为降雨的天气（B9：影响户外劳作）
 RAIN_WEATHERS = {WeatherType.LIGHT_RAIN, WeatherType.MODERATE_RAIN, WeatherType.HEAVY_RAIN}
@@ -85,8 +85,23 @@ class Perception:
     season: Season
     work_field_growth: float
     lender_node: str
+    # 可选债主（存粮 ≥ 借出量的最富其他人）；None 表示无人可借 → borrow 不可行
+    creditor_id: Optional[str] = None
     # 家 → 各候选目标的单程 TU；打分时往返 = 2 × 单程（C1）
     distance_from_home: dict[str, float] = field(default_factory=dict)
+
+
+def select_creditor(
+    agents: dict[str, AgentState], debtor_id: str, amount: float
+) -> Optional[AgentState]:
+    """选存粮 >= amount 的其他人，按存粮降序取最富者（并列按 id 稳定）；无人可借则 None。
+
+    纯函数，可独立单测；被 _perceive（可行性判定）与 _execute（实际扣粮）共用，保证一致。
+    """
+    candidates = [a for a in agents.values() if a.agent_id != debtor_id and a.grain >= amount]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda a: (a.grain, a.agent_id))
 
 
 def _lender_node(world, agent: AgentState) -> str:
@@ -142,6 +157,8 @@ class AgentModule:
                         "traceback": traceback.format_exc(limit=2),
                     },
                 )
+        # 每日结算（任务 08）：债务催收 + 健康回血，统一在所有人物动作之后处理跨人粮转移
+        self._settle(world, tuning)
 
     def _ensure_agents(self, world, cfg) -> None:
         if world.state.agents:
@@ -196,6 +213,8 @@ class AgentModule:
         for act in CANDIDATE_ACTIONS:
             target = _target_node(act, agent, world)
             dist[target] = self._spatial.travel_tu(agent.home_node, target) if self._spatial else 0.0
+        bor = world.config.agents.tuning.borrow
+        creditor = select_creditor(world.state.agents, agent.agent_id, bor.borrow_grain_amount)
         return Perception(
             agent=agent,
             weather=weather,
@@ -204,6 +223,7 @@ class AgentModule:
             season=season,
             work_field_growth=world.state.field_growth.get(agent.work_node, 0.0),
             lender_node=_lender_node(world, agent),
+            creditor_id=creditor.agent_id if creditor else None,
             distance_from_home=dist,
         )
 
@@ -268,6 +288,15 @@ class AgentModule:
             p.season != Season.AUTUMN or p.work_field_growth < agr.harvest_growth_threshold
         ):
             return IMPOSSIBLE
+        # farm 封顶：长势达上限后不可再选 farm，避免无效劳作与体力消耗（任务 08）
+        if action == "farm" and p.work_field_growth >= agr.max_field_growth:
+            return IMPOSSIBLE
+        # borrow 可行性：存粮 < 阈值（上已判） + 有存粮足够的债主 + 无逾期债务
+        if action == "borrow_grain":
+            if p.creditor_id is None:
+                return IMPOSSIBLE
+            if any(d.overdue for d in agent.debts):
+                return IMPOSSIBLE
 
         one_way = p.distance_from_home.get(target, 0.0)
         round_trip = one_way * 2.0  # C1：每天 move 往返
@@ -341,14 +370,50 @@ class AgentModule:
                 agr.max_field_growth, field_growth_before + agr.field_growth_per_farm
             )
         elif action == "harvest":
-            # 秋季且长势达标：长势清零，获得存粮，并偿还部分债务
+            # 秋季且长势达标：长势清零，获得存粮；再按债务记录还给对应债主（粮从借粮者到债主）
             fg[agent.work_node] = 0.0
             agent.grain = agent.grain + agr.harvest_grain_gain
-            agent.debt = max(0.0, agent.debt - agr.harvest_debt_repayment)
+            self._repay_debts(
+                world, agent, tuning, source="harvest", max_repay=agr.harvest_debt_repayment
+            )
         elif action == "borrow_grain":
-            # 第一版极简：必借到，存粮 +X，等额计入债务（后续里程碑实现纠纷/利息）
-            agent.grain = agent.grain + bor.borrow_grain_amount
-            agent.debt = agent.debt + bor.borrow_grain_amount
+            # 借粮闭合：从债主扣粮、借粮者加粮、创建债务记录；无债主/不足则不产粮不欠债
+            amount = bor.borrow_grain_amount
+            creditor = select_creditor(world.state.agents, agent.agent_id, amount)
+            if creditor is not None and creditor.grain >= amount:
+                creditor_grain_before = creditor.grain
+                creditor.grain = creditor.grain - amount
+                agent.grain = agent.grain + amount
+                due_tick = world.current_tick + tuning.debt.due_days
+                agent.debts.append(
+                    DebtRecord(
+                        creditor_id=creditor.agent_id,
+                        amount=amount,
+                        originated_tick=world.current_tick,
+                        due_tick=due_tick,
+                    )
+                )
+                world.event_log.append(
+                    world.current_tick,
+                    "debt_formed",
+                    {
+                        "creditor_id": creditor.agent_id,
+                        "creditor_name": creditor.name,
+                        "debtor_id": agent.agent_id,
+                        "debtor_name": agent.name,
+                        "debt_type": "grain",
+                        "amount": round(amount, 2),
+                        "due_tick": due_tick,
+                        "originated_tick": world.current_tick,
+                        "debtor_grain_before": round(grain_before, 2),
+                        "debtor_grain_after": round(agent.grain, 2),
+                        "creditor_grain_before": round(creditor_grain_before, 2),
+                        "creditor_grain_after": round(creditor.grain, 2),
+                        "debt_before": round(debt_before, 2),
+                        "debt_after": round(agent.debt, 2),
+                    },
+                )
+            # 若 creditor 为 None 或存粮不足（理论上 _score 已过滤），不产粮不欠债，仅消耗往返体力
         # collect_water：本阶段仅消耗体力（饮水资产暂不建模）
 
         field_growth_after = fg.get(agent.work_node, 0.0)
@@ -383,5 +448,152 @@ class AgentModule:
                 "field_growth_after": round(field_growth_after, 2),
                 "stamina_after": round(agent.stamina, 2),
                 "weather": p.weather.value,
+            },
+        )
+
+    # -- 债务还款（秋收 / 通用）-------------------------------------------- #
+    def _repay_debts(
+        self, world, agent: AgentState, tuning: AgentTuning, *, source: str, max_repay: float
+    ) -> None:
+        """按最早到期优先，从 agent 扣粮还给各债主，最多 max_repay 石；逐笔写 debt_repaid 事件。
+
+        粮守恒：借粮者扣的每石都加到对应债主，绝不凭空消债。不得扣成负粮。
+        """
+        if max_repay <= 0 or not agent.debts:
+            return
+        ordered = sorted(agent.debts, key=lambda d: (d.due_tick, d.originated_tick))
+        budget = max_repay
+        for rec in ordered:
+            if budget <= 0:
+                break
+            pay = min(rec.amount, budget, agent.grain)  # 不得扣成负粮
+            if pay <= 0:
+                continue
+            creditor = world.state.agents.get(rec.creditor_id)
+            if creditor is None:
+                continue
+            agent.grain = agent.grain - pay
+            creditor.grain = creditor.grain + pay
+            rec.amount = rec.amount - pay
+            budget = budget - pay
+            world.event_log.append(
+                world.current_tick,
+                "debt_repaid",
+                {
+                    "creditor_id": creditor.agent_id,
+                    "creditor_name": creditor.name,
+                    "debtor_id": agent.agent_id,
+                    "debtor_name": agent.name,
+                    "amount": round(pay, 2),
+                    "remaining": round(rec.amount, 2),
+                    "source": source,
+                    "debtor_grain_after": round(agent.grain, 2),
+                    "creditor_grain_after": round(creditor.grain, 2),
+                },
+            )
+        # 清偿完毕（amount==0）的记录移出列表，保持债务列表干净
+        agent.debts = [d for d in agent.debts if d.amount > 0]
+
+    # -- 每日结算：债务催收 + 健康回血 ------------------------------------- #
+    def _settle(self, world, tuning: AgentTuning) -> None:
+        """tick 末尾统一结算。逐人错误隔离：单人结算失败写 agent_error，不拖垮世界。"""
+        for agent in list(world.state.agents.values()):
+            try:
+                self._collect_debts(world, agent, tuning)
+                self._recover_health(world, agent, tuning)
+            except Exception as exc:  # noqa: BLE001 — 单人结算失败不拖垮世界
+                world.event_log.append(
+                    world.current_tick,
+                    "agent_error",
+                    {
+                        "agent_id": agent.agent_id,
+                        "agent_name": agent.name,
+                        "phase": "daily_settlement",
+                        "error": repr(exc),
+                        "traceback": traceback.format_exc(limit=2),
+                    },
+                )
+
+    def _collect_debts(self, world, agent: AgentState, tuning: AgentTuning) -> None:
+        """到期债务催收：足额/部分转粮给债主写 debt_collected；无粮可还则违约写 debt_defaulted。
+
+        到期后每 collection_interval_days 天催收一次（last_collected_tick 节流）。
+        部分还款后剩余标 overdue；逾期者后续借粮被 _score 禁止。
+        """
+        tick = world.current_tick
+        interval = tuning.debt.collection_interval_days
+        for rec in list(agent.debts):  # 遍历副本，避免边迭代边修改
+            if tick < rec.due_tick:
+                continue
+            last = rec.last_collected_tick
+            if last is not None and tick - last < interval:
+                continue
+            rec.last_collected_tick = tick
+            creditor = world.state.agents.get(rec.creditor_id)
+            if creditor is None:
+                continue
+            pay = min(rec.amount, agent.grain)
+            if pay > 0:
+                agent.grain = agent.grain - pay
+                creditor.grain = creditor.grain + pay
+                rec.amount = rec.amount - pay
+                rec.overdue = rec.amount > 0
+                world.event_log.append(
+                    tick,
+                    "debt_collected",
+                    {
+                        "creditor_id": creditor.agent_id,
+                        "creditor_name": creditor.name,
+                        "debtor_id": agent.agent_id,
+                        "debtor_name": agent.name,
+                        "amount_paid": round(pay, 2),
+                        "remaining": round(rec.amount, 2),
+                        "overdue": rec.overdue,
+                        "debtor_grain_after": round(agent.grain, 2),
+                        "creditor_grain_after": round(creditor.grain, 2),
+                    },
+                )
+            else:
+                rec.overdue = True
+                world.event_log.append(
+                    tick,
+                    "debt_defaulted",
+                    {
+                        "creditor_id": creditor.agent_id,
+                        "creditor_name": creditor.name,
+                        "debtor_id": agent.agent_id,
+                        "debtor_name": agent.name,
+                        "amount": round(rec.amount, 2),
+                        "overdue_ticks": tick - rec.due_tick,
+                    },
+                )
+        agent.debts = [d for d in agent.debts if d.amount > 0]
+
+    def _recover_health(self, world, agent: AgentState, tuning: AgentTuning) -> None:
+        """饥饿低于阈值且体力高于阈值时回血，封顶 100；仅数值实际变化时写 health_recovered。
+
+        饥饿扣血（在 _process_one 中）保留：若本日 hunger 仍高，则不满足回血条件，惩罚不被覆盖。
+        """
+        h = tuning.health
+        if agent.hunger >= h.health_recovery_hunger_threshold:
+            return
+        if agent.stamina <= h.health_recovery_stamina_threshold:
+            return
+        before = agent.health
+        after = min(100.0, before + h.health_recovery_per_day)
+        if after <= before:
+            return
+        agent.health = after
+        world.event_log.append(
+            world.current_tick,
+            "health_recovered",
+            {
+                "agent_id": agent.agent_id,
+                "agent_name": agent.name,
+                "before": round(before, 2),
+                "after": round(after, 2),
+                "reason": "hunger_and_stamina_ok",
+                "hunger": round(agent.hunger, 2),
+                "stamina": round(agent.stamina, 2),
             },
         )

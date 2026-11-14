@@ -63,13 +63,18 @@ python src/vale/cli.py events --db data/worlds/brookvale-town-001/events.db list
 | `weather_changed` | `year, month, day, solar_term, season, weather, temperature_c, precipitation_mm, humidity_pct, drought_accumulation, drought_state` |
 | `season_changed` | `from, to, year, month, day` |
 | `agent_action_taken` | `agent_id, agent_name, action, target_node, hunger_before/after, grain_before/after, debt_before/after, field_growth_before/after, stamina_after, weather` |
-| `agent_error` | `agent_id, agent_name, error, traceback` |
+| `agent_error` | `agent_id, agent_name, error, traceback`（结算阶段含 `phase`） |
+| `debt_formed`（任务08） | `creditor_id, creditor_name, debtor_id, debtor_name, debt_type, amount, due_tick, originated_tick, debtor_grain_before/after, creditor_grain_before/after, debt_before/after` |
+| `debt_collected`（任务08） | `creditor_id, creditor_name, debtor_id, debtor_name, amount_paid, remaining, overdue, debtor_grain_after, creditor_grain_after` |
+| `debt_defaulted`（任务08） | `creditor_id, creditor_name, debtor_id, debtor_name, amount, overdue_ticks` |
+| `debt_repaid`（任务08） | `creditor_id, creditor_name, debtor_id, debtor_name, amount, remaining, source, debtor_grain_after, creditor_grain_after` |
+| `health_recovered`（任务08） | `agent_id, agent_name, before, after, reason, hunger, stamina` |
 | `module_error`（调度器写入，未在要求覆盖列表） | `module, error, traceback` → 走未知类型兜底 |
 
 ## 7. 渲染与兜底
 
 - 每条事件渲染成一行中文摘要；`show` 额外打印完整 payload。
-- **已知覆盖**：4 种事件类型 + 动作 `eat/rest/farm/collect_water/harvest/borrow_grain`。
+- **已知覆盖**：9 种事件类型（`weather_changed` / `season_changed` / `agent_action_taken` / `agent_error` + 任务08 新增 `debt_formed` / `debt_collected` / `debt_defaulted` / `debt_repaid` / `health_recovered`）+ 动作 `eat/rest/farm/collect_water/harvest/borrow_grain`。
 - **兜底（不崩）**：未知 event_type、未知 action、缺失字段、坏 JSON 载荷 → 输出可读占位（`未知` / `?` / 原始载荷键），并标记 `degraded`。
 - 单条渲染失败（异常）→ 捕获，输出 `[渲染失败]` 行 + 计入降级，继续处理后续。
 
