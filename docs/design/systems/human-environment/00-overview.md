@@ -105,6 +105,8 @@
 
 **依赖原则**：上游子系统只提供状态和事件，不直接修改下游子系统；下游子系统读取上游状态，按自己的规则演化。冲突（07）是反馈节点，它的后果广播回所有子系统。
 
+**家畜（11）**：横切层之后的新增内容子系统。繁衍与损耗写入 06 的 `wealth_changed`；役用状态供 agents 读取（见 `agents/06-actions.md` 的 `use_ox`）。详细规则见 `11-livestock/`。
+
 ## 5. 与自然环境的关系
 
 人文环境和自然环境是**双向耦合**，不是单向依赖：
@@ -207,6 +209,7 @@ cause_event_id, effect_scope, reversible, recovery_time
 | `08-rituals-beliefs/` | 祭祖、祭山神、节庆、婚丧嫁娶、禁忌认知 |
 | `09-dynamics/` | 制度变迁、关系变化、谣言传播、舆论形成 |
 | `10-state-and-records/` | 人文快照、事件流、查询接口 |
+| `11-livestock/` | 家畜作为活体资产（owner/species/health/utility），繁衍与损耗走 `wealth_changed`，役用状态供 agents 读取 |
 
 地点参数占位统一在 `locations/brookvale-town/human-params.md`，本目录不写具体数值。
 

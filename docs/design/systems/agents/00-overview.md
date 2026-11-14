@@ -48,6 +48,7 @@
 | `cognitive_dissonance` | 03 | 新信息与内化性别规范冲突，推高角色冲突压力 |
 | `role_conflict_surged` | 02 | 角色冲突压力超阈值，可能放弃行动或叛逆执行 |
 | `firewood_gathered` / `herb_gathered` | 06 → 06-vegetation | 采集动作写入自然环境资源点，影响存量与采集压力 |
+| `raise_livestock` / `graze` / `use_ox` / `slaughter` | 06 → 11-livestock | 家畜动作写入人文环境家畜资产，繁衍/损耗走 `wealth_changed` |
 
 ## 6. 与其他系统的接口
 - **读**：自然环境状态、人文环境制度、社会规范、关系网络。

@@ -2,3 +2,6 @@
 .check/
 *.check.log
 *.check.out
+
+# AI 助手工作区，不进版本库
+.ai/
