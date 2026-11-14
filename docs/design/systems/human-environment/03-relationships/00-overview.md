@@ -56,6 +56,8 @@
   - 07-conflicts：关系恶化触发冲突；冲突结果改变关系。
   - 06-stratification：关系网络影响地位和流动机会。
   - 人物系统：提供信任、利益权重、义务，作为决策和拉扯的输入。
+  - 交互系统（interaction）：提供 trust、interest_weight、obligation，作为交涉的先验和门槛。
+- 被写：交互系统（interaction）的会话结果产生 trust_changed / obligation_changed 事件写入本系统（达成、破裂、违约、补偿）。
 - 因果链：帮助事件 → trust 上升 → 未来拉扯中更容易被说服；背叛事件 → trust 下降 → 未来拉扯中言语效果打折。
 
 ## 7. 地点参数占位
