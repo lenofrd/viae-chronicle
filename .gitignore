@@ -1,0 +1,11 @@
+# 各系统目录下的过程性检查 / 修改文件（不纳入版本控制，本地保留）
+# 覆盖自然环境、人文环境及将来各系统
+docs/design/systems/**/检查*.md
+docs/design/systems/**/自检*.md
+docs/design/systems/**/CHECKLIST*.md
+docs/design/systems/**/修改指令*.md
+
+# 检查工作区，不进版本库
+.check/
+*.check.log
+*.check.out
