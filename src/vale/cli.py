@@ -27,6 +27,15 @@ from vale.core.scheduler import run_tick  # noqa: E402
 from vale.core.world import World  # noqa: E402
 from vale.modules.agents import AgentModule  # noqa: E402
 from vale.modules.climate import ClimateModule  # noqa: E402
+from vale.observability.export import EXPORT_FORMATS  # noqa: E402
+from vale.observability.query import EventFilter, apply_filter  # noqa: E402
+from vale.observability.render import payload_preview, render_event  # noqa: E402
+from vale.observability.viewer import (  # noqa: E402
+    ReadonlyEventStore,
+    date_str,
+    day_tick_range,
+    expr_to_tick,
+)
 
 WORLD_ID = "brookvale-town-001"
 DB_PATH = os.path.join(_ROOT, "data", "worlds", WORLD_ID, "cli_run.db")
@@ -191,6 +200,151 @@ def cmd_agent(args: argparse.Namespace) -> None:
     el.close()
 
 
+# ----------------------------------------------------------------------
+# 观察层：events 子命令族（只读事件流查看器，任务 07）
+# ----------------------------------------------------------------------
+def _add_common_args(p: argparse.ArgumentParser) -> None:
+    """子解析器共享 --db/--debug。用 SUPPRESS：子命令未传时不覆盖 events 级别的值，
+    因此 --db/--debug 放在子命令前或后都生效。"""
+    p.add_argument("--db", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    p.add_argument("--debug", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+
+
+def _add_filter_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--agent", help="按人物姓名筛选（payload.agent_name）")
+    p.add_argument("--type", action="append", default=[],
+                   help="按事件类型筛选，可重复传或逗号分隔，如 --type weather_changed --type agent_action_taken")
+    p.add_argument("--from", dest="from_", help="范围下界：纯数字=tick，或「1年7月1日」")
+    p.add_argument("--to", help="范围上界：纯数字=tick，或「1年9月30日」（含）")
+    p.add_argument("--limit", type=int, default=50, help="最多返回条数（默认 50）")
+    p.add_argument("--all", action="store_true", help="全量，忽略 --limit")
+    p.add_argument("--reverse", action="store_true", help="倒序（最新在前）")
+
+
+def _build_filter(args, cfg) -> EventFilter:
+    types: list[str] = []
+    for t in getattr(args, "type", []) or []:
+        types.extend(x.strip() for x in t.split(",") if x.strip())
+    tick_from = expr_to_tick(args.from_, cfg) if getattr(args, "from_", None) else None
+    tick_to = expr_to_tick(args.to, cfg) if getattr(args, "to", None) else None
+    limit = None if getattr(args, "all", False) else getattr(args, "limit", 50)
+    return EventFilter(
+        agent=getattr(args, "agent", None),
+        event_types=types or None,
+        tick_from=tick_from,
+        tick_to=tick_to,
+        limit=limit,
+        reverse=getattr(args, "reverse", False),
+    )
+
+
+def _filter_desc(args) -> str:
+    parts = []
+    if getattr(args, "agent", None):
+        parts.append(f"agent={args.agent}")
+    if getattr(args, "type", None):
+        parts.append(f"type={','.join(args.type)}")
+    if getattr(args, "from_", None):
+        parts.append(f"from={args.from_}")
+    if getattr(args, "to", None):
+        parts.append(f"to={args.to}")
+    if getattr(args, "name", None) and getattr(args, "command", None) == "events" \
+            and getattr(args, "ev_command", None) == "timeline":
+        parts.append(f"timeline={args.name}")
+    return ", ".join(parts)
+
+
+def _print_events(events: list, cfg, names) -> int:
+    degraded = 0
+    for evt in events:
+        r = render_event(evt, names)
+        if r.degraded:
+            degraded += 1
+        tag = " [降级]" if r.degraded else ""
+        print(f"  #{evt['id']:<6} [{date_str(evt['tick'], cfg)}] "
+              f"{evt['event_type']:<20} {r.text}{tag}")
+    print(f"共 {len(events)} 条，其中降级 {degraded} 条。")
+    return degraded
+
+
+def _query(args, cfg):
+    store = ReadonlyEventStore(args.db)
+    try:
+        return apply_filter(store.all(), _build_filter(args, cfg))
+    finally:
+        store.close()
+
+
+def cmd_events_list(args) -> None:
+    cfg = load_config(WORLD_ID)
+    names = _node_names(cfg.spatial)
+    events = _query(args, cfg)
+    print(f"事件库：{args.db}  |  筛选：{_filter_desc(args) or '无'}")
+    _print_events(events, cfg, names)
+
+
+def cmd_events_timeline(args) -> None:
+    cfg = load_config(WORLD_ID)
+    names = _node_names(cfg.spatial)
+    args.agent = args.name  # 位置参数覆盖 --agent
+    events = _query(args, cfg)
+    print(f"人物时间线：{args.name}  |  事件库：{args.db}")
+    _print_events(events, cfg, names)
+
+
+def cmd_events_day(args) -> None:
+    cfg = load_config(WORLD_ID)
+    names = _node_names(cfg.spatial)
+    tick_lo, tick_hi = day_tick_range(cfg, args.date)
+    args.from_ = str(tick_lo)
+    args.to = str(tick_hi)
+    events = _query(args, cfg)
+    print(f"{date_str(tick_lo, cfg)} 的事件  |  事件库：{args.db}")
+    _print_events(events, cfg, names)
+
+
+def cmd_events_show(args) -> None:
+    cfg = load_config(WORLD_ID)
+    names = _node_names(cfg.spatial)
+    store = ReadonlyEventStore(args.db)
+    try:
+        evt = store.get(args.event_id)
+    finally:
+        store.close()
+    if evt is None:
+        print(f"未找到事件 id={args.event_id}")
+        return
+    r = render_event(evt, names)
+    print(f"事件 #{evt['id']}  tick={evt['tick']}  [{date_str(evt['tick'], cfg)}]  "
+          f"类型={evt['event_type']}  降级={'是' if r.degraded else '否'}")
+    print(f"摘要：{r.text}")
+    if r.degraded:
+        print(f"降级原因：{r.reason}")
+    print("完整 payload：")
+    print(payload_preview(evt))
+
+
+def cmd_events_export(args) -> None:
+    cfg = load_config(WORLD_ID)
+    names = _node_names(cfg.spatial)
+    fmt = args.format.lower()
+    if fmt not in EXPORT_FORMATS:
+        raise SystemExit(f"不支持的导出格式：{fmt}（可选：md / csv / jsonl）")
+    events = _query(args, cfg)
+    if not args.output:
+        raise SystemExit("导出需要 -o/--output 指定输出文件")
+    text = EXPORT_FORMATS[fmt](
+        events, names=names,
+        date_of=lambda t: date_str(t, cfg),
+        filter_desc=_filter_desc(args),
+    )
+    os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+    with open(args.output, "w", encoding="utf-8") as f:
+        f.write(text)
+    degraded = sum(1 for e in events if render_event(e, names).degraded)
+    print(f"已导出 {len(events)} 条（降级 {degraded} 条）→ {args.output}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="溪谷镇模拟器 CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -203,8 +357,52 @@ def main() -> None:
     p_agent.add_argument("name", help="人物姓名，如 林远")
     p_agent.set_defaults(func=cmd_agent)
 
+    # events 只读事件流查看器（任务 07）
+    p_events = sub.add_parser("events", help="只读事件流查看器")
+    p_events.add_argument("--db", default=DB_PATH, help="事件库路径（默认 cli_run.db）")
+    p_events.add_argument("--debug", action="store_true", help="出错时打印异常堆栈")
+    ev_sub = p_events.add_subparsers(dest="ev_command", required=True)
+
+    p_list = ev_sub.add_parser("list", help="事件列表（可筛选）")
+    _add_common_args(p_list)
+    _add_filter_args(p_list)
+    p_list.set_defaults(func=cmd_events_list)
+
+    p_tl = ev_sub.add_parser("timeline", help="某人物的时间线")
+    p_tl.add_argument("name", help="人物姓名，如 林远")
+    _add_common_args(p_tl)
+    _add_filter_args(p_tl)
+    p_tl.set_defaults(func=cmd_events_timeline)
+
+    p_day = ev_sub.add_parser("day", help="某一天的全部事件")
+    p_day.add_argument("date", help="日期「1年7月1日」或纯 tick 数字")
+    _add_common_args(p_day)
+    _add_filter_args(p_day)
+    p_day.set_defaults(func=cmd_events_day)
+
+    p_show = ev_sub.add_parser("show", help="单事件详情")
+    p_show.add_argument("event_id", type=int, help="事件 id")
+    _add_common_args(p_show)
+    p_show.set_defaults(func=cmd_events_show)
+
+    p_exp = ev_sub.add_parser("export", help="导出事件流（md/csv/jsonl）")
+    p_exp.add_argument("format", help="导出格式：md / csv / jsonl")
+    p_exp.add_argument("-o", "--output", required=True, help="输出文件路径")
+    _add_common_args(p_exp)
+    _add_filter_args(p_exp)
+    p_exp.set_defaults(func=cmd_events_export)
+
     args = parser.parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 — 面向老板给可读提示，不抛裸堆栈
+        print(f"错误：{exc}", file=sys.stderr)
+        if getattr(args, "debug", False):
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
