@@ -1,0 +1,195 @@
+"""气候演化模块（阶段四）。
+
+实现 Module 接口：name / depends_on=[] / step(world)。
+读取 world.config.natural_params 的演化参数，每个 Tick：
+  1. 按当前季节 precipitation_prob 判定是否降雨；
+  2. 更新温度、湿度（受 max_*_delta_per_tick 限制，禁止瞬移）；
+  3. 未雨累加 drought_accumulation（超 no_rain_threshold 才计），降雨按 recovery_rate 降低；
+  4. season_progress 推进，满 length_ticks 跨入下一季；
+  5. 写回 world.state.climate；
+  6. 发 weather_changed 事件，跨季时发 season_changed 事件。
+
+第一版只跑旱情路径，洪水阈值留空不触发汛情。
+"""
+from __future__ import annotations
+
+import random
+from typing import Any
+
+from config.schema.natural_params import DroughtState, Season, WeatherType
+
+from ..core.state import ClimateSnapshot
+
+SEASON_ORDER = [Season.SPRING, Season.SUMMER, Season.AUTUMN, Season.WINTER]
+# weather_trend_window 地点参数缺失，使用默认值 7，待确认
+DEFAULT_TREND_WINDOW = 7
+
+
+def _next_season(season: Season) -> Season:
+    i = SEASON_ORDER.index(season)
+    return SEASON_ORDER[(i + 1) % len(SEASON_ORDER)]
+
+
+class ClimateModule:
+    name = "climate"
+    depends_on: list[str] = []
+
+    def __init__(self, rng: Any = None, trend_window: int = DEFAULT_TREND_WINDOW) -> None:
+        # rng 只需提供 random() 与 uniform(a, b)；默认用独立 Random 实例
+        self.rng = rng if rng is not None else random.Random()
+        self.trend_window = trend_window
+
+    # ------------------------------------------------------------------
+    # 初始化（首次 step 时从配置载入初始状态）
+    # ------------------------------------------------------------------
+    def _ensure_initialized(self, world) -> None:
+        if world.state.climate is not None:
+            return
+        cfg = world.config.natural_params
+        init = cfg.climate_initial
+        season = init.season
+        sparams = cfg.climate_evolution.seasons.get(season.value)
+
+        # 文档未给开局当日温湿度 → 用当前季节基准
+        temp = init.temperature_c
+        if temp is None:
+            temp = sparams.base_temperature_c if sparams and sparams.base_temperature_c is not None else 20.0
+        hum = init.humidity_pct
+        if hum is None:
+            hum = sparams.base_humidity_pct if sparams and sparams.base_humidity_pct is not None else 50.0
+
+        # 旱情累积初始值：文档未给，取 days_no_soaking_rain 使其与 drought_state=watch 自洽
+        acc = init.drought_accumulation
+        if acc is None:
+            acc = float(init.days_no_soaking_rain or 0)
+
+        world.state.climate = ClimateSnapshot(
+            season=season,
+            season_progress=init.season_progress if init.season_progress is not None else 0.0,
+            current_weather=init.current_weather or WeatherType.SUNNY,
+            temperature_c=float(temp),
+            precipitation_mm=float(init.precipitation_mm or 0.0),
+            humidity_pct=float(hum),
+            wind_level=float(init.wind_level or 0.0),
+            drought_state=init.drought_state,
+            drought_accumulation=float(acc),
+            flood_state=init.flood_state,
+            flood_accumulation=float(init.flood_accumulation or 0.0),
+            days_no_soaking_rain=int(init.days_no_soaking_rain or 0),
+            weather_trend=[w.value for w in init.weather_trend] if init.weather_trend else [],
+        )
+
+    # ------------------------------------------------------------------
+    # 每 Tick 演化
+    # ------------------------------------------------------------------
+    def step(self, world) -> None:
+        self._ensure_initialized(world)
+        cfg = world.config.natural_params
+        evo = cfg.climate_evolution
+        snap: ClimateSnapshot = world.state.climate
+        sparams = evo.seasons[snap.season.value]
+        constraints = evo.global_constraints
+
+        max_temp_delta = constraints.max_temp_delta_per_tick
+        max_temp_delta = max_temp_delta if max_temp_delta is not None else float("inf")
+        max_hum_delta = constraints.max_humidity_delta_per_tick
+        max_hum_delta = max_hum_delta if max_hum_delta is not None else float("inf")
+
+        # 1. 降雨判定
+        rains = self.rng.random() < sparams.precipitation_prob
+        precip = float(sparams.precipitation_intensity_mm) if rains else 0.0
+        weather = WeatherType.MODERATE_RAIN if rains else WeatherType.SUNNY
+
+        # 2. 温湿度朝“基准+扰动”移动，但单日变化受限（禁止瞬移）
+        target_temp = sparams.base_temperature_c + self.rng.uniform(-3.0, 3.0)
+        temp = self._move_toward(snap.temperature_c, target_temp, max_temp_delta)
+        target_hum = sparams.base_humidity_pct + self.rng.uniform(-5.0, 5.0)
+        hum = self._move_toward(snap.humidity_pct, target_hum, max_hum_delta)
+        hum = max(0.0, min(100.0, hum))
+
+        # 3. 旱情累积
+        new_acc = snap.drought_accumulation
+        days_no_rain = snap.days_no_soaking_rain
+        if rains:
+            new_acc = max(0.0, new_acc - float(evo.drought.recovery_rate or 0.0))
+            days_no_rain = 0
+        else:
+            days_no_rain += 1
+            threshold = evo.drought.no_rain_threshold_ticks or 0
+            if days_no_rain > threshold:
+                new_acc += 1.0
+        max_acc = evo.drought.max_accumulation
+        if max_acc is not None:
+            new_acc = min(new_acc, float(max_acc))
+        new_drought_state = self._classify_drought(new_acc, evo.drought)
+
+        # 4. 跨季节
+        new_progress = snap.season_progress + 1.0 / sparams.length_ticks
+        season = snap.season
+        season_changed = False
+        if new_progress >= 1.0:
+            new_progress -= 1.0
+            season = _next_season(season)
+            season_changed = True
+
+        # 5. weather_trend 滑动窗口
+        trend = list(snap.weather_trend) + [weather.value]
+        if len(trend) > self.trend_window:
+            trend = trend[-self.trend_window:]
+
+        # 6. 写回快照
+        world.state.climate = snap.model_copy(
+            update={
+                "season": season,
+                "season_progress": new_progress,
+                "current_weather": weather,
+                "temperature_c": temp,
+                "precipitation_mm": precip,
+                "humidity_pct": hum,
+                "drought_state": new_drought_state,
+                "drought_accumulation": new_acc,
+                "days_no_soaking_rain": days_no_rain,
+                "weather_trend": trend,
+            }
+        )
+
+        # 7. 发事件
+        world.event_log.append(
+            tick=world.current_tick,
+            event_type="weather_changed",
+            payload={
+                "season": season.value,
+                "season_progress": round(new_progress, 4),
+                "weather": weather.value,
+                "temperature_c": round(temp, 2),
+                "precipitation_mm": precip,
+                "humidity_pct": round(hum, 2),
+                "drought_accumulation": new_acc,
+                "drought_state": new_drought_state.value,
+                "days_no_soaking_rain": days_no_rain,
+            },
+        )
+        if season_changed:
+            world.event_log.append(
+                tick=world.current_tick,
+                event_type="season_changed",
+                payload={"from": snap.season.value, "to": season.value},
+            )
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _move_toward(current: float, target: float, max_delta: float) -> float:
+        diff = target - current
+        if abs(diff) <= max_delta:
+            return target
+        return current + (max_delta if diff > 0 else -max_delta)
+
+    @staticmethod
+    def _classify_drought(acc: float, dp) -> DroughtState:
+        if dp.crisis_threshold is not None and acc >= dp.crisis_threshold:
+            return DroughtState.CRISIS
+        if dp.warning_threshold is not None and acc >= dp.warning_threshold:
+            return DroughtState.WARNING
+        if dp.watch_threshold is not None and acc >= dp.watch_threshold:
+            return DroughtState.WATCH
+        return DroughtState.NONE

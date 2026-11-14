@@ -1,0 +1,7 @@
+world_id: brookvale-town-001
+name: 溪谷镇
+status: active
+start_tick: 1
+enabled_subsystems:
+  - spatial
+  - climate

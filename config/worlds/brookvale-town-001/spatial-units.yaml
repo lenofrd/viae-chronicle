@@ -1,0 +1,134 @@
+# 溪谷镇（brookvale-town-001）空间节点配置
+# 数据来源：docs/design/locations/brookvale-town/01-geography/
+#  节点描述来自 01~04；单程耗时（TU）来自 05-distances.md（以水井为起点）。
+
+nodes:
+  - id: shrine
+    name: 祠堂
+    type: social
+    district: 镇中心
+    description: 镇民议事与祭祀中心，全镇风水核心；西侧为里正家，东侧为集市空地。
+    travel_cost_from_well_tu: 0.5
+    attributes: { 风险: 无, 步行难度: 平地 }
+
+  - id: elder_house
+    name: 里正家
+    type: residential
+    district: 镇中心
+    description: 全镇权力核心，里正李全居所；与祠堂相邻，村老议事在此。
+    travel_cost_from_well_tu: 0.5
+    attributes: { 风险: 无, 步行难度: 平地 }
+
+  - id: well
+    name: 水井
+    type: resource
+    district: 镇中心
+    description: 全镇唯一公共淡水点，海拔最低；打水时是信息与社交枢纽，雨季有倒灌风险。
+    travel_cost_from_well_tu: 0.0
+    attributes: { 风险: 雨季倒灌, 步行难度: 平地 }
+
+  - id: market
+    name: 集市空地
+    type: social
+    district: 镇中心东侧
+    description: 祠堂东侧的广场，无固定建筑；赶集日与货郎到来时作为交易场地。
+    attributes: { 风险: 无, 步行难度: 平地 }
+
+  - id: herbalist
+    name: 药铺
+    type: residential
+    district: 镇中心偏东
+    description: 全镇唯一药铺，赵大夫经营；卖药材也收药材，是山间消息汇聚点。
+    attributes: { 风险: 无, 步行难度: 平地 }
+
+  - id: rich_district
+    name: 富户区
+    type: residential
+    district: 镇东
+    description: 靠近集市，青砖大瓦房；住地主、商人、里正亲属。
+    attributes: { 风险: 无, 步行难度: 平地 }
+
+  - id: common_district
+    name: 平民区
+    type: residential
+    district: 镇中
+    description: 靠近水井，砖瓦房；多为自给自足的自耕农。
+    attributes: { 风险: 无, 步行难度: 平地 }
+
+  - id: poor_district
+    name: 贫民区
+    type: residential
+    district: 镇西
+    description: 偏离镇中心、靠近山脚，茅草屋；住林远、赵翠兰、王寡妇等赤贫户。
+    attributes: { 风险: 无, 步行难度: 平地 }
+
+  - id: foothill
+    name: 山脚
+    type: mountain
+    district: 镇西北
+    description: 山神庙与神树所在，柴薪充足，是进入浅山的入口；神树动土为全镇禁忌。
+    travel_cost_from_well_tu: 2.0
+    attributes: { 风险: 野兽下山时危险, 步行难度: 缓坡 }
+
+  - id: low_mountain
+    name: 浅山
+    type: resource
+    district: 镇外（自山脚进入）
+    description: 采药与打猎区，山路崎岖；有迷路、蛇虫、野狼风险，第一版凡人不常去。
+    attributes: { 风险: 迷路 / 蛇虫 / 野狼, 步行难度: 山路崎岖 }
+
+  - id: deep_mountain
+    name: 深山
+    type: resource
+    district: 镇外（自浅山进入）
+    description: 凡人禁区，浓雾、瘴气、妖兽；第一版不精细模拟，凡人通常有去无回。
+    attributes: { 风险: 浓雾 / 瘴气 / 妖兽, 步行难度: 极高 }
+
+  - id: east_field
+    name: 东片田
+    type: field
+    district: 镇东
+    description: 约五十亩，近河、灌溉便利，多为地主所有。
+    travel_cost_from_well_tu: 1.5
+    attributes: { 风险: 无, 步行难度: 平地 }
+
+  - id: west_field
+    name: 西片田
+    type: field
+    district: 镇西
+    description: 约三十亩，贫瘠坡地，灌溉条件差；多由贫农耕作。
+    travel_cost_from_well_tu: 2.5
+    attributes: { 风险: 无, 步行难度: 坡地 }
+
+  - id: river_upstream
+    name: 翠溪上游
+    type: water
+    district: 靠近山脚
+    description: 水流湍急、河道较窄有浅滩；镇民饮水点与水车磨坊所在；汛期易山洪。
+    attributes: { 风险: 汛期山洪, 步行难度: 缓坡 }
+
+  - id: river_town
+    name: 翠溪镇前段
+    type: water
+    district: 镇子南侧
+    description: 河道变宽、水流平缓成深潭；捕鱼区与渡口（过河 1 文钱或半碗米），南岸有少量河滩地。
+    travel_cost_from_well_tu: 1.0
+    attributes: { 风险: 汛期溺水, 步行难度: 平地 }
+
+  - id: river_downstream
+    name: 翠溪下游
+    type: water
+    district: 向西流出
+    description: 河道宽阔、流速缓慢，有湿地芦苇荡；产水生草药、芦苇、水鸟。
+    attributes: { 风险: 无, 步行难度: 平地 }
+
+# 拓扑与移动耗时（来源：05-distances.md）
+distance_edges:
+  - { from_id: well, to_id: shrine, one_way_tu: 0.5, difficulty: 平地, risk: 无 }
+  - { from_id: well, to_id: elder_house, one_way_tu: 0.5, difficulty: 平地, risk: 无 }
+  - { from_id: well, to_id: east_field, one_way_tu: 1.5, difficulty: 平地, risk: 无 }
+  - { from_id: well, to_id: west_field, one_way_tu: 2.5, difficulty: 坡地, risk: 无 }
+  - { from_id: well, to_id: river_town, one_way_tu: 1.0, difficulty: 平地, risk: 汛期有溺水风险 }
+  - { from_id: well, to_id: foothill, one_way_tu: 2.0, difficulty: 缓坡, risk: 野兽下山时危险 }
+  - { from_id: foothill, to_id: low_mountain, one_way_tu: 4.0, difficulty: 山路崎岖, risk: 迷路 / 蛇虫 / 野狼 }
+  - { from_id: low_mountain, to_id: deep_mountain, one_way_tu: 8.0, difficulty: 极高, risk: 浓雾 / 瘴气 / 妖兽 }

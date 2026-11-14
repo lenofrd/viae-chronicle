@@ -1,0 +1,78 @@
+# 溪谷镇（brookvale-town-001）自然环境配置
+# 初始状态数值来源：docs/design/locations/brookvale-town/05-setup/01-initial-state.md
+# 演化参数来源：.ai/TASKS/02-milestone-1-db-engine.md（用户确认数值）
+# 仍未提供的参数（flood 阈值、transition_length、weather_trend_window 等）留空（null），不臆造。
+
+climate_initial:
+  start_tick: 1
+  season: spring               # 春末夏初 → 春（接近尾声），用户认可
+  season_progress: 0.9         # 用户认可 spring / progress=0.9
+  current_weather: sunny       # 已连续 15 天未下透雨 → 晴
+  temperature_c: null          # 开局当日气温未给；季节基准见 climate_evolution.seasons.spring
+  precipitation_mm: 0.0        # 当日无降水（未下透雨）
+  humidity_pct: null           # 开局当日湿度未给；季节基准见 climate_evolution.seasons.spring
+  wind_level: null             # 待确认
+  drought_state: watch         # 轻度旱象
+  drought_accumulation: null   # 待确认：累积换算公式未定义，不臆造
+  flood_state: none
+  flood_accumulation: 0.0
+  days_no_soaking_rain: 15
+  weather_trend: []
+
+hydrology_initial:
+  water_level_ratio: 0.60      # 水位降至基准的 60%
+  irrigation_gear: low         # 灌溉条件处于"偏少"档位
+
+climate_evolution:
+  seasons:
+    spring:
+      length_ticks: 30
+      base_temperature_c: 22.0
+      base_humidity_pct: 60.0
+      precipitation_prob: 0.2
+      precipitation_intensity_mm: 15.0
+      base_wind_level: null
+      trend_anchor: null
+    summer:
+      length_ticks: 30
+      base_temperature_c: 30.0
+      base_humidity_pct: 70.0
+      precipitation_prob: 0.4
+      precipitation_intensity_mm: 40.0
+      base_wind_level: null
+      trend_anchor: null
+    autumn:
+      length_ticks: 30
+      base_temperature_c: 18.0
+      base_humidity_pct: 55.0
+      precipitation_prob: 0.15
+      precipitation_intensity_mm: 10.0
+      base_wind_level: null
+      trend_anchor: null
+    winter:
+      length_ticks: 30
+      base_temperature_c: 5.0
+      base_humidity_pct: 40.0
+      precipitation_prob: 0.05
+      precipitation_intensity_mm: 5.0
+      base_wind_level: null
+      trend_anchor: null
+  drought:
+    no_rain_threshold_ticks: 10
+    watch_threshold: 10.0
+    warning_threshold: 25.0
+    crisis_threshold: 50.0
+    recovery_rate: 5.0
+    max_accumulation: 100.0
+  flood:
+    heavy_rain_threshold_mm: null
+    watch_threshold: null
+    warning_threshold: null
+    crisis_threshold: null
+    linger_ticks: null
+  global_constraints:
+    max_temp_delta_per_tick: 2.0
+    max_humidity_delta_per_tick: 5.0
+  transition_length_ticks: null
+  max_delta_per_tick: null
+  weather_trend_window: null
