@@ -123,3 +123,9 @@
 | `debt_repaid` | 秋收还款 | creditor/debtor 的 id+name, amount, remaining, source, 双方 grain_after |
 
 > 1 tick = 1 天（`time.tu_per_tick=10`），`due_days` / `collection_interval_days` 直接映射为 tick 差。
+
+## 9. 任务 09 平衡调参：due_days 90 → 180
+
+- **问题**：任务 08 取 `due_days=90`，借粮集中在春季（tick 8–99），到期日落在夏季（tick 98–189），而秋收在秋季（tick 181+）才发生——债务在秋收前集中到期→催收→违约，与农业产出周期错位，加剧夏季断粮灭绝。
+- **调整**：`debt.due_days` 由 90 调为 180（[调参]，`agents.yaml`），使借粮到期跨越秋收，借款人有机会在秋收后还款，降低秋收前集中违约。
+- **理由**：纯参数调整，不改规则；仍外置可追溯，等裁决确认。其余债务规则（催收/违约/秋收还款/守恒）不变。

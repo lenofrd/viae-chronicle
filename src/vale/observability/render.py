@@ -26,6 +26,13 @@ ACTION_VERB = {
     "collect_water": "打水",
     "harvest": "秋收",
     "borrow_grain": "借粮",
+    "hunt": "打猎",
+}
+
+# 采集类动作 → (动词, 产物名)。任务09：hunt 打猎产肉；
+# 未来接入渔业只需在此加一行 "fish": ("捕鱼", "鱼")，gather_success/fail/injury 渲染自动复用。
+GATHER_DESC = {
+    "hunt": ("打猎", "肉"),
 }
 
 
@@ -102,6 +109,8 @@ def _render_action(payload: dict, names: Optional[dict[str, str]]) -> tuple[str,
         amount = _safe_diff(payload.get("grain_after"), payload.get("grain_before"))
         body = (f"去{tname or '?'}借了 {amount} 石粮"
                 f"（存粮剩 {_num(payload.get('grain_after'))}，欠债 {_num(payload.get('debt_after'))}）")
+    elif action == "hunt":
+        body = f"去{tname or '?'}打猎（肉存 {_num(payload.get('meat_after'))}）"
     else:  # 理论上不会到，兜底
         body = f"执行了 {action}"
         degraded = True
@@ -181,6 +190,45 @@ def _render_health_recovered(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
+def _gather_verb_product(action: str) -> tuple[str, str]:
+    return GATHER_DESC.get(action, (action or "采集", "产物"))
+
+
+def _render_gather_success(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    action = payload.get("action", "?")
+    verb, product = _gather_verb_product(action)
+    node = payload.get("resource_node", "?")
+    amount = _num(payload.get("amount"))
+    after = _num(payload.get("output_after"))
+    text = f"[{name}] 去{node}{verb}，获得 {amount} {product}（{product}存 {after}）"
+    degraded = not all(k in payload for k in ("agent_id", "action", "amount"))
+    return text, degraded
+
+
+def _render_gather_fail(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    action = payload.get("action", "?")
+    verb, _ = _gather_verb_product(action)
+    node = payload.get("resource_node", "?")
+    reason = payload.get("reason", "未果")
+    text = f"[{name}] 去{node}{verb}，{reason}"
+    degraded = not all(k in payload for k in ("agent_id", "action"))
+    return text, degraded
+
+
+def _render_gather_injury(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    action = payload.get("action", "?")
+    verb, _ = _gather_verb_product(action)
+    loss = _num(payload.get("loss"))
+    before = _num(payload.get("health_before"))
+    after = _num(payload.get("health_after"))
+    text = f"[{name}] {verb}时受伤，健康 {before} → {after}（损失 {loss}）"
+    degraded = not all(k in payload for k in ("agent_id", "action", "loss"))
+    return text, degraded
+
+
 def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderResult:
     """渲染单条事件为一行中文摘要。永不抛出。"""
     if evt.get("_payload_broken"):
@@ -227,6 +275,15 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "health_recovered":
             text, degraded = _render_health_recovered(payload)
             reason = "missing_health_field" if degraded else None
+        elif event_type == "gather_success":
+            text, degraded = _render_gather_success(payload)
+            reason = "missing_gather_field" if degraded else None
+        elif event_type == "gather_fail":
+            text, degraded = _render_gather_fail(payload)
+            reason = "missing_gather_field" if degraded else None
+        elif event_type == "gather_injury":
+            text, degraded = _render_gather_injury(payload)
+            reason = "missing_gather_field" if degraded else None
         else:
             # 未知事件类型兜底：展示原始载荷键（截断），不崩
             keys = ", ".join(list(payload.keys())[:8])

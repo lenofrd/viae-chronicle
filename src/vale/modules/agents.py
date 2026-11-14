@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import heapq
+import random
 import traceback
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -24,6 +25,15 @@ IMPOSSIBLE = float("-inf")
 
 # 候选动作集合（内容外置：动作→目标节点的映射在 _target_node）
 CANDIDATE_ACTIONS = ["eat", "rest", "farm", "collect_water", "harvest", "borrow_grain"]
+
+
+def _candidate_actions(tuning: AgentTuning) -> list[str]:
+    """基础候选动作 + 配置声明的采集类动作（hunt / 未来 fish）。
+
+    新增第二生计只需在 agents.yaml 的 gathering.actions 下加一项，此处自动纳入候选，
+    核心决策循环不改、不出现 ``if action == "hunt"`` 式散落硬编码。
+    """
+    return CANDIDATE_ACTIONS + list(tuning.gathering.actions.keys())
 
 
 # --------------------------------------------------------------------------- #
@@ -123,6 +133,9 @@ def _target_node(action: str, agent: AgentState, world) -> str:
         return "well"
     if action == "borrow_grain":
         return _lender_node(world, agent)
+    gathering = world.config.agents.tuning.gathering.actions
+    if action in gathering:
+        return gathering[action].target_node
     return agent.home_node
 
 
@@ -133,8 +146,10 @@ class AgentModule:
     name = "agents"
     depends_on = ["climate"]
 
-    def __init__(self) -> None:
+    def __init__(self, rng=None) -> None:
         self._spatial: Optional[SpatialIndex] = None
+        # 打猎成功率/受伤的随机源：默认独立 Random（故事流非确定），测试传 seeded 实例保证可复现
+        self.rng = rng if rng is not None else random.Random()
 
     # -- 生命周期 ----------------------------------------------------------- #
     def step(self, world) -> None:
@@ -210,7 +225,7 @@ class AgentModule:
         temp = climate.temperature_c if climate is not None else 0.0
         season = climate.season if climate is not None else Season.SPRING
         dist: dict[str, float] = {}
-        for act in CANDIDATE_ACTIONS:
+        for act in _candidate_actions(world.config.agents.tuning):
             target = _target_node(act, agent, world)
             dist[target] = self._spatial.travel_tu(agent.home_node, target) if self._spatial else 0.0
         bor = world.config.agents.tuning.borrow
@@ -229,7 +244,7 @@ class AgentModule:
 
     # -- 决策（只依赖 Perception + tuning）--------------------------------- #
     def _decide(self, p: Perception, tuning: AgentTuning) -> str:
-        scored = [(self.score_action(act, p, tuning), act) for act in CANDIDATE_ACTIONS]
+        scored = [(self.score_action(act, p, tuning), act) for act in _candidate_actions(tuning)]
         # 最高分胜出；同分按候选顺序稳定取第一个（B10：本阶段不实现纠局）
         scored.sort(key=lambda x: x[0], reverse=True)
         return scored[0][1]
@@ -276,11 +291,15 @@ class AgentModule:
             target = "well"
         elif action == "borrow_grain":
             target = p.lender_node
+        elif action in tuning.gathering.actions:
+            target = tuning.gathering.actions[action].target_node
         else:
             target = agent.home_node
 
         # 可行性前置过滤（不可行 → -inf，不会被选中）
-        if action == "eat" and agent.grain <= 0:
+        if action == "eat" and all(
+            getattr(agent, f, 0.0) <= 0 for f in tuning.physiology.food_fields
+        ):
             return IMPOSSIBLE
         if action == "borrow_grain" and agent.grain >= bor.borrow_grain_threshold:
             return IMPOSSIBLE
@@ -351,6 +370,7 @@ class AgentModule:
 
         hunger_before = agent.hunger
         grain_before = agent.grain
+        meat_before = agent.meat
         debt_before = agent.debt
         fg = world.state.field_growth
         field_growth_before = fg.get(agent.work_node, 0.0)
@@ -361,7 +381,16 @@ class AgentModule:
         # 动作效果
         if action == "eat":
             agent.hunger = max(0.0, agent.hunger - phys.eat_hunger_reduction)
-            agent.grain = max(0.0, agent.grain - phys.eat_grain_cost)
+            # 多食物守恒消耗：按 food_fields 优先级吃第一个够量的字段；都不够则吃尽存量最多的
+            cost = phys.eat_grain_cost
+            for f in phys.food_fields:
+                stock = getattr(agent, f, 0.0)
+                if stock >= cost:
+                    setattr(agent, f, stock - cost)
+                    break
+            else:
+                best = max(phys.food_fields, key=lambda f: getattr(agent, f, 0.0))
+                setattr(agent, best, 0.0)
         elif action == "rest":
             agent.stamina = min(100.0, agent.stamina + phys.rest_stamina_recovery)
         elif action == "farm":
@@ -414,6 +443,8 @@ class AgentModule:
                     },
                 )
             # 若 creditor 为 None 或存粮不足（理论上 _score 已过滤），不产粮不欠债，仅消耗往返体力
+        elif action in tuning.gathering.actions:
+            self._execute_gather(world, agent, action, p, tuning)
         # collect_water：本阶段仅消耗体力（饮水资产暂不建模）
 
         field_growth_after = fg.get(agent.work_node, 0.0)
@@ -442,6 +473,8 @@ class AgentModule:
                 "hunger_after": round(agent.hunger, 2),
                 "grain_before": round(grain_before, 2),
                 "grain_after": round(agent.grain, 2),
+                "meat_before": round(meat_before, 2),
+                "meat_after": round(agent.meat, 2),
                 "debt_before": round(debt_before, 2),
                 "debt_after": round(agent.debt, 2),
                 "field_growth_before": round(field_growth_before, 2),
@@ -450,6 +483,70 @@ class AgentModule:
                 "weather": p.weather.value,
             },
         )
+
+    # -- 采集类动作（打猎 / 未来捕鱼，通用分支，不写死动作名）---------------- #
+    def _execute_gather(self, world, agent, action, p: Perception, tuning) -> None:
+        cfg = tuning.gathering.actions[action]
+        out_field = cfg.output_field
+        out_before = getattr(agent, out_field, 0.0)
+        health_before = agent.health
+
+        # 成功率 = 基础 × 季节修正 × 天气修正（全部来自配置，不硬编码数值）
+        season_key = p.season.value if hasattr(p.season, "value") else str(p.season)
+        season_mult = cfg.season_modifier.get(season_key, 1.0)
+        weather_mult = cfg.bad_weather_success_mult if p.is_raining else 1.0
+        success_rate = min(1.0, cfg.base_success_rate * season_mult * weather_mult)
+        success = self.rng.random() < success_rate
+
+        if success:
+            setattr(agent, out_field, out_before + cfg.output_amount)
+            world.event_log.append(
+                world.current_tick,
+                "gather_success",
+                {
+                    "agent_id": agent.agent_id,
+                    "agent_name": agent.name,
+                    "action": action,
+                    "resource_node": cfg.target_node,
+                    "output_field": out_field,
+                    "output_before": round(out_before, 2),
+                    "output_after": round(getattr(agent, out_field), 2),
+                    "amount": round(cfg.output_amount, 2),
+                    "success_rate": round(success_rate, 3),
+                },
+            )
+        else:
+            world.event_log.append(
+                world.current_tick,
+                "gather_fail",
+                {
+                    "agent_id": agent.agent_id,
+                    "agent_name": agent.name,
+                    "action": action,
+                    "resource_node": cfg.target_node,
+                    "reason": "未获猎物",
+                    "success_rate": round(success_rate, 3),
+                },
+            )
+
+        # 受伤判定（独立于成败；坏天气风险加倍；不致死）
+        injury_mult = cfg.bad_weather_injury_mult if p.is_raining else 1.0
+        injury_prob = min(1.0, cfg.injury_risk * injury_mult)
+        if self.rng.random() < injury_prob:
+            agent.health = max(0.0, health_before - cfg.injury_health_loss)
+            world.event_log.append(
+                world.current_tick,
+                "gather_injury",
+                {
+                    "agent_id": agent.agent_id,
+                    "agent_name": agent.name,
+                    "action": action,
+                    "resource_node": cfg.target_node,
+                    "health_before": round(health_before, 2),
+                    "health_after": round(agent.health, 2),
+                    "loss": round(cfg.injury_health_loss, 2),
+                },
+            )
 
     # -- 债务还款（秋收 / 通用）-------------------------------------------- #
     def _repay_debts(

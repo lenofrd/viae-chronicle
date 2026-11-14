@@ -54,3 +54,26 @@
 - 当前作物模型为简化标量：`world.state.field_growth` 以节点为键存 0–100 的长势值，agent 取其 `work_node` 对应值作为感知字段 `work_field_growth`。完整作物模型见 `human-environment/01-production/...` 下的作物设计（未来落地），当前以标量近似。
 - 当 `work_field_growth >= agriculture.max_field_growth`（长势封顶）时，`farm` 在**决策评分阶段即判为不可行**（返回 `IMPOSSIBLE`），而非仅降分——避免长势已满仍无效劳作、白白消耗体力，且封顶后不再产生 `farm` 事件。
 - 所有动作均不可行时，沿用现有兜底（无动作、不崩溃），可通过观察层排查。
+
+## 5. 采集类生计与未来接入指南（任务 09）
+
+### 5.1 通用采集机制（不写死动作名）
+打猎（`hunt`）是首个「采集类动作」，与 `eat/rest/farm/...` 这类硬编码基础动作不同，采集动作走**配置驱动的通用分支**：
+- 候选动作由 `_candidate_actions(tuning)` = 基础动作 + `tuning.gathering.actions` 的键动态生成；
+- 目标节点由 `gathering.actions[action].target_node` 指定（`_target_node` 通用解析）；
+- 执行走 `AgentModule._execute_gather`：成功率 = `base × season_modifier × bad_weather_mult`，成功则 `setattr(agent, output_field, +amount)`，受伤独立判定（`max(0, health - loss)` 不致死）；
+- 事件统一为 `gather_success` / `gather_fail` / `gather_injury`，payload 带 `action`/`output_field`，观察层按 `GATHER_DESC` 映射中文动词与产物。
+- `agents.py` 中**不出现** `if action == "hunt"` 式散落分支，新增第二生计无需改核心结算（`_settle` 催收/回血）。
+
+### 5.2 接入新生计（以渔业为例）的步骤
+1. **资源节点**：在 `config/worlds/<world>/spatial-units.yaml` 声明或复用一个资源节点（如水域 `river_town`），无需改代码。
+2. **状态字段**：在 `src/vale/core/state.py` 的 `AgentState` 加产出字段 `fish: float = Field(default=0, ge=0)`。
+3. **配置**：在 `agents.yaml` 的 `tuning.gathering.actions` 下加一项（`target_node` / `output_field: fish` / 成功率 / 产出 / 季节修正 / 风险）；在 `action.fulfill` / `stamina_cost` / `outdoor` 加 `fish`；在 `physiology.food_fields` 追加 `"fish"`（使 `eat` 可消耗）。
+4. **观察层**：在 `render.py` 的 `GATHER_DESC` 加一行 `"fish": ("捕鱼", "鱼")`，三种 gather 事件渲染自动复用，无需新增渲染函数。
+5. **核心结算**：`_settle`（催收/回血）**不用改**——这正是扩展点验证目标。
+6. 写测试：在 `tests/test_hunting_and_sustainability.py` 仿照 `test_execute_gather_works_for_arbitrary_action_name` 加用例，断言新动作产出到指定字段且结算事件照常。
+
+### 5.3 守恒与可追溯
+- 每次采集产出写入 `gather_success` 事件（`output_before/after` + `amount`），可重建世界总产出；
+- `eat` 按 `food_fields` 优先级消耗，粮与肉各自守恒、不为负；
+- 打猎不凭空消灭角色（受伤 `max(0, ...)`），死亡仍只由 `health<=0` 触发生命周期。

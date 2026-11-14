@@ -75,6 +75,7 @@ class AgentState(BaseModel):
     stamina: float = Field(..., ge=0, le=100)
     fatigue: float = Field(default=0.0, ge=0, le=100)
     grain: float = Field(default=0.0, ge=0)
+    meat: float = Field(default=0.0, ge=0)  # 任务09：非农生计（打猎）产出；与 grain 同属食物储备
     # 债务列表为唯一真相源；debt 为派生聚合（见下方 computed_field）
     debts: list[DebtRecord] = Field(default_factory=list)
     last_action: Optional[str] = None

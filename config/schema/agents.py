@@ -20,6 +20,9 @@ class PhysiologyTuning(BaseModel):
     hunger_gain_per_tick: float = Field(15.0, ge=0)
     eat_hunger_reduction: float = Field(60.0, ge=0)
     eat_grain_cost: float = Field(1.0, ge=0)
+    # eat 消耗的食物字段优先级（任务09）：粮不足时依次吃后续字段（如 meat）。
+    # 未来加渔业只需在此追加 "fish" 并在 AgentState 加字段，eat 代码不变。
+    food_fields: list[str] = Field(default_factory=lambda: ["grain"])
     hunger_health_damage_threshold: float = Field(80.0, ge=0, le=100)
     hunger_health_damage: float = Field(8.0, ge=0)
     rest_stamina_recovery: float = Field(40.0, ge=0)
@@ -94,6 +97,32 @@ class TimeTuning(BaseModel):
     farm_tu: float = Field(5.0, ge=0)
 
 
+class GatheringActionTuning(BaseModel):
+    """单个采集类动作（打猎/未来捕鱼）的配置（任务09）。
+
+    机制层只定义结构；具体数值（成功率、产出、风险、季节修正）来自 agents.yaml。
+    新增第二生计只需在 agents.yaml 的 gathering.actions 下加一项 + AgentState 加产出字段，
+    核心结算（_score / _execute 的通用采集分支）不改。
+    """
+
+    target_node: str = Field(..., description="采集目标空间节点 id（如 low_mountain）")
+    output_field: str = Field(..., description="产出写入 AgentState 的字段名（如 meat）")
+    base_success_rate: float = Field(0.5, ge=0, le=1, description="基础成功率")
+    output_amount: float = Field(4.0, ge=0, description="成功产出量")
+    injury_risk: float = Field(0.1, ge=0, le=1, description="每次采集的受伤概率")
+    injury_health_loss: float = Field(15.0, ge=0, le=100, description="受伤健康损失")
+    # 季节 -> 成功率乘数；未列出的季节取 1.0
+    season_modifier: dict[str, float] = Field(default_factory=dict)
+    bad_weather_success_mult: float = Field(0.5, ge=0, description="坏天气成功率乘数")
+    bad_weather_injury_mult: float = Field(2.0, ge=0, description="坏天气受伤概率乘数")
+
+
+class GatheringTuning(BaseModel):
+    """采集类生计集合（任务09）：action_name -> 配置。代码不写死具体动作名。"""
+
+    actions: dict[str, GatheringActionTuning] = Field(default_factory=dict)
+
+
 class AgentTuning(BaseModel):
     physiology: PhysiologyTuning = Field(default_factory=PhysiologyTuning)
     utility: UtilityTuning = Field(default_factory=UtilityTuning)
@@ -102,6 +131,7 @@ class AgentTuning(BaseModel):
     borrow: BorrowTuning = Field(default_factory=BorrowTuning)
     debt: DebtTuning = Field(default_factory=DebtTuning)
     health: HealthTuning = Field(default_factory=HealthTuning)
+    gathering: GatheringTuning = Field(default_factory=GatheringTuning)
     time: TimeTuning = Field(default_factory=TimeTuning)
 
 
