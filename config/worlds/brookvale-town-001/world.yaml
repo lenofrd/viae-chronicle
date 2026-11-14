@@ -2,6 +2,7 @@ world_id: brookvale-town-001
 name: 溪谷镇
 status: active
 start_tick: 1
+start_year: 1                 # 日历换算的开局年份（里程碑3：时间现实化）
 enabled_subsystems:
   - spatial
   - climate

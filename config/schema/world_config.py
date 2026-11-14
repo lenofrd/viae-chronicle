@@ -17,4 +17,5 @@ class WorldConfig(BaseModel):
     name: str
     status: WorldStatus = WorldStatus.ACTIVE
     start_tick: int = Field(0, ge=0)
+    start_year: int = Field(1, ge=1, description="开局年份（用于日历换算）")
     enabled_subsystems: list[str] = Field(default_factory=list)

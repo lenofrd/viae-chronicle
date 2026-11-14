@@ -70,12 +70,13 @@ def test_rain_reduces_drought(world):
 
 
 def test_season_changes_spring_to_summer(world):
-    """开局春末（progress=0.9），跑若干 Tick 后应正确切换到夏季。"""
+    """开局立春（progress=0.0，90 天/季），跑过整个春季后应切换到夏季。"""
     import random
 
     world.register(ClimateModule(rng=random.Random(42)))
     seasons_seen = set()
-    for _ in range(8):
+    # 春季 90 天：tick 1..90 为春，tick 91 起入夏，故需 91 次 run_tick
+    for _ in range(92):
         run_tick(world)
         seasons_seen.add(world.state.climate.season.value)
     assert "summer" in seasons_seen

@@ -12,16 +12,24 @@ import os
 
 import yaml
 
+from config.schema.agents import AgentsConfig
 from config.schema.natural_params import NaturalConfig
 from config.schema.spatial_units import SpatialConfig
 from config.schema.world_config import WorldConfig
 
 
 class LoadedConfig:
-    def __init__(self, world: WorldConfig, natural_params: NaturalConfig, spatial: SpatialConfig) -> None:
+    def __init__(
+        self,
+        world: WorldConfig,
+        natural_params: NaturalConfig,
+        spatial: SpatialConfig,
+        agents: AgentsConfig,
+    ) -> None:
         self.world = world
         self.natural_params = natural_params
         self.spatial = spatial
+        self.agents = agents
 
 
 def load_config(world_id: str, config_root: str = "config/worlds") -> LoadedConfig:
@@ -35,4 +43,5 @@ def load_config(world_id: str, config_root: str = "config/worlds") -> LoadedConf
         world=_load("world.yaml", WorldConfig),
         natural_params=_load("natural-params.yaml", NaturalConfig),
         spatial=_load("spatial-units.yaml", SpatialConfig),
+        agents=_load("agents.yaml", AgentsConfig),
     )

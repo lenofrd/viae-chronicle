@@ -1,0 +1,86 @@
+# 溪谷镇人物配置（brookvale-town-001）
+# 数值来源：用户裁决（STATUS 里程碑2 A/B/C/D 类参数），设计文档未给的数值已获用户确认。
+# 机制/内容分离：本文件提供所有具体数值；Python 代码只读，不写死。
+
+# 说明：标注 [调参] 的为 04-03 阶段为修复"eat/rest 完全主导、无人耕作"而重选的数值，
+# 标注 [机制修正] 的为打分量纲归一化；均待你审阅，可随时替换。
+tuning:
+  physiology:
+    hunger_gain_per_tick: 15            # A1：每天饥饿增长
+    eat_hunger_reduction: 60            # A2：进食降低饥饿
+    eat_grain_cost: 1                   # A3：每次进食消耗粮食（石）
+    hunger_health_damage_threshold: 80  # A4：饥饿超过此值开始掉健康
+    hunger_health_damage: 8             # A4：每天健康损耗
+    rest_stamina_recovery: 40           # A5：休息恢复体力
+    initial_health: 90                  # A6：开局健康
+    initial_hunger: 40                  # A6：开局饥饿
+    initial_stamina: 80                 # A6：开局体力
+    initial_fatigue: 0                  # A6：开局疲劳
+
+  utility:
+    need_weights: { survival: 3.0, stamina: 2.0, economy: 1.5, safety: 0.0, social: 0.0 }  # [调参] 公式改为 weight×urgency×fulfill 后重平衡的权重
+    economy_urgency_grain_zero: 1.0     # B2：断粮时经济紧缺度
+    economy_urgency_grain_positive: 1.0 # [调参] 耕作始终有产出价值，故有粮时经济紧缺度也取 1.0（原 0.2/0.3）
+    move_stamina_per_tu: 5              # B5/C2：移动每 TU 体力消耗（状态扣减）
+    stamina_score_divisor: 100          # [机制修正] 打分体力惩罚 = raw_cost / 100，与 gross 同量级
+    distance_penalty_per_tu: 0.15       # [调参] B8：距离惩罚 = 往返 TU × 该值（原 2.0）
+    rain_outdoor_score_multiplier: 0.5  # B9：雨天户外动作得分乘数
+
+  action:
+    fulfill:                            # B4：动作对各需求的满足值
+      eat: { survival: 1.0 }
+      rest: { survival: 0.5, stamina: 1.0 }  # [调参] 原 0.6；新增 stamina 满足，体力越低越倾向休息
+      farm: { economy: 1.8 }            # [调参] 耕作的经济满足值
+      collect_water: { survival: 0.3 }
+      harvest: { economy: 4.0 }         # 秋收：高经济满足，仅秋季且长势达标可行
+      borrow_grain: { survival: 3.0 }   # 借粮：高生存满足，仅存粮 < 阈值可行
+    stamina_cost:                       # B5：动作固定体力消耗（移动另按 TU 计）
+      eat: 0
+      rest: 0
+      farm: 20                          # [调参] 原 30
+      collect_water: 10
+      harvest: 20
+      borrow_grain: 0
+    tu_cost:                            # C3：动作 TU 占用
+      farm: 5
+    outdoor: [farm, collect_water, harvest]  # B9：受雨天影响的户外动作（borrow 在家宅内，不计）
+
+  agriculture:                          # 04-03 新增：农田生长周期
+    field_growth_per_farm: 2.0          # [调参] 里程碑3：360天历年，降增速避免初夏长势爆表（旧 5）
+    max_field_growth: 100
+    harvest_growth_threshold: 80        # 秋收前提：长势 ≥ 80
+    harvest_grain_gain: 30              # 秋收获得存粮（石）
+    harvest_debt_repayment: 10          # [调参] 秋收偿还债务（石）——"偿还部分"未给具体值，暂取 10，待确认
+
+  borrow:                               # 04-03 新增：借粮生存（第一版极简）
+    borrow_grain_threshold: 2           # 存粮 < 此值触发借粮
+    borrow_grain_amount: 5              # 每次借 5 石，同时等额计入债务
+
+  time:
+    tu_per_tick: 10                     # 1 Tick = 1 天 = 10 TU
+    farm_tu: 5
+
+agents:
+  - id: lin_yuan
+    name: 林远
+    sex: male
+    age: 18
+    home_node: common_district
+    work_node: west_field
+    assets: { grain: 15 }               # D1
+
+  - id: zhao_cuilan
+    name: 赵翠兰
+    sex: female
+    age: 23
+    home_node: poor_district
+    work_node: east_field
+    assets: { grain: 3 }                # D1
+
+  - id: li_quan
+    name: 李全
+    sex: male
+    age: 48
+    home_node: rich_district
+    work_node: east_field
+    assets: { grain: 100 }              # D1

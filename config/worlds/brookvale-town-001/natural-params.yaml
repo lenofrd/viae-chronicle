@@ -5,8 +5,8 @@
 
 climate_initial:
   start_tick: 1
-  season: spring               # 春末夏初 → 春（接近尾声），用户认可
-  season_progress: 0.9         # 用户认可 spring / progress=0.9
+  season: spring               # 里程碑3：从立春（岁首）起算，便于 run 360 观察完整一年
+  season_progress: 0.0         # 里程碑3：0.0 = 立春（1月1日）；旧 0.9 仅为 120 天小年快速入夏而设
   current_weather: sunny       # 已连续 15 天未下透雨 → 晴
   temperature_c: null          # 开局当日气温未给；季节基准见 climate_evolution.seasons.spring
   precipitation_mm: 0.0        # 当日无降水（未下透雨）
@@ -26,7 +26,7 @@ hydrology_initial:
 climate_evolution:
   seasons:
     spring:
-      length_ticks: 30
+      length_ticks: 90        # 里程碑3：1季=90天（3月×30天），全年360天
       base_temperature_c: 22.0
       base_humidity_pct: 60.0
       precipitation_prob: 0.2
@@ -34,7 +34,7 @@ climate_evolution:
       base_wind_level: null
       trend_anchor: null
     summer:
-      length_ticks: 30
+      length_ticks: 90        # 里程碑3：1季=90天（3月×30天），全年360天
       base_temperature_c: 30.0
       base_humidity_pct: 70.0
       precipitation_prob: 0.4
@@ -42,7 +42,7 @@ climate_evolution:
       base_wind_level: null
       trend_anchor: null
     autumn:
-      length_ticks: 30
+      length_ticks: 90        # 里程碑3：1季=90天（3月×30天），全年360天
       base_temperature_c: 18.0
       base_humidity_pct: 55.0
       precipitation_prob: 0.15
@@ -50,7 +50,7 @@ climate_evolution:
       base_wind_level: null
       trend_anchor: null
     winter:
-      length_ticks: 30
+      length_ticks: 90        # 里程碑3：1季=90天（3月×30天），全年360天
       base_temperature_c: 5.0
       base_humidity_pct: 40.0
       precipitation_prob: 0.05

@@ -46,7 +46,8 @@ def main() -> None:
         run_tick(world)
         s = world.state.climate
         print(
-            f"Tick {t:>2}: season={s.season.value:>6} progress={s.season_progress:.3f} "
+            f"Tick {t:>2}: {s.year}年{s.month}月{s.day}日 {s.solar_term:<2} "
+            f"season={s.season.value:>6} progress={s.season_progress:.3f} "
             f"weather={s.current_weather.value:>13} temp={s.temperature_c:>5.1f}C "
             f"rain={s.precipitation_mm:>4.1f}mm humidity={s.humidity_pct:>4.1f}% "
             f"drought_acc={s.drought_accumulation:>5.1f} [{s.drought_state.value}]"

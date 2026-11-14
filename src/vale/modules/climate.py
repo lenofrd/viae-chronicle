@@ -2,12 +2,12 @@
 
 实现 Module 接口：name / depends_on=[] / step(world)。
 读取 world.config.natural_params 的演化参数，每个 Tick：
-  1. 按当前季节 precipitation_prob 判定是否降雨；
-  2. 更新温度、湿度（受 max_*_delta_per_tick 限制，禁止瞬移）；
-  3. 未雨累加 drought_accumulation（超 no_rain_threshold 才计），降雨按 recovery_rate 降低；
-  4. season_progress 推进，满 length_ticks 跨入下一季；
-  5. 写回 world.state.climate；
-  6. 发 weather_changed 事件，跨季时发 season_changed 事件。
+  1. 由绝对 tick 换算日历（年/月/日/节气）与季节（单一真相源，见 vale.core.calendar）；
+  2. 按当前季节 precipitation_prob 判定是否降雨；
+  3. 更新温度、湿度（受 max_*_delta_per_tick 限制，禁止瞬移）；
+  4. 未雨累加 drought_accumulation（超 no_rain_threshold 才计），降雨按 recovery_rate 降低；
+  5. 写回 world.state.climate（含日期字段）；
+  6. 发 weather_changed 事件（载荷含日期），跨季时发 season_changed 事件。
 
 第一版只跑旱情路径，洪水阈值留空不触发汛情。
 """
@@ -18,16 +18,41 @@ from typing import Any
 
 from config.schema.natural_params import DroughtState, Season, WeatherType
 
+from ..core.calendar import (
+    calendar_from_tick,
+    season_for_month,
+    season_progress_from_day_of_year,
+    start_day_of_year,
+)
 from ..core.state import ClimateSnapshot
 
-SEASON_ORDER = [Season.SPRING, Season.SUMMER, Season.AUTUMN, Season.WINTER]
 # weather_trend_window 地点参数缺失，使用默认值 7，待确认
 DEFAULT_TREND_WINDOW = 7
 
 
-def _next_season(season: Season) -> Season:
-    i = SEASON_ORDER.index(season)
-    return SEASON_ORDER[(i + 1) % len(SEASON_ORDER)]
+def _derive_time(world) -> dict:
+    """由绝对 tick 换算当前日历 + 季节（单一真相源，杜绝季节与日期漂移）。
+
+    开局日由 climate_initial 的 (season, season_progress) 决定，年份由 world.start_year 决定。
+    """
+    cfg = world.config
+    init = cfg.natural_params.climate_initial
+    start_doy = start_day_of_year(init.season, init.season_progress or 0.0)
+    year, month, day, solar_term, doy = calendar_from_tick(
+        world.current_tick,
+        cfg.world.start_tick,
+        start_doy,
+        getattr(cfg.world, "start_year", 1),
+    )
+    return {
+        "year": year,
+        "month": month,
+        "day": day,
+        "solar_term": solar_term,
+        "day_of_year": doy,
+        "season": season_for_month(month),
+        "season_progress": season_progress_from_day_of_year(doy),
+    }
 
 
 class ClimateModule:
@@ -47,7 +72,9 @@ class ClimateModule:
             return
         cfg = world.config.natural_params
         init = cfg.climate_initial
-        season = init.season
+        # 开局日历/季节由 tick 换算（与 step 同源），保证初始快照的日期与季节自洽
+        t = _derive_time(world)
+        season = t["season"]
         sparams = cfg.climate_evolution.seasons.get(season.value)
 
         # 文档未给开局当日温湿度 → 用当前季节基准
@@ -65,7 +92,11 @@ class ClimateModule:
 
         world.state.climate = ClimateSnapshot(
             season=season,
-            season_progress=init.season_progress if init.season_progress is not None else 0.0,
+            season_progress=t["season_progress"],
+            year=t["year"],
+            month=t["month"],
+            day=t["day"],
+            solar_term=t["solar_term"],
             current_weather=init.current_weather or WeatherType.SUNNY,
             temperature_c=float(temp),
             precipitation_mm=float(init.precipitation_mm or 0.0),
@@ -87,7 +118,12 @@ class ClimateModule:
         cfg = world.config.natural_params
         evo = cfg.climate_evolution
         snap: ClimateSnapshot = world.state.climate
-        sparams = evo.seasons[snap.season.value]
+        # 时间换算（单一真相源）：季节与进度均由 tick 派生，跨季靠与上一 tick 快照对比判定
+        t = _derive_time(world)
+        season = t["season"]
+        new_progress = t["season_progress"]
+        season_changed = season != snap.season
+        sparams = evo.seasons[season.value]
         constraints = evo.global_constraints
 
         max_temp_delta = constraints.max_temp_delta_per_tick
@@ -123,14 +159,7 @@ class ClimateModule:
             new_acc = min(new_acc, float(max_acc))
         new_drought_state = self._classify_drought(new_acc, evo.drought)
 
-        # 4. 跨季节
-        new_progress = snap.season_progress + 1.0 / sparams.length_ticks
-        season = snap.season
-        season_changed = False
-        if new_progress >= 1.0:
-            new_progress -= 1.0
-            season = _next_season(season)
-            season_changed = True
+        # 4. 跨季判定已在顶部由日历派生完成（season_changed），此处不再用浮点累积
 
         # 5. weather_trend 滑动窗口
         trend = list(snap.weather_trend) + [weather.value]
@@ -142,6 +171,10 @@ class ClimateModule:
             update={
                 "season": season,
                 "season_progress": new_progress,
+                "year": t["year"],
+                "month": t["month"],
+                "day": t["day"],
+                "solar_term": t["solar_term"],
                 "current_weather": weather,
                 "temperature_c": temp,
                 "precipitation_mm": precip,
@@ -158,6 +191,10 @@ class ClimateModule:
             tick=world.current_tick,
             event_type="weather_changed",
             payload={
+                "year": t["year"],
+                "month": t["month"],
+                "day": t["day"],
+                "solar_term": t["solar_term"],
                 "season": season.value,
                 "season_progress": round(new_progress, 4),
                 "weather": weather.value,
@@ -173,7 +210,13 @@ class ClimateModule:
             world.event_log.append(
                 tick=world.current_tick,
                 event_type="season_changed",
-                payload={"from": snap.season.value, "to": season.value},
+                payload={
+                    "from": snap.season.value,
+                    "to": season.value,
+                    "year": t["year"],
+                    "month": t["month"],
+                    "day": t["day"],
+                },
             )
 
     # ------------------------------------------------------------------

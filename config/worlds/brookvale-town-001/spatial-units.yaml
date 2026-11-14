@@ -46,6 +46,7 @@ nodes:
     type: residential
     district: 镇东
     description: 靠近集市，青砖大瓦房；住地主、商人、里正亲属。
+    travel_cost_from_well_tu: 1.0
     attributes: { 风险: 无, 步行难度: 平地 }
 
   - id: common_district
@@ -53,6 +54,7 @@ nodes:
     type: residential
     district: 镇中
     description: 靠近水井，砖瓦房；多为自给自足的自耕农。
+    travel_cost_from_well_tu: 0.5
     attributes: { 风险: 无, 步行难度: 平地 }
 
   - id: poor_district
@@ -60,6 +62,7 @@ nodes:
     type: residential
     district: 镇西
     description: 偏离镇中心、靠近山脚，茅草屋；住林远、赵翠兰、王寡妇等赤贫户。
+    travel_cost_from_well_tu: 2.0
     attributes: { 风险: 无, 步行难度: 平地 }
 
   - id: foothill
