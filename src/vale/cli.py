@@ -4,7 +4,7 @@
   python src/vale/cli.py run 30          跑 30 天，打印故事流，并落盘事件库
   python src/vale/cli.py agent 林远       查询某人物当前状态与最近行动
 
-事件库落盘路径：data/worlds/<world_id>/cli_run.db（每次 run 覆盖重建）。
+事件库落盘路径：data/worlds/brookvale-town-001/cli_run.db（每次 run 覆盖重建）。
 """
 from __future__ import annotations
 
@@ -39,6 +39,13 @@ from vale.observability.viewer import (  # noqa: E402
 
 WORLD_ID = "brookvale-town-001"
 DB_PATH = os.path.join(_ROOT, "data", "worlds", WORLD_ID, "cli_run.db")
+# 默认库说明（events 顶层与各子命令的 --help 共用同一份文本，保持一致）
+_DB_DEFAULT_REL = f"data/worlds/{WORLD_ID}/cli_run.db"
+DB_HELP = (
+    f"事件库路径；默认 {_DB_DEFAULT_REL}（由 `cli run <days>` 生成，每次覆盖重建）；"
+    "可放在子命令前或后"
+)
+DEBUG_HELP = "出错时打印完整异常堆栈（默认关闭，面向日常查看保持可读）"
 
 WEATHER_DESC = {
     "sunny": "天气晴朗",
@@ -204,10 +211,10 @@ def cmd_agent(args: argparse.Namespace) -> None:
 # 观察层：events 子命令族（只读事件流查看器，任务 07）
 # ----------------------------------------------------------------------
 def _add_common_args(p: argparse.ArgumentParser) -> None:
-    """子解析器共享 --db/--debug。用 SUPPRESS：子命令未传时不覆盖 events 级别的值，
-    因此 --db/--debug 放在子命令前或后都生效。"""
-    p.add_argument("--db", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
-    p.add_argument("--debug", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    """子解析器共享 --db/--debug。default 用 SUPPRESS：子命令未传时不覆盖 events 级别的值，
+    因此 --db/--debug 放在子命令前或后都生效；help 显示说明文本，便于子命令 --help 自查。"""
+    p.add_argument("--db", default=argparse.SUPPRESS, help=DB_HELP)
+    p.add_argument("--debug", action="store_true", default=argparse.SUPPRESS, help=DEBUG_HELP)
 
 
 def _add_filter_args(p: argparse.ArgumentParser) -> None:
@@ -359,8 +366,8 @@ def main() -> None:
 
     # events 只读事件流查看器（任务 07）
     p_events = sub.add_parser("events", help="只读事件流查看器")
-    p_events.add_argument("--db", default=DB_PATH, help="事件库路径（默认 cli_run.db）")
-    p_events.add_argument("--debug", action="store_true", help="出错时打印异常堆栈")
+    p_events.add_argument("--db", default=DB_PATH, help=DB_HELP)
+    p_events.add_argument("--debug", action="store_true", help=DEBUG_HELP)
     ev_sub = p_events.add_subparsers(dest="ev_command", required=True)
 
     p_list = ev_sub.add_parser("list", help="事件列表（可筛选）")

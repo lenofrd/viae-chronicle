@@ -15,7 +15,17 @@
 
 ## 3. 命令清单
 
-均挂在 `cli.py events` 子命令族下，全局可选 `--db <path>`（默认 `data/worlds/<world_id>/cli_run.db`）与 `--debug`。
+均挂在 `cli.py events` 子命令族下，全局可选 `--db <path>` 与 `--debug`（两者放在子命令前或后都生效）。
+
+**默认库**：`data/worlds/brookvale-town-001/cli_run.db`，由 `python src/vale/cli.py run <days>` 生成，**每次 run 覆盖重建**。查看前需先跑一次 `run` 落盘。
+
+**`--db` 用法**：指向任意事件库（只读打开），例如查看 `events.db`：
+
+```powershell
+python src/vale/cli.py events --db data/worlds/brookvale-town-001/events.db list --limit 10
+```
+
+库不存在或 schema 不符（缺 `events` 表）时给出明确提示并以非零码退出，绝不写库。
 
 | 命令 | 作用 |
 |---|---|
