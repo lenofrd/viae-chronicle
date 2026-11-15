@@ -61,6 +61,12 @@
       产后休养（1–2 个月）：max_stamina 恢复中，无法进行重体力劳作
 ```
 
+> **部分已落地（盈余经济阶段二，2026-11-15）**：出生时母亲 `health −= birth.mother_health_cost`（默认 10，
+> 即「普通成功 −10」），`agent_born` 追加 `mother_health_before/after`，见 [11-life-course.md §7.1](11-life-course.md)。
+> **未实现**：`pregnancy_started` / `pregnancy_stage`（孕期分段与体力限制）、难产风险、产后休养——
+> 本节**框架完整、只缺数值**（孕期时长、难产概率、产后恢复参数），阶段三前补数值即可实现，不需重新设计
+> （缺口登记见 [11-life-course.md §18 G6](11-life-course.md)）。
+
 ### 4.5 健康与死亡
 ```
 条件：health <= 0 或 age > 寿命阈值（考虑性别差异，女性略高）
@@ -105,7 +111,7 @@
 - `AgentState` 新增 `meat` 字段（≥0），与 `grain` 并列构成食物储备；打猎产出写入 `meat`。
 - `eat` 消耗改为按 `physiology.food_fields`（默认 `[grain, meat]`）优先级：吃第一个存量 ≥ `eat_grain_cost` 的字段；都不够时吃尽存量最多的字段（不产生负值）。所有食物字段都 ≤ 0 时 `eat` 判为不可行。
 - **任务 10 落地渔业**：`AgentState` 新增 `fish` 字段（≥0），捕鱼产出写入 `fish`；`food_fields` 配置为 `[grain, meat, fish]`，`eat` 核心代码不变——验证了「加食物字段只改配置」的扩展点。
-- **任务 11 落地蔬菜**：`AgentState` 新增 `vegetable` 字段（≥0）；田块通过 `spatial.crop_type` 声明作物（`west_field` 为 `vegetable`，其余缺省 `grain`）；`harvest` 按 `crop_type` 从 `agriculture.crop_gain` 取产出并写入同名字段。`food_fields` 调整为 `[grain, vegetable, meat, fish]`，`eat` 核心代码再次零改动。
+- **任务 11 落地蔬菜**：`AgentState` 新增 `vegetable` 字段（≥0）；田块通过 `spatial.crop_type` 声明作物（`west_field` 为 `vegetable`，其余缺省 `grain`）；`harvest` 按 `crop_type` 取产出并写入同名字段（阶段二起走 `agriculture.base_yield` 产量公式，见 crops.md §4.5）。`food_fields` 调整为 `[grain, vegetable, meat, fish]`，`eat` 核心代码再次零改动。
 - **守恒**：粮、菜、肉、鱼各自守恒、不为负、可追溯（`agent_action_taken` 载荷含四者的 before/after，秋收另带 `crop` 字段）。
 - 非田地节点（如集市）的 `work_node` 不能 `farm`/`harvest`（决策阶段判不可行），避免「在广场种粮」。
 

@@ -199,7 +199,7 @@ def test_farm_raises_growth_does_not_produce_grain(world):
 
 
 def test_harvest_autumn_grains_growth_and_redeems_debt(world):
-    """秋季 harvest：长势清零、按田块作物 +crop_gain，并按债务记录还给债主（粮守恒，不凭空消债）。
+    """秋季 harvest：长势清零、按田块作物 +base_yield 公式产出，并按债务记录还给债主（粮守恒，不凭空消债）。
 
     任务11 起 west_field 种菜，这里改用 east_field 的赵翠兰验证粮田路径。
     """
@@ -220,7 +220,7 @@ def test_harvest_autumn_grains_growth_and_redeems_debt(world):
 
     module._execute(world, zhao, "harvest", p, tuning)
 
-    gain = tuning.agriculture.crop_gain["grain"]  # 任务11：粮田产出走 crop_gain
+    gain = tuning.agriculture.base_yield["grain"]  # 阶段二：粮田产出走 crops.md §4.5 公式（初始值等价 75）
     assert hh(world, zhao).grain == pytest.approx(10.0 + gain - 10.0)  # 10 + 秋收gain - 10(还债给李全)
     assert hh(world, zhao).debt == pytest.approx(10.0)    # 20 - 10（派生聚合）
     assert hh(world, li_quan).grain == pytest.approx(lq_grain_before + 10.0)  # 债主收粮，总粮守恒

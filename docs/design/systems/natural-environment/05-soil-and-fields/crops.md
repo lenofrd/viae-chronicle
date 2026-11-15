@@ -90,6 +90,13 @@
 影响范围：按田地片
 ```
 
+> **已落地（盈余经济阶段二，2026-11-15）**：`harvest` 改按本式结算，实现见 `vale.modules.agents.expected_yield`。
+> - `base_yield`：配置键 `agriculture.base_yield`（原 `crop_gain` 更名，数值 75/55 不变）。
+> - `area`：`spatial-units.yaml` 节点 `area`，默认 1.0。
+> - `fertility_factor`：`WorldState.field_fertility`，阶段二恒 1.0；连作衰减/休耕恢复**未启用**（阶段三）。
+> - `moisture_factor` / `growth_health` / `disaster_damage`：阶段二取中性占位 1/1/0，未接气候与病虫害。
+> - 偏差：§4.6 的 `harvest_timing_factor` 未实现（阶段二保持实际收成 = expected_yield）；`growth_stage` 仍由长势阈值与季节近似。
+
 ### 4.6 收割
 ```
 条件：人物系统写入收割事件，且 growth_stage = 成熟

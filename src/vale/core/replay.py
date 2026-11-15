@@ -404,6 +404,28 @@ class _Replayer:
             household.member_ids = []
             household.head_id = None
 
+    # -- 劳作点分配（阶段二 C）--------------------------------------------- #
+    def _on_household_work_nodes_changed(self, payload: dict, tick: int) -> None:
+        household_id = payload.get("household_id")
+        if not household_id:
+            return
+        household = self.state.households.get(household_id)
+        if household is not None:
+            household.work_nodes = [str(n) for n in (payload.get("after") or [])]
+
+    def _on_agent_work_node_changed(self, payload: dict, tick: int) -> None:
+        agent_id = payload.get("agent_id")
+        if not agent_id:
+            return
+        agent = self.state.agents.get(agent_id)
+        if agent is not None:
+            after = payload.get("after")
+            agent.work_node = str(after) if after else None
+
+    def _on_birth_skipped(self, payload: dict, tick: int) -> None:
+        """生育因户容量顺延：人口与资产均未变，无状态需要重放。"""
+        return
+
     # -- 生命周期 ----------------------------------------------------------- #
     def _on_agent_born(self, payload: dict, tick: int) -> None:
         child_id = payload.get("child_id") or payload.get("agent_id")

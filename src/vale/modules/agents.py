@@ -182,6 +182,39 @@ def _node_crop_type(world, node_id: str) -> str:
     return "grain"
 
 
+# crops.md §4.5 产量公式的中性因子：阶段二只做公式化，不接入气候/病虫害/灾害，取值等价既有产出。
+YIELD_MOISTURE_FACTOR = 1.0
+YIELD_GROWTH_HEALTH = 1.0
+YIELD_DISASTER_DAMAGE = 0.0
+DEFAULT_FIELD_FERTILITY = 1.0
+
+
+def _field_area(world, node_id: str) -> float:
+    """田块面积乘数（spatial 节点 ``area``，非田/未知节点按 1.0）。"""
+    for n in world.config.spatial.nodes:
+        if n.id == node_id:
+            return float(getattr(n, "area", 1.0))
+    return 1.0
+
+
+def expected_yield(world, node_id: str, crop: str, tuning: AgentTuning) -> float:
+    """预期收成（crops.md §4.5）：
+
+    base_yield × area × fertility × moisture × growth_health × (1 − disaster_damage)。
+
+    阶段二初始值（base_yield={grain:75, vegetable:55}、area=1、fertility=1、moisture=1、
+    growth_health=1、disaster_damage=0）下与既有固定产出逐项相等。
+    """
+    return (
+        tuning.agriculture.base_yield.get(crop, 0.0)
+        * _field_area(world, node_id)
+        * world.state.field_fertility.get(node_id, DEFAULT_FIELD_FERTILITY)
+        * YIELD_MOISTURE_FACTOR
+        * YIELD_GROWTH_HEALTH
+        * (1.0 - YIELD_DISASTER_DAMAGE)
+    )
+
+
 def _is_field_node(world, node_id: str) -> bool:
     """该节点是否为田地（只有田地能 farm/harvest）。"""
     for n in world.config.spatial.nodes:
@@ -221,6 +254,8 @@ class AgentModule:
             self._spatial = SpatialIndex(world.config.spatial)
         self._ensure_agents(world, cfg)
         tuning = cfg.tuning
+        # 阶段二 C：劳作点对账（家庭可分配田块 + 个人偏好失效回收），先于当日决策
+        self._reconcile_work_nodes(world, tuning)
         # A1：主循环以 WorldState.agents 为唯一真相源；cfg.agents 只用于开局播种，
         # 运行时新增的新生儿下一 tick 即参与决策/结算/查询。
         for agent_id in list(world.state.agents.keys()):
@@ -272,11 +307,111 @@ class AgentModule:
                 stamina=a.initial_stamina if a.initial_stamina is not None else phys.initial_stamina,
                 fatigue=phys.initial_fatigue,
             )
-        # 初始化所有 FIELD 节点的长势为 0（内容来自 spatial 配置，不写死节点 id）
+        # 初始化所有 FIELD 节点的长势为 0、地力为中性值（内容来自 spatial 配置，不写死节点 id）
         if not world.state.field_growth:
             for n in world.config.spatial.nodes:
                 if getattr(n.type, "value", n.type) == "field":
                     world.state.field_growth[n.id] = 0.0
+        if not world.state.field_fertility:
+            for n in world.config.spatial.nodes:
+                if getattr(n.type, "value", n.type) == "field":
+                    world.state.field_fertility[n.id] = DEFAULT_FIELD_FERTILITY
+        # 阶段二 C：播种家庭可分配田块（单人户 = [默认田]，与既有 work_node_of 等价；不写事件）
+        for household in world.state.households.values():
+            household.work_nodes = self._desired_work_nodes(world, household, cfg.tuning)
+
+    # -- 阶段二 C：劳作点对账（家庭可分配田块 + 个人偏好失效回收）------------- #
+    def _work_capable_count(self, world, household: HouseholdState,
+                            tuning: AgentTuning) -> int:
+        """户内可劳作存活成员数（年龄分段 work_allowed；确定性计数，不依赖 life_stage 投影）。"""
+        count = 0
+        for member_id in household.member_ids:
+            member = world.state.agents.get(member_id)
+            if member is None or not member.alive:
+                continue
+            stage = tuning.aging.stage_for(age_years(member.birth_tick, world.current_tick))
+            if stage.work_allowed:
+                count += 1
+        return count
+
+    def _desired_work_nodes(self, world, household: HouseholdState,
+                            tuning: AgentTuning) -> list[str]:
+        """家庭可分配田块（labor.allocation_policy=deterministic_distance）。
+
+        默认田排首位（保证单人户与既有 work_node_of 等价），其余可达田按
+        「家→田距离升序、节点 id 升序」补足；列表长度取可劳作成员数（至少 1）。
+        家庭默认劳作点不是田（如集市）时返回空表，保持既有语义、不做田块分配。
+        """
+        field_ids = [
+            n.id for n in world.config.spatial.nodes
+            if getattr(n.type, "value", n.type) == "field"
+        ]
+        if household.work_node not in field_ids:
+            return []
+        if self._spatial is None:
+            self._spatial = SpatialIndex(world.config.spatial)
+        default = household.work_node
+        others = sorted(
+            (fid for fid in field_ids
+             if fid != default
+             and self._spatial.travel_tu(household.home_node, fid) != float("inf")),
+            key=lambda fid: (self._spatial.travel_tu(household.home_node, fid), fid),
+        )
+        workers = max(1, self._work_capable_count(world, household, tuning))
+        return ([default] + others)[:workers]
+
+    def _reconcile_work_nodes(self, world, tuning: AgentTuning) -> None:
+        """每 tick 对账：家庭可分配田块重算 + 个人偏好失效回收（确定性，无随机）。
+
+        - 家庭列表变化写 ``household_work_nodes_changed``（before/after/reason）；
+        - 个人偏好指向不存在或不可达节点时置 None，写 ``agent_work_node_changed``
+          （reason=preference_invalid）。
+        """
+        if self._spatial is None:
+            self._spatial = SpatialIndex(world.config.spatial)
+        for household in living_households(world):
+            desired = self._desired_work_nodes(world, household, tuning)
+            if desired == household.work_nodes:
+                continue
+            before = list(household.work_nodes)
+            household.work_nodes = desired
+            world.event_log.append(
+                world.current_tick,
+                "household_work_nodes_changed",
+                {
+                    "household_id": household.household_id,
+                    "home_node": household.home_node,
+                    "before": before,
+                    "after": list(desired),
+                    "reason": "reassigned",
+                    "work_capable_members": self._work_capable_count(
+                        world, household, tuning
+                    ),
+                },
+            )
+        node_ids = {n.id for n in world.config.spatial.nodes}
+        for agent in living_agents(world.state.agents):
+            if not agent.work_node:
+                continue
+            if agent.work_node in node_ids and (
+                self._spatial.travel_tu(home_node_of(world, agent), agent.work_node)
+                != float("inf")
+            ):
+                continue
+            before = agent.work_node
+            agent.work_node = None
+            world.event_log.append(
+                world.current_tick,
+                "agent_work_node_changed",
+                {
+                    "agent_id": agent.agent_id,
+                    "agent_name": agent.name,
+                    "household_id": agent.household_id,
+                    "before": before,
+                    "after": None,
+                    "reason": "preference_invalid",
+                },
+            )
 
     # -- 年龄与衰老（任务12）----------------------------------------------- #
     def _health_cap(self, age: int, tuning: AgentTuning) -> float:
@@ -687,6 +822,7 @@ class AgentModule:
         debt_before = household.debt
         fg = world.state.field_growth
         field_growth_before = fg.get(work_node, 0.0)
+        harvest_detail: dict = {}
 
         # 扣体力（移动 + 动作）
         agent.stamina = max(0.0, agent.stamina - move_stamina - flat_stamina)
@@ -696,7 +832,14 @@ class AgentModule:
         if action == "eat":
             # D9 改写：直接消费家庭库存（未成年人不再从父母个人账户转账）
             agent.hunger = max(0.0, agent.hunger - phys.eat_hunger_reduction)
-            cost = phys.eat_grain_cost
+            # 阶段三第2轮：未成年人单次进食按 consumption.minor_food_share 扣减库存；
+            # 成年恒为 1.0（与既有行为一致）。饥饿降低量、评分、其他消费逻辑均不变。
+            share = (
+                tuning.consumption.minor_food_share
+                if age_years(agent.birth_tick, world.current_tick) < tuning.dependency.max_age
+                else 1.0
+            )
+            cost = phys.eat_grain_cost * share
             available = sum(getattr(household, f, 0.0) for f in phys.food_fields)
             if available >= cost:
                 for f in phys.food_fields:
@@ -724,10 +867,19 @@ class AgentModule:
                 agr.max_field_growth, field_growth_before + agr.field_growth_per_farm
             )
         elif action == "harvest":
-            # 秋季且长势达标：长势清零，按田块 crop_type 产出对应作物（grain / vegetable）；
+            # 秋季且长势达标：长势清零，按 crops.md §4.5 公式产出对应作物（grain / vegetable）；
             # 再按债务记录还给对应债主。产出进家庭库存。
             fg[work_node] = 0.0
-            gain = agr.crop_gain.get(crop, 0.0)
+            gain = expected_yield(world, work_node, crop, tuning)
+            harvest_detail = {
+                "crop": crop,
+                "base_yield": tuning.agriculture.base_yield.get(crop, 0.0),
+                "field_area": _field_area(world, work_node),
+                "field_fertility": world.state.field_fertility.get(
+                    work_node, DEFAULT_FIELD_FERTILITY
+                ),
+                "expected_yield": round(gain, 2),
+            }
             setattr(household, crop, round(getattr(household, crop, 0.0) + gain, 2))
             self._repay_debts(
                 world, agent, tuning, source="harvest", max_repay=agr.harvest_debt_repayment
@@ -820,7 +972,7 @@ class AgentModule:
                 "cloth_after": round(household.cloth, 2),
                 "household_inv_before": household_inv_before,
                 "household_inv_after": inventory_of(world, agent, list(tuning.market.trade_values)),
-                **({"crop": crop} if crop is not None else {}),
+                **harvest_detail,
                 **({"fed_by": fed_by} if action == "eat" else {}),
                 "debt_before": round(debt_before, 2),
                 "debt_after": round(household.debt, 2),
@@ -2047,6 +2199,25 @@ class AgentModule:
                 continue
             if self.rng.random() >= chance:
                 continue
+            # 阶段二 B：出生前校验户容量（不改婚配 Q6 语义，不自动分家）；超限跳过本次生育
+            household = household_of(world, mother)
+            if (
+                b.respect_house_capacity
+                and len(household.member_ids) + 1 > tuning.household.house_max_members
+            ):
+                world.event_log.append(
+                    world.current_tick,
+                    "birth_skipped",
+                    {
+                        "agent_id": mother.agent_id,
+                        "agent_name": mother.name,
+                        "household_id": household.household_id,
+                        "member_count": len(household.member_ids),
+                        "house_max_members": tuning.household.house_max_members,
+                        "reason": "capacity",
+                    },
+                )
+                continue
             self._give_birth(world, mother, father, tuning)
             population += 1
 
@@ -2073,12 +2244,6 @@ class AgentModule:
             n += 1
         return surname, b.name_fallback_suffix.format(name=base, n=n)
 
-    def _newborn_home_and_work(self, world, mother: AgentState,
-                               father: AgentState) -> tuple[str, str, str]:
-        """D8 改写：新生儿加入母亲家庭，住所/劳作点取家庭默认（源标注 household）。"""
-        household = household_of(world, mother)
-        return household.home_node, household.work_node, "household"
-
     def _give_birth(self, world, mother: AgentState, father: AgentState,
                     tuning: AgentTuning) -> None:
         b = tuning.birth
@@ -2097,8 +2262,8 @@ class AgentModule:
             stamina_cap,
             max(b.newborn_min_stamina, avg_stamina * b.newborn_stamina_parent_ratio),
         )
-        home, work, work_source = self._newborn_home_and_work(world, mother, father)
         household = household_of(world, mother)
+        home = household.home_node
 
         child = AgentState(
             agent_id=child_id,
@@ -2109,7 +2274,7 @@ class AgentModule:
             life_stage=tuning.aging.stage_for(0).name,
             household_id=household.household_id,
             location=home,
-            work_node=None,  # 取家庭默认工作节点
+            work_node=None,  # 阶段二 C：不继承个人偏好，取家庭可分配田块/默认
             health=round(health, 2),
             hunger=b.initial_hunger,
             stamina=round(stamina, 2),
@@ -2122,6 +2287,12 @@ class AgentModule:
         mother.children_ids.append(child_id)
         father.children_ids.append(child_id)
         mother.last_birth_tick = world.current_tick
+        # 阶段二 C：新生儿不继承个人偏好，取家庭可分配田块（按可劳作成员序确定性分配）
+        work = work_node_of(world, child)
+        work_source = "household_allocation" if household.work_nodes else "household"
+        # 阶段二 §3.0：分娩健康代价（01-physical-state §4.4 普通分娩 health −10）
+        mother_health_before = mother.health
+        mother.health = max(0.0, round(mother_health_before - b.mother_health_cost, 2))
 
         world.event_log.append(
             world.current_tick,
@@ -2143,6 +2314,8 @@ class AgentModule:
                 "home_node": home,
                 "work_node": work,
                 "work_node_source": work_source,
+                "mother_health_before": round(mother_health_before, 2),
+                "mother_health_after": round(mother.health, 2),
                 "population_after": len(living_agents(world.state.agents)),
             },
         )

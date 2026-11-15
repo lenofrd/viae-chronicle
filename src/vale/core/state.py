@@ -81,6 +81,9 @@ class HouseholdState(BaseModel):
     debts: list[DebtRecord] = Field(default_factory=list)
     home_node: str
     work_node: str
+    # 阶段二 C：家庭可分配田块（默认田优先，其余按距离/id 确定性排序；空 = 沿用 work_node）。
+    # 户内按可劳作成员序对位接田（未成年/高龄不占劳作位），见 vale.core.household.work_node_of。
+    work_nodes: list[str] = Field(default_factory=list)
     formed_tick: int = Field(..., ge=0)
 
     @computed_field  # type: ignore[misc]
@@ -138,3 +141,5 @@ class WorldState(BaseModel):
     households: dict[str, HouseholdState] = Field(default_factory=dict)
     # 田地长势：node_id -> 0-100；由 AgentModule 为 FIELD 节点初始化为 0
     field_growth: dict[str, float] = Field(default_factory=dict)
+    # 田块地力（crops.md §4.5 fertility）：node_id -> 乘数；阶段二恒 1.0，衰减/恢复未启用
+    field_fertility: dict[str, float] = Field(default_factory=dict)

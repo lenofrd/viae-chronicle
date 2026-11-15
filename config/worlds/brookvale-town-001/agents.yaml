@@ -42,7 +42,7 @@ tuning:
       # 浅山往返 13 TU 的高额距离+体力惩罚（2.75），使封顶窗口 hunt(0.97) > fish(0.81)，但仍 < farm(1.30)。
       hunt: { survival: 0.1, economy: 2.4 }   # [调参] 任务10：纯经济远征动作
       fish: { survival: 0.8, economy: 0.7 }   # [调参] 任务10：渔业近镇补充生计。economy 0.7 让饱腹+田地封顶时 fish 有正分（林远/贫民靠捕鱼囤粮维生）；断粮饥饿时靠 survival 0.8 压过 rest 去捕鱼。贫民区→河边近路（单程 1.5 TU）让贫民捕鱼打分转正
-      weave: { economy: 1.6 }                 # [调参] 任务11：织布不产食物，纯经济动作（无 survival）；第 4 NPC 靠初始布+布价+该效用自然分工
+      weave: { economy: 1.2 }                 # [调参] 阶段三第1轮：economy 1.6→1.2。理由：挤出诊断（seed 0/7 × 1800）显示 farm 封顶后调用 0 次、零无效投入，挤出主因是 weave 在田块封顶后得分 1.17–1.53 高于 fish 0.54–0.72 / hunt 0.56–0.65，导致 +336 次额外织布、采集产出 1811→943。扫描 1.0/1.1/1.2/1.3/1.4：1.0 时织布近似消失（9–15 次），1.4 时重新压过捕捞并退化（seed7 存活 7）；1.2 时 weave 129–142 次、fish+hunt 1202–1210、east 收割 10、2 种子存活 12。影响：布料 236（远高于御寒阈值 3），织布保留且不压过捕捞
     stamina_cost:                       # B5：动作固定体力消耗（移动另按 TU 计）
       eat: 0
       rest: 0
@@ -50,7 +50,7 @@ tuning:
       collect_water: 10
       harvest: 20
       borrow_grain: 0
-      hunt: 15                               # [调参] 任务10：25→15。林远家→浅山往返移动耗 65 体力，+15 刚好 ≤ 体力上限 80，使打猎可行；25 时 90>80 被 _can_afford 过滤导致打猎绝迹
+      hunt: 10                               # [调参] 阶段三第1轮：15→10（-33%）。诊断：15 时打猎往返 65 体力、成功率被体力约束压到近乎为零；10 后 2 种子 × 1800 tick 采集成功数 110+/366、人口存活（3.5 产鱼配合）。临时值，待长期方案复核
       fish: 15                               # [调参] 任务10：捕鱼体力消耗（近镇，低于打猎）
       weave: 15                              # [调参] 任务11：织布固定体力消耗（室内劳作）
     tu_cost:                            # C3：动作 TU 占用
@@ -61,7 +61,7 @@ tuning:
     field_growth_per_farm: 2.0          # [调参] 里程碑3：360天历年，降增速避免初夏长势爆表（旧 5）
     max_field_growth: 100
     harvest_growth_threshold: 80        # 秋收前提：长势 ≥ 80
-    crop_gain: { grain: 75, vegetable: 55 }  # [调参] 任务11：按田块 crop_type 取产出；粮田沿用任务10 的 75，菜田 55（坡地单产略低）
+    base_yield: { grain: 75, vegetable: 55 }  # [调参] 阶段二：crop_gain 更名 base_yield（crops.md §4.5）。area=1/fertility=1/moisture=1/growth_health=1/disaster=0，产出与旧值逐项相等；提产留阶段三
     harvest_debt_repayment: 10          # [调参] 秋收偿还债务（石）——"偿还部分"未给具体值，暂取 10，待确认
 
   borrow:                               # 04-03 新增：借粮生存（第一版极简）
@@ -99,7 +99,7 @@ tuning:
         target_node: river_town         # 翠溪镇前段（近镇，spatial-units.yaml 已有水域节点）
         output_field: fish              # 产出写入 AgentState.fish
         base_success_rate: 0.45         # [调参] 任务10：0.55→0.45，渔业降为补充，避免过剩反超农业
-        output_amount: 2                # [调参] 任务10：3→2，渔业降为补充，农业重回主食
+        output_amount: 3.5              # [调参] 阶段三第1轮：2→3.5（+75%）。诊断：口粮缺口约 25%，鱼类是唯一随人口增长的人均产出项；2 时人口 500–800 tick 归零，3.5 时 2 种子 × 1800 tick 均存活。临时值，待长期方案复核
         injury_risk: 0.02               # [调参] 捕鱼受伤概率（近镇缓流，低于打猎）
         injury_health_loss: 10          # [调参] 受伤健康损失
         season_modifier: {spring: 1.0, summer: 1.2, autumn: 1.1, winter: 0.7}  # [调参] 夏季鱼肥，冬季枯水减产
@@ -172,6 +172,8 @@ tuning:
     given_names: [阿福, 阿寿, 小满, 春生, 秋生, 冬生, 水生, 禾生, 阿宁, 阿平, 阿安, 阿顺]
     name_fallback_suffix: "{name}{n}"
     asset_transfer_ratio: 0.1           # [调参] A4：出生时父母各转移 10% 食物
+    respect_house_capacity: true        # 阶段二 B：原值 false（出生不看容量）→ 新值 true（超限跳过本次生育、不写 agent_born、写 birth_skipped）；不改婚配 Q6，不自动分家
+    mother_health_cost: 10              # 阶段二 §3.0：01-physical-state §4.4 普通分娩 health −10（设计值，非调参）；难产 −40 分支待设计补概率
 
   inheritance:                          # 任务12 新增：继承
     asset_ratio: 1.0
@@ -183,8 +185,14 @@ tuning:
     max_age: 16                         # [调参] D9：依赖年龄上限
     feed_from_parent: true
 
+  consumption:                          # 阶段三第2轮新增：消费端系数
+    minor_food_share: 0.7               # [调参] 未成年人单次进食库存扣减系数（成年恒 1.0，饥饿降低量不变）。诊断缺口 20–25%，消费端直接补缺口；临时值，待长期方案复核
+
   household:                            # 任务12 迁移第2步：家庭规模
-    house_max_members: 8                # [调参] 单户成员上限；婚配并入前校验，超限静默跳过
+    house_max_members: 8                # [调参] 单户成员上限；婚配并入与出生前校验
+
+  labor:                                # 阶段二 C：劳作点分配（修缺陷，不调参）
+    allocation_policy: deterministic_distance  # 家庭可分配田块：默认田优先，其余按家→田距离+节点 id；户内按可劳作成员序对位接田
 
   split:                                # 任务12 第3步：分家
     min_members: 4                      # [调参] 户内人数下限（含夫妻与子女）

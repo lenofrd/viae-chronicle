@@ -57,6 +57,7 @@ class HouseholdState(BaseModel):
     debts: list[DebtRecord] = []        # 债务记录挂在债务家庭；字段内 debtor 必须等于 household_id
     home_node: str                       # 家庭住所（唯一真相源）
     work_node: str                       # 家庭默认主田/主工作节点
+    work_nodes: list[str] = []           # 阶段二 C：家庭可分配田块（默认田优先，其余按家→田距离+节点 id）
     formed_tick: int = Field(..., ge=0)
 
     @computed_field
@@ -71,7 +72,7 @@ class HouseholdState(BaseModel):
 household_of(world, agent) -> HouseholdState
 household_members(world, household) -> list[AgentState]
 living_households(world) -> list[HouseholdState]
-work_node_of(world, agent) -> str        # agent.work_node or household.work_node
+work_node_of(world, agent) -> str        # 个人偏好（有效且可达）→ household.work_nodes → household.work_node
 inventory_of(world, agent) -> dict[str, float]   # 家庭资产快照（按 market.trade_values 键）
 ```
 
@@ -160,9 +161,12 @@ def inv(world, agent): return inventory_of(world, agent)
 ### 7.1 出生（A4 取消）
 
 - 新生儿 `household_id = 母亲 household_id`；家庭资产**不变**；
-- `work_node=None`（取家庭默认），事件记 `work_node = 家庭 work_node`、`work_node_source="household"`（D8 改写）；
+- **阶段二 C 修订**：劳作点解析改为「个人偏好（有效且可达）→ 家庭 `work_nodes`（按可劳作成员序确定性对位分配，未成年/高龄不占劳作位）→ 家庭默认」；
+  新生儿不继承个人偏好，取家庭分配，事件记 `work_node_source="household_allocation"`（无田/非田默认点时仍为 `"household"`）。
 - `home_node` 取家庭；
 - `agent_born` 追加 `household_id`；**不再产生 `birth_asset_transfer`**；
+- **阶段二 §3.0 生育代价**：出生时母亲 `health −= birth.mother_health_cost`（默认 10，来自 01-physical-state §4.4 普通分娩），
+  事件追加 `mother_health_before/after`。难产（−40 + 死亡风险）、孕期体力限制、产后休养**未实现**（见 §18 G6）。
 - 旧事件库兼容：`birth_asset_transfer` 渲染器保留，仅用于旧库展示。
 
 ### 7.2 消费（D9 改写）
@@ -276,7 +280,7 @@ def inv(world, agent): return inventory_of(world, agent)
 
 ### 11.4 生产与保暖
 
-- `farm` / `harvest` / `gather` / `weave` 产出进家庭库存；田块取 `work_node_of(world, agent)`（个人偏好优先，否则家庭默认）；
+- `farm` / `harvest` / `gather` / `weave` 产出进家庭库存；田块取 `work_node_of(world, agent)`（阶段二 C：个人偏好（有效且可达）→ 家庭 `work_nodes` 按可劳作成员序对位分配 → 家庭默认）；
 - 冬季保暖判定用家庭 `cloth`；
 - `agent_action_taken` 追加 `household_id`、`household_inv_before/after`、`work_node`；个人 `health/hunger/stamina` 字段不变。
 
@@ -410,10 +414,11 @@ def rebuild_state(events: list[dict], config) -> WorldState
 | # | 缺口 | 现象/证据 | 影响 | 解除条件 |
 |---|---|---|---|---|
 | G1 | 家庭口粮承载力不足 | 2 种子 × 600 tick：4 成年 + 2 未成年时每 50 tick 进食 73–77 次，`gather_success` 仅 4–17 次，食物 135 → 0；关闭合并（少 1–2 张嘴）则可稳定在 140–207 | 人口在 400–600 tick 内归零；长程可持续性不达标 | 阶段三调参（采集产出/生育间隔/未成年人 `food_share`/采集体力）或补“口粮承载力”设计 |
-| G2 | 无劳动分配机制；诊断显示不存在明显搭便车，主因是承载力，劳动分配非优先项 | 与对照相比，成年成员人均 `fish+hunt` 无系统性下降；家庭食物下降与人口数（6 vs 4）同步 | 不实现该机制 | 阶段三调参后若仍出现明确搭便车数据，再补设计 |
-| G3 | 长程可持续性测试降级为技术债 | 5+5(+2) 条长程断言改为“无 `agent_error`、无负值、记录人口曲线”，函数名带 `_tech_debt` | 人口不作为第 2 步门禁 | 阶段三人口恢复后恢复原断言并去掉后缀 |
+| G2 | ~~无劳动分配机制~~ **阶段二 C 已落地确定性田块分配**（`work_nodes` 按可劳作成员序对位，解决 east_field 零投入）；搭便车治理诊断结论不变（不明显，主因是承载力） | 与对照相比，成年成员人均 `fish+hunt` 无系统性下降；家庭食物下降与人口数（6 vs 4）同步 | 田块分配已实现；搭便车治理不实现 | 阶段三调参后若仍出现明确搭便车数据，再补设计 |
+| G3 | ~~长程可持续性测试降级为技术债~~ **已恢复（阶段三第 2 轮）** | 12 条 `_tech_debt` 断言全部恢复原名与 `assert survivors/alive`；1080 tick × 5 种子、1800 tick × 5 种子、1080 tick × 2 种子全部通过 | — | 已完成；3600 tick 仍 4/5（seed 42 第 2461 tick 库存耗尽灭绝），属 G1 承载力缺口 |
 | G4 | ~~分家未实现~~ **已在第 3 步落地** | `split.min_members` / `asset_ratio` / `home_node_candidates` 与 `household_split` 事件已实现，含守恒与住所轮转 | — | 已完成 |
 | G5 | 外部监护/其他居所制未实现 | 全户未成年仅取最长成员为户主（Q7），不做亲属间监护转移 | 孤儿户可能由未成年户主支撑 | 后续家庭扩展 |
+| G6 | 生育代价缺数值（阶段二 §3.0 登记） | **设计有框架**（[01-physical-state.md §4.4](01-physical-state.md)：孕期分段、晚期 `max_stamina −50%`、普通分娩 health −10、难产 −40 可能死亡、产后休养 1–2 月），**缺**难产概率 / 孕期时长 / 产后休养数值 | 当前仅落地「普通分娩 health −10」 | 阶段三前补数值即可实现，**不需重新设计** |
 
 > G1–G3 为第 2 步收尾的显式技术债，代码中所有降级测试以 `_tech_debt` 后缀标记，解除条件写在测试 docstring 与本表。
 
