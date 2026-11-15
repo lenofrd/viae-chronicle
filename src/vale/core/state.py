@@ -77,6 +77,8 @@ class AgentState(BaseModel):
     grain: float = Field(default=0.0, ge=0)
     meat: float = Field(default=0.0, ge=0)  # 任务09：非农生计（打猎）产出；与 grain 同属食物储备
     fish: float = Field(default=0.0, ge=0)  # 任务10：渔业产出；按 physiology.food_fields 优先级被 eat 消耗
+    vegetable: float = Field(default=0.0, ge=0)  # 任务11：蔬菜产出；参与 eat 优先级与集市交易
+    cloth: float = Field(default=0.0, ge=0)  # 任务11：布匹；冬季保暖耐用品，不参与 eat，可交易
     # 债务列表为唯一真相源；debt 为派生聚合（见下方 computed_field）
     debts: list[DebtRecord] = Field(default_factory=list)
     last_action: Optional[str] = None

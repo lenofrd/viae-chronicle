@@ -8,7 +8,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AgentSex(str, Enum):
@@ -56,13 +56,26 @@ class ActionTuning(BaseModel):
 
 
 class AgricultureTuning(BaseModel):
-    """农田生长周期（里程碑 2 扩展）。"""
+    """农田生长周期（里程碑 2 扩展；任务 11 起作物可配置）。"""
 
     field_growth_per_farm: float = Field(5.0, ge=0, description="每次 farm 提升的长势")
     max_field_growth: float = Field(100.0, gt=0)
     harvest_growth_threshold: float = Field(80.0, ge=0, description="可秋收的最低长势")
-    harvest_grain_gain: float = Field(30.0, ge=0, description="秋收获得的存粮（石）")
+    # 作物名 -> 秋收产出量。作物名同时是 AgentState 的字段名（grain / vegetable / 未来 fruit），
+    # 与 spatial 节点上的 crop_type 对齐；新增作物只加配置，不改 harvest 核心结算。
+    crop_gain: dict[str, float] = Field(
+        default_factory=lambda: {"grain": 30.0}, description="各作物秋收产出量"
+    )
     harvest_debt_repayment: float = Field(10.0, ge=0, description="秋收时偿还的债务（石）")
+
+    @model_validator(mode="after")
+    def _crop_gain_valid(self) -> "AgricultureTuning":
+        if not self.crop_gain:
+            raise ValueError("agriculture.crop_gain must not be empty")
+        for crop, gain in self.crop_gain.items():
+            if gain < 0:
+                raise ValueError(f"crop_gain[{crop}] must be >= 0")
+        return self
 
 
 class BorrowTuning(BaseModel):
@@ -142,6 +155,61 @@ class GatheringTuning(BaseModel):
     actions: dict[str, GatheringActionTuning] = Field(default_factory=dict)
 
 
+class MarketTuning(BaseModel):
+    """赶集交易（任务11）：集市日结算、以物易物、固定相对价格。
+
+    撮合不是在动作层抢效用分，而是在每日结算阶段统一处理；物品集合由 ``trade_values``
+    的键决定（v1：grain / vegetable / meat / fish / cloth）。坏配置在启动时直接报错。
+    """
+
+    market_node: str = Field("market", description="集市空间节点 id")
+    market_day_interval: int = Field(10, ge=1, description="每多少天一次集市")
+    market_day_offset: int = Field(0, ge=0, description="集市日偏移（tick % interval == offset）")
+    market_min_stamina: float = Field(
+        15.0, ge=0, le=100, description="扣完往返赶路体力后仍需保留的最低体力"
+    )
+    market_max_distance_tu: float = Field(
+        3.0, gt=0, description="可赴集的单程上限（TU），排除深山/远山类"
+    )
+    trade_values: dict[str, float] = Field(default_factory=dict, description="物品相对价值")
+    surplus_threshold: dict[str, float] = Field(default_factory=dict, description="富余阈值")
+    deficit_threshold: dict[str, float] = Field(default_factory=dict, description="短缺阈值")
+    max_trade_units: float = Field(10.0, gt=0, description="单次成交的 give 侧上限")
+    trade_unit_step: float = Field(0.5, gt=0, description="成交量的最小步长")
+    trade_value_tolerance: float = Field(
+        0.2, ge=0, le=1, description="交换价值相对误差容忍度"
+    )
+
+    @model_validator(mode="after")
+    def _validate_rules(self) -> "MarketTuning":
+        if self.market_day_offset >= self.market_day_interval:
+            raise ValueError("market_day_offset must be < market_day_interval")
+        if not self.trade_values:
+            raise ValueError("market.trade_values must not be empty")
+        for item, value in self.trade_values.items():
+            if value <= 0:
+                raise ValueError(f"trade_values[{item}] must be > 0")
+            if item not in self.surplus_threshold:
+                raise ValueError(f"missing surplus_threshold[{item}]")
+            if item not in self.deficit_threshold:
+                raise ValueError(f"missing deficit_threshold[{item}]")
+            if self.deficit_threshold[item] >= self.surplus_threshold[item]:
+                raise ValueError(
+                    f"threshold inverted for {item}: deficit >= surplus"
+                )
+        return self
+
+
+class TextileTuning(BaseModel):
+    """纺织与冬季保暖（任务11）。布是耐用品：达到门槛即免寒冷惩罚，不每日消耗。"""
+
+    cloth_per_weave: float = Field(2.0, ge=0, description="一次成功织布的产量（匹）")
+    base_success_rate: float = Field(0.9, ge=0, le=1, description="基础织布成功率")
+    season_modifier: dict[str, float] = Field(default_factory=dict, description="季节成功率乘数")
+    warmth_cloth_threshold: float = Field(3.0, ge=0, description="冬季御寒所需布量门槛")
+    cold_health_loss: float = Field(2.0, ge=0, description="无布御寒时每日健康损失")
+
+
 class AgentTuning(BaseModel):
     physiology: PhysiologyTuning = Field(default_factory=PhysiologyTuning)
     utility: UtilityTuning = Field(default_factory=UtilityTuning)
@@ -152,11 +220,15 @@ class AgentTuning(BaseModel):
     health: HealthTuning = Field(default_factory=HealthTuning)
     death: DeathTuning = Field(default_factory=DeathTuning)
     gathering: GatheringTuning = Field(default_factory=GatheringTuning)
+    market: MarketTuning = Field(default_factory=MarketTuning)
+    textile: TextileTuning = Field(default_factory=TextileTuning)
     time: TimeTuning = Field(default_factory=TimeTuning)
 
 
 class AgentAssets(BaseModel):
     grain: float = Field(..., ge=0, description="存粮（石）")
+    vegetable: float = Field(0.0, ge=0, description="存菜（担）")
+    cloth: float = Field(0.0, ge=0, description="存布（匹）")
 
 
 class AgentConfig(BaseModel):

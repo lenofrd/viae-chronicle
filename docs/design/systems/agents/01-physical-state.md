@@ -105,7 +105,15 @@
 - `AgentState` 新增 `meat` 字段（≥0），与 `grain` 并列构成食物储备；打猎产出写入 `meat`。
 - `eat` 消耗改为按 `physiology.food_fields`（默认 `[grain, meat]`）优先级：吃第一个存量 ≥ `eat_grain_cost` 的字段；都不够时吃尽存量最多的字段（不产生负值）。所有食物字段都 ≤ 0 时 `eat` 判为不可行。
 - **任务 10 落地渔业**：`AgentState` 新增 `fish` 字段（≥0），捕鱼产出写入 `fish`；`food_fields` 配置为 `[grain, meat, fish]`，`eat` 核心代码不变——验证了「加食物字段只改配置」的扩展点。
-- **守恒**：粮、肉、鱼各自守恒、不为负、可追溯（`agent_action_taken` 载荷含三者的 before/after）。
+- **任务 11 落地蔬菜**：`AgentState` 新增 `vegetable` 字段（≥0）；田块通过 `spatial.crop_type` 声明作物（`west_field` 为 `vegetable`，其余缺省 `grain`）；`harvest` 按 `crop_type` 从 `agriculture.crop_gain` 取产出并写入同名字段。`food_fields` 调整为 `[grain, vegetable, meat, fish]`，`eat` 核心代码再次零改动。
+- **守恒**：粮、菜、肉、鱼各自守恒、不为负、可追溯（`agent_action_taken` 载荷含四者的 before/after，秋收另带 `crop` 字段）。
+- 非田地节点（如集市）的 `work_node` 不能 `farm`/`harvest`（决策阶段判不可行），避免「在广场种粮」。
+
+### 4.8 布匹与冬季保暖（任务 11）
+- `AgentState` 新增 `cloth` 字段（≥0）：**耐用品**，不参与 `eat` 每日消耗，可进入集市交易。
+- 冬季（`Season.WINTER`）每日生理演化后检查：`cloth >= textile.warmth_cloth_threshold` 免惩罚；否则 `health -= textile.cold_health_loss`，并写一条 `cold_exposure`（每人每日至多一条）。
+- 织布（`weave`）是 `cloth` 的唯一产出路径（v1 由劳动直接产布，不消耗麻/棉原料，见 06-actions.md §5.2b）。
+- **守恒**：`cloth` 不凭空产生/消灭，产出走 `weave_success`（before/after），交易走 `trade_executed`（双方库存快照）。
 
 ## 5. 与其他系统的接口
 - 读：食物存量、休息场所。

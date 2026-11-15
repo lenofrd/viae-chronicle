@@ -30,6 +30,9 @@ class SpatialNode(BaseModel):
         None, ge=0,
         description="从镇中心水井出发的单程耗时（TU），来源：05-distances.md",
     )
+    # 仅 field 节点有意义：该田块种什么作物（同时是 AgentState 的产出字段名）。
+    # 缺省 grain，向后兼容；新增作物（如 fruit）只需在配置与 crop_gain 中加一项。
+    crop_type: str = Field("grain", description="田块作物类型（grain / vegetable / 未来 fruit）")
     attributes: dict = Field(default_factory=dict)
 
     @field_validator("id")

@@ -42,10 +42,10 @@ def _agent_module(world) -> AgentModule:
 # 加载与初始状态
 # --------------------------------------------------------------------------- #
 def test_agents_loaded_from_config(world):
-    """agents.yaml 的 3 个人物应在首次 step 后投影进 WorldState.agents。"""
+    """agents.yaml 的 4 个人物应在首次 step 后投影进 WorldState.agents。"""
     run_tick(world)
     ids = set(world.state.agents.keys())
-    assert ids == {"lin_yuan", "zhao_cuilan", "li_quan"}
+    assert ids == {"lin_yuan", "zhao_cuilan", "li_quan", "zhou_qiaoniang"}
 
     # 配置层：初始存粮正确加载（不受首 tick 行为影响）。任务10 [调参]：林远 15→30、
     # 赵翠兰 3→35（开春缓冲撑到首次秋收），李全 100 不变
@@ -148,7 +148,7 @@ def test_action_event_payload_has_expected_fields(world):
     """agent_action_taken 事件应携带完整载荷，便于 CLI 叙事与后续分析。"""
     run_tick(world)
     events = world.event_log.by_type("agent_action_taken")
-    assert len(events) == 3  # 3 个人物各一条
+    assert len(events) == 4  # 4 个人物各一条
 
     expected_keys = {
         "agent_id", "agent_name", "action", "target_node",
@@ -190,27 +190,30 @@ def test_farm_raises_growth_does_not_produce_grain(world):
 
 
 def test_harvest_autumn_grains_growth_and_redeems_debt(world):
-    """秋季 harvest：长势清零、存粮 +harvest_grain_gain，并按债务记录还给债主（粮守恒，不凭空消债）。"""
+    """秋季 harvest：长势清零、按田块作物 +crop_gain，并按债务记录还给债主（粮守恒，不凭空消债）。
+
+    任务11 起 west_field 种菜，这里改用 east_field 的赵翠兰验证粮田路径。
+    """
     run_tick(world)
     module = _agent_module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    zhao = world.state.agents["zhao_cuilan"]
     li_quan = world.state.agents["li_quan"]
-    lin.stamina = 80.0
-    lin.grain = 10.0
-    lin.debts = [DebtRecord(creditor_id="li_quan", amount=20.0, originated_tick=0, due_tick=90)]
+    zhao.stamina = 80.0
+    zhao.grain = 10.0
+    zhao.debts = [DebtRecord(creditor_id="li_quan", amount=20.0, originated_tick=0, due_tick=90)]
     lq_grain_before = li_quan.grain
     world.state.climate.season = Season.AUTUMN
-    world.state.field_growth[lin.work_node] = 90.0
-    p = module._perceive(world, lin)  # noqa: SLF001
+    world.state.field_growth[zhao.work_node] = 90.0
+    p = module._perceive(world, zhao)  # noqa: SLF001
 
-    module._execute(world, lin, "harvest", p, tuning)
+    module._execute(world, zhao, "harvest", p, tuning)
 
-    gain = tuning.agriculture.harvest_grain_gain  # 任务10 [调参]：30→75，农业重回主食
-    assert lin.grain == pytest.approx(10.0 + gain - 10.0)  # 10 + 秋收gain - 10(还债给李全)
-    assert lin.debt == pytest.approx(10.0)    # 20 - 10（派生聚合）
+    gain = tuning.agriculture.crop_gain["grain"]  # 任务11：粮田产出走 crop_gain
+    assert zhao.grain == pytest.approx(10.0 + gain - 10.0)  # 10 + 秋收gain - 10(还债给李全)
+    assert zhao.debt == pytest.approx(10.0)    # 20 - 10（派生聚合）
     assert li_quan.grain == pytest.approx(lq_grain_before + 10.0)  # 债主收粮，总粮守恒
-    assert world.state.field_growth[lin.work_node] == pytest.approx(0.0)
+    assert world.state.field_growth[zhao.work_node] == pytest.approx(0.0)
     repaid = world.event_log.by_type("debt_repaid")
     assert repaid and repaid[-1]["payload"]["creditor_id"] == "li_quan"
     assert repaid[-1]["payload"]["amount"] == pytest.approx(10.0)
@@ -248,6 +251,9 @@ def test_borrow_grain_triggers_when_low_grain(world):
     world.config.agents.tuning.gathering.actions.clear()
     lin = world.state.agents["lin_yuan"]
     lin.grain = 0.0      # 无任何食物 → eat 不可行
+    lin.meat = 0.0
+    lin.fish = 0.0
+    lin.vegetable = 0.0
     lin.stamina = 100.0  # 体力满：消除 rest 的体力紧缺项，借粮(1.8) > rest(1.5)
     lin.hunger = 95.0
 
@@ -304,7 +310,7 @@ def test_single_agent_failure_isolated(world, monkeypatch):
     # 第二个 tick：林远、李全各 1 条（赵翠兰失败无动作事件）
     second_tick_actions = [e for e in actions if e["tick"] == world.current_tick - 1]
     names = {e["payload"]["agent_name"] for e in second_tick_actions}
-    assert names == {"林远", "李全"}
+    assert names == {"林远", "李全", "周巧娘"}
 
     errors = world.event_log.by_type("agent_error")
     assert len(errors) == 1
@@ -313,4 +319,4 @@ def test_single_agent_failure_isolated(world, monkeypatch):
 
     # 世界仍在推进，人物投影仍完整
     assert world.current_tick > 0
-    assert set(world.state.agents.keys()) == {"lin_yuan", "zhao_cuilan", "li_quan"}
+    assert set(world.state.agents.keys()) == {"lin_yuan", "zhao_cuilan", "li_quan", "zhou_qiaoniang"}

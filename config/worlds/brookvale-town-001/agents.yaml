@@ -9,7 +9,7 @@ tuning:
     hunger_gain_per_tick: 15            # A1：每天饥饿增长
     eat_hunger_reduction: 60            # A2：进食降低饥饿
     eat_grain_cost: 1                   # A3：每次进食消耗粮食（石）
-    food_fields: [grain, meat, fish]    # [调参] 任务10：eat 消耗优先级 粮>肉>鱼；粮不足依次吃后续字段
+    food_fields: [grain, vegetable, meat, fish]  # [调参] 任务11：粮>菜>肉>鱼；粮不足依次吃后续字段
     hunger_health_damage_threshold: 80  # A4：饥饿超过此值开始掉健康
     hunger_health_damage: 8             # A4：每天健康损耗
     rest_stamina_recovery: 40           # A5：休息恢复体力
@@ -22,7 +22,7 @@ tuning:
     need_weights: { survival: 3.0, stamina: 2.0, economy: 1.5, safety: 0.0, social: 0.0 }  # [调参] 公式改为 weight×urgency×fulfill 后重平衡的权重
     economy_urgency_grain_zero: 1.0     # B2：断粮时经济紧缺度
     economy_urgency_grain_positive: 1.0 # [调参] 耕作始终有产出价值，故有粮时经济紧缺度也取 1.0（原 0.2/0.3）
-    move_stamina_per_tu: 5              # B5/C2：移动每 TU 体力消耗（状态扣减）
+    move_stamina_per_tu: 3              # [调参] 任务11 裁决：5→3。原值下贫民进山单程即耗尽体力；3.0 校准后日常 8–27%、进山 49–60%，阶段三白名单内可再调
     stamina_score_divisor: 100          # [机制修正] 打分体力惩罚 = raw_cost / 100，与 gross 同量级
     distance_penalty_per_tu: 0.15       # [调参] B8：距离惩罚 = 往返 TU × 该值（原 2.0）
     rain_outdoor_score_multiplier: 0.5  # B9：雨天户外动作得分乘数
@@ -42,6 +42,7 @@ tuning:
       # 浅山往返 13 TU 的高额距离+体力惩罚（2.75），使封顶窗口 hunt(0.97) > fish(0.81)，但仍 < farm(1.30)。
       hunt: { survival: 0.1, economy: 2.4 }   # [调参] 任务10：纯经济远征动作
       fish: { survival: 0.8, economy: 0.7 }   # [调参] 任务10：渔业近镇补充生计。economy 0.7 让饱腹+田地封顶时 fish 有正分（林远/贫民靠捕鱼囤粮维生）；断粮饥饿时靠 survival 0.8 压过 rest 去捕鱼。贫民区→河边近路（单程 1.5 TU）让贫民捕鱼打分转正
+      weave: { economy: 1.6 }                 # [调参] 任务11：织布不产食物，纯经济动作（无 survival）；第 4 NPC 靠初始布+布价+该效用自然分工
     stamina_cost:                       # B5：动作固定体力消耗（移动另按 TU 计）
       eat: 0
       rest: 0
@@ -51,6 +52,7 @@ tuning:
       borrow_grain: 0
       hunt: 15                               # [调参] 任务10：25→15。林远家→浅山往返移动耗 65 体力，+15 刚好 ≤ 体力上限 80，使打猎可行；25 时 90>80 被 _can_afford 过滤导致打猎绝迹
       fish: 15                               # [调参] 任务10：捕鱼体力消耗（近镇，低于打猎）
+      weave: 15                              # [调参] 任务11：织布固定体力消耗（室内劳作）
     tu_cost:                            # C3：动作 TU 占用
       farm: 5
     outdoor: [farm, collect_water, harvest, hunt, fish]  # 任务10：捕鱼为户外，受雨天影响
@@ -59,7 +61,7 @@ tuning:
     field_growth_per_farm: 2.0          # [调参] 里程碑3：360天历年，降增速避免初夏长势爆表（旧 5）
     max_field_growth: 100
     harvest_growth_threshold: 80        # 秋收前提：长势 ≥ 80
-    harvest_grain_gain: 75              # [调参] 任务10：30→60→75，农业重回主食（3 田×秋收≈225石/年，超过渔业，与消费匹配）
+    crop_gain: { grain: 75, vegetable: 55 }  # [调参] 任务11：按田块 crop_type 取产出；粮田沿用任务10 的 75，菜田 55（坡地单产略低）
     harvest_debt_repayment: 10          # [调参] 秋收偿还债务（石）——"偿还部分"未给具体值，暂取 10，待确认
 
   borrow:                               # 04-03 新增：借粮生存（第一版极简）
@@ -104,6 +106,26 @@ tuning:
         bad_weather_success_mult: 0.4   # [调参] 坏天气成功率乘数（雨天河中难捕）
         bad_weather_injury_mult: 1.5    # [调参] 坏天气受伤概率乘数（路滑）
 
+  market:                               # 任务11 新增：集市日结算撮合（以物易物，固定相对价格）
+    market_node: market                 # 集市空地（spatial-units.yaml 已补 0.6 TU 距离）
+    market_day_interval: 10             # [调参] 每 10 天一次，一年 36 次
+    market_day_offset: 0                # [调参] tick % 10 == 0 为集市日
+    market_min_stamina: 15              # [调参] 扣完往返赶路体力后仍需保留的门槛，低于则不去
+    market_max_distance_tu: 3.0         # [调参] 单程上限：排除深山/远山，全镇四区均在范围内
+    trade_values: { grain: 1.0, vegetable: 1.2, meat: 2.0, fish: 1.5, cloth: 3.0 }  # [调参] 相对价值
+    surplus_threshold: { grain: 20, vegetable: 10, meat: 10, fish: 10, cloth: 5 }   # [调参] 富余：只卖超出部分
+    deficit_threshold: { grain: 10, vegetable: 5, meat: 3, fish: 3, cloth: 1 }       # [调参] 短缺：只补到阈值（schema 要求 deficit < surplus）
+    max_trade_units: 10                 # [调参] 单次成交 give 侧上限
+    trade_unit_step: 0.5                # [调参] 成交量最小步长
+    trade_value_tolerance: 0.2          # [调参] 交换价值相对误差容忍度
+
+  textile:                              # 任务11 新增：纺织与冬季保暖（布为耐用品，不每日消耗）
+    cloth_per_weave: 2                  # [调参] 一次成功织布产量（匹）
+    base_success_rate: 0.9              # [调参] 基础成功率
+    season_modifier: { spring: 1.0, summer: 0.9, autumn: 1.0, winter: 0.8 }  # [调参] 冬季手僵减产
+    warmth_cloth_threshold: 3           # [调参] 冬季御寒所需布量（达到即免寒冷惩罚）
+    cold_health_loss: 2                 # [调参] 无布御寒时每日健康损失
+
   time:
     tu_per_tick: 10                     # 1 Tick = 1 天 = 10 TU
     farm_tu: 5
@@ -132,3 +154,11 @@ agents:
     home_node: rich_district
     work_node: south_field             # 任务10：独立南片田，不再与赵翠兰共用 east_field（避免收割互冲长势清零）
     assets: { grain: 100 }              # D1
+
+  - id: zhou_qiaoniang                 # 任务11：第 4 个 NPC（织户），不写职业字段，靠初始布+效用+集市自然分工
+    name: 周巧娘
+    sex: female
+    age: 32
+    home_node: common_district         # 近水井与集市
+    work_node: market                  # 织坊节点暂缺，先挂集市（loom 节点为后续接入点）
+    assets: { grain: 20, vegetable: 5, cloth: 8 }  # [调参] 有布无田：布的供给方

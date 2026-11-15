@@ -130,9 +130,11 @@ def test_eat_consumes_meat_when_grain_insufficient(world):
 
 def test_eat_drains_largest_food_when_none_sufficient(world):
     """所有食物字段都 < cost 时，吃尽存量最多的字段，不产生负值。"""
-    agent = next(iter(world.state.agents.values()))
+    agent = world.state.agents["lin_yuan"]
     agent.grain = 0.3
     agent.meat = 0.0
+    agent.fish = 0.0
+    agent.vegetable = 0.0
     agent.hunger = 90.0
     p = _module(world)._perceive(world, agent)
     _module(world)._execute(world, agent, "eat", p, world.config.agents.tuning)
@@ -141,9 +143,11 @@ def test_eat_drains_largest_food_when_none_sufficient(world):
 
 
 def test_eat_impossible_when_no_food(world):
-    agent = next(iter(world.state.agents.values()))
+    agent = world.state.agents["lin_yuan"]
     agent.grain = 0.0
     agent.meat = 0.0
+    agent.fish = 0.0
+    agent.vegetable = 0.0
     agent.hunger = 90.0
     p = _module(world)._perceive(world, agent)
     score = _module(world).score_action("eat", p, world.config.agents.tuning)
@@ -221,8 +225,10 @@ def test_borrow_conserves_grain_over_200_ticks(world):
     formed = sum(e["payload"]["amount"] for e in world.event_log.by_type("debt_formed"))
     repaid = sum(e["payload"].get("amount", 0) for e in world.event_log.by_type("debt_repaid"))
     collected = sum(e["payload"].get("amount_paid", 0) for e in world.event_log.by_type("debt_collected"))
+    # 任务11：第 4 NPC 无田可耕，可能借粮后亡故，债务被核销（debt_forgiven），须计入守恒
+    forgiven = sum(e["payload"].get("amount", 0) for e in world.event_log.by_type("debt_forgiven"))
     outstanding = sum(a.debt for a in world.state.agents.values())
-    assert abs(formed - repaid - collected - outstanding) < 1e-6
+    assert abs(formed - repaid - collected - forgiven - outstanding) < 1e-6
 
 
 # --------------------------------------------------------------------------- #

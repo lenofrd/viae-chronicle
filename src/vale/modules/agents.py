@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import heapq
+import math
 import random
 import traceback
 from dataclasses import dataclass, field
@@ -24,7 +25,7 @@ RAIN_WEATHERS = {WeatherType.LIGHT_RAIN, WeatherType.MODERATE_RAIN, WeatherType.
 IMPOSSIBLE = float("-inf")
 
 # 候选动作集合（内容外置：动作→目标节点的映射在 _target_node）
-CANDIDATE_ACTIONS = ["eat", "rest", "farm", "collect_water", "harvest", "borrow_grain"]
+CANDIDATE_ACTIONS = ["eat", "rest", "farm", "collect_water", "harvest", "borrow_grain", "weave"]
 
 
 def _candidate_actions(tuning: AgentTuning) -> list[str]:
@@ -99,6 +100,8 @@ class Perception:
     creditor_id: Optional[str] = None
     # 家 → 各候选目标的单程 TU；打分时往返 = 2 × 单程（C1）
     distance_from_home: dict[str, float] = field(default_factory=dict)
+    # 自己的 work_node 是否为田地：非田地节点（如集市）不允许 farm/harvest，避免"在广场种粮"
+    work_node_is_field: bool = True
 
 
 def select_creditor(
@@ -124,10 +127,11 @@ def _lender_node(world, agent: AgentState) -> str:
 
 
 def _target_node(action: str, agent: AgentState, world) -> str:
-    """动作 → 目标节点（内容映射）。eat/rest 在家；farm/harvest 在田地；collect_water 在水井；borrow 去债主家。"""
+    """动作 → 目标节点（内容映射）。eat/rest 在家；farm/harvest/weave 在 work_node；
+    collect_water 在水井；borrow 去债主家。"""
     if action in ("eat", "rest"):
         return agent.home_node
-    if action in ("farm", "harvest"):
+    if action in ("farm", "harvest", "weave"):
         return agent.work_node
     if action == "collect_water":
         return "well"
@@ -137,6 +141,34 @@ def _target_node(action: str, agent: AgentState, world) -> str:
     if action in gathering:
         return gathering[action].target_node
     return agent.home_node
+
+
+def _node_crop_type(world, node_id: str) -> str:
+    """田块作物类型（配置层 crop_type）；未知节点按 grain 兜底。"""
+    for n in world.config.spatial.nodes:
+        if n.id == node_id:
+            return getattr(n, "crop_type", "grain") or "grain"
+    return "grain"
+
+
+def _is_field_node(world, node_id: str) -> bool:
+    """该节点是否为田地（只有田地能 farm/harvest）。"""
+    for n in world.config.spatial.nodes:
+        if n.id == node_id:
+            return getattr(n.type, "value", n.type) == "field"
+    return False
+
+
+def _floor_to_step(value: float, step: float) -> float:
+    """向下取整到步长（浮点容差 1e-9，避免 6.000000001 被判成 5.5）。"""
+    if step <= 0:
+        return 0.0
+    return math.floor(value / step + 1e-9) * step
+
+
+def _inventory(agent: AgentState, items: list[str]) -> dict[str, float]:
+    """交易事件载荷用的物品快照（只含集市物品集合）。"""
+    return {i: round(getattr(agent, i, 0.0), 2) for i in items}
 
 
 # --------------------------------------------------------------------------- #
@@ -193,6 +225,8 @@ class AgentModule:
                 stamina=a.initial_stamina if a.initial_stamina is not None else phys.initial_stamina,
                 fatigue=phys.initial_fatigue,
                 grain=a.assets.grain,
+                vegetable=a.assets.vegetable,
+                cloth=a.assets.cloth,
             )
         # 初始化所有 FIELD 节点的长势为 0（内容来自 spatial 配置，不写死节点 id）
         if not world.state.field_growth:
@@ -213,6 +247,11 @@ class AgentModule:
         agent.hunger = min(100.0, agent.hunger + phys.hunger_gain_per_tick)
         if agent.hunger > phys.hunger_health_damage_threshold:
             agent.health = max(0.0, agent.health - phys.hunger_health_damage)
+
+        # 1b. 冬季保暖（任务11）：无布御寒扣健康，每人每日至多一条 cold_exposure
+        climate = world.state.climate
+        season = climate.season if climate is not None else Season.SPRING
+        self._apply_cold_exposure(world, agent, tuning, season)
 
         # 2. 生命状态门控（任务10）：health 触底 → 失能，停止一切主动动作；事件只写一次
         if self._incapacitate_if_needed(world, agent, tuning):
@@ -255,6 +294,32 @@ class AgentModule:
         )
         return True
 
+    def _apply_cold_exposure(self, world, agent: AgentState, tuning: AgentTuning, season: Season) -> None:
+        """冬季保暖（任务11）：布量达门槛免惩罚，否则扣健康并写 cold_exposure。
+
+        布是耐用品（不每日消耗）；每人每日至多一条事件（本函数每日每人只调用一次）。
+        """
+        if season != Season.WINTER:
+            return
+        tex = tuning.textile
+        if agent.cloth >= tex.warmth_cloth_threshold:
+            return
+        before = agent.health
+        agent.health = max(0.0, before - tex.cold_health_loss)
+        world.event_log.append(
+            world.current_tick,
+            "cold_exposure",
+            {
+                "agent_id": agent.agent_id,
+                "agent_name": agent.name,
+                "cloth": round(agent.cloth, 2),
+                "warmth_cloth_threshold": tex.warmth_cloth_threshold,
+                "health_before": round(before, 2),
+                "health_after": round(agent.health, 2),
+                "loss": round(before - agent.health, 2),
+            },
+        )
+
     def _perceive(self, world, agent: AgentState) -> Perception:
         climate = world.state.climate
         weather = climate.current_weather if climate is not None else WeatherType.SUNNY
@@ -276,10 +341,20 @@ class AgentModule:
             lender_node=_lender_node(world, agent),
             creditor_id=creditor.agent_id if creditor else None,
             distance_from_home=dist,
+            work_node_is_field=_is_field_node(world, agent.work_node),
         )
 
     # -- 决策（只依赖 Perception + tuning）--------------------------------- #
     def _decide(self, p: Perception, tuning: AgentTuning) -> str:
+        # 生存硬门控（任务11 修复）：若今天不进食，饥饿将在下一 tick 跨过伤害阈值，
+        # 且手中有任何食物，则必须进食。否则体力/做工的效用竞争会让"抱着粮食饿伤"成为
+        # 稳定循环——这正是移动体力校准后旧回归中全员饿死的根因。阈值全部取自配置。
+        phys = tuning.physiology
+        if (
+            p.agent.hunger + phys.hunger_gain_per_tick >= phys.hunger_health_damage_threshold
+            and any(getattr(p.agent, f, 0.0) > 0 for f in phys.food_fields)
+        ):
+            return "eat"
         scored = [(self.score_action(act, p, tuning), act) for act in _candidate_actions(tuning)]
         # 最高分胜出；同分按候选顺序稳定取第一个（B10：本阶段不实现纠局）
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -321,7 +396,7 @@ class AgentModule:
         # 目标节点（决策只依赖 Perception，故用 p.lender_node 而非 world）
         if action in ("eat", "rest"):
             target = agent.home_node
-        elif action in ("farm", "harvest"):
+        elif action in ("farm", "harvest", "weave"):
             target = agent.work_node
         elif action == "collect_water":
             target = "well"
@@ -338,6 +413,9 @@ class AgentModule:
         ):
             return IMPOSSIBLE
         if action == "borrow_grain" and agent.grain >= bor.borrow_grain_threshold:
+            return IMPOSSIBLE
+        # 只有田地能 farm/harvest：work_node 是集市等非田地节点时禁止，避免"在广场种粮"
+        if action in ("farm", "harvest") and not p.work_node_is_field:
             return IMPOSSIBLE
         if action == "harvest" and (
             p.season != Season.AUTUMN or p.work_field_growth < agr.harvest_growth_threshold
@@ -398,6 +476,7 @@ class AgentModule:
         bor = tuning.borrow
 
         target = _target_node(action, agent, world)
+        crop = _node_crop_type(world, agent.work_node) if action == "harvest" else None
         one_way = p.distance_from_home.get(target, 0.0)
         round_trip = one_way * 2.0
 
@@ -408,6 +487,8 @@ class AgentModule:
         grain_before = agent.grain
         meat_before = agent.meat
         fish_before = agent.fish
+        vegetable_before = agent.vegetable
+        cloth_before = agent.cloth
         debt_before = agent.debt
         fg = world.state.field_growth
         field_growth_before = fg.get(agent.work_node, 0.0)
@@ -436,9 +517,11 @@ class AgentModule:
                 agr.max_field_growth, field_growth_before + agr.field_growth_per_farm
             )
         elif action == "harvest":
-            # 秋季且长势达标：长势清零，获得存粮；再按债务记录还给对应债主（粮从借粮者到债主）
+            # 秋季且长势达标：长势清零，按田块 crop_type 产出对应作物（grain / vegetable）；
+            # 再按债务记录还给对应债主（粮从借粮者到债主）。作物名即 AgentState 字段名。
             fg[agent.work_node] = 0.0
-            agent.grain = agent.grain + agr.harvest_grain_gain
+            gain = agr.crop_gain.get(crop, 0.0)
+            setattr(agent, crop, getattr(agent, crop, 0.0) + gain)
             self._repay_debts(
                 world, agent, tuning, source="harvest", max_repay=agr.harvest_debt_repayment
             )
@@ -480,6 +563,8 @@ class AgentModule:
                     },
                 )
             # 若 creditor 为 None 或存粮不足（理论上 _score 已过滤），不产粮不欠债，仅消耗往返体力
+        elif action == "weave":
+            self._execute_weave(world, agent, p, tuning)
         elif action in tuning.gathering.actions:
             self._execute_gather(world, agent, action, p, tuning)
         # collect_water：本阶段仅消耗体力（饮水资产暂不建模）
@@ -514,6 +599,11 @@ class AgentModule:
                 "meat_after": round(agent.meat, 2),
                 "fish_before": round(fish_before, 2),
                 "fish_after": round(agent.fish, 2),
+                "vegetable_before": round(vegetable_before, 2),
+                "vegetable_after": round(agent.vegetable, 2),
+                "cloth_before": round(cloth_before, 2),
+                "cloth_after": round(agent.cloth, 2),
+                **({"crop": crop} if crop is not None else {}),
                 "debt_before": round(debt_before, 2),
                 "debt_after": round(agent.debt, 2),
                 "field_growth_before": round(field_growth_before, 2),
@@ -587,6 +677,44 @@ class AgentModule:
                 },
             )
 
+    # -- 纺织（任务11，配置驱动，仿 farm 结构）------------------------------ #
+    def _execute_weave(self, world, agent, p: Perception, tuning) -> None:
+        """织布：成功率 = 基础 × 季节修正；成功产布、失败无产出，各写一条事件。
+
+        v1 布由劳动直接产出，不消耗麻/棉原料（原料链为后续接入点，见 06-actions.md）。
+        """
+        tex = tuning.textile
+        season_key = p.season.value if hasattr(p.season, "value") else str(p.season)
+        success_rate = min(1.0, tex.base_success_rate * tex.season_modifier.get(season_key, 1.0))
+        cloth_before = agent.cloth
+        if self.rng.random() < success_rate:
+            agent.cloth = cloth_before + tex.cloth_per_weave
+            world.event_log.append(
+                world.current_tick,
+                "weave_success",
+                {
+                    "agent_id": agent.agent_id,
+                    "agent_name": agent.name,
+                    "target_node": agent.work_node,
+                    "cloth_before": round(cloth_before, 2),
+                    "cloth_after": round(agent.cloth, 2),
+                    "amount": round(tex.cloth_per_weave, 2),
+                    "success_rate": round(success_rate, 3),
+                },
+            )
+        else:
+            world.event_log.append(
+                world.current_tick,
+                "weave_fail",
+                {
+                    "agent_id": agent.agent_id,
+                    "agent_name": agent.name,
+                    "target_node": agent.work_node,
+                    "reason": "织机未成布",
+                    "success_rate": round(success_rate, 3),
+                },
+            )
+
     # -- 债务还款（秋收 / 通用）-------------------------------------------- #
     def _repay_debts(
         self, world, agent: AgentState, tuning: AgentTuning, *, source: str, max_repay: float
@@ -630,12 +758,12 @@ class AgentModule:
         # 清偿完毕（amount==0）的记录移出列表，保持债务列表干净
         agent.debts = [d for d in agent.debts if d.amount > 0]
 
-    # -- 每日结算：死亡判定 + 债务催收 + 健康回血 -------------------------- #
+    # -- 每日结算：死亡判定 + 债务催收 + 集市 + 健康回血 -------------------- #
     def _settle(self, world, tuning: AgentTuning) -> None:
         """tick 末尾统一结算。逐人错误隔离：单人结算失败写 agent_error，不拖垮世界。
 
-        顺序（任务10）：先做死亡判定（失能满宽限期 → 死亡并核销债务），死者/失能者不再参与
-        催收（无收入，避免违约刷屏）与回血（无法进食恢复）。
+        顺序（任务11 裁决）：死亡判定/债务催收 → 集市日赶路扣体力与撮合 → 健康回血。
+        死者/失能者不参与催收、集市与回血（无收入、无法进食恢复）。
         """
         for agent in list(world.state.agents.values()):
             try:
@@ -646,19 +774,191 @@ class AgentModule:
                 if agent.incapacitated:
                     continue
                 self._collect_debts(world, agent, tuning)
-                self._recover_health(world, agent, tuning)
             except Exception as exc:  # noqa: BLE001 — 单人结算失败不拖垮世界
+                self._log_agent_error(world, agent, "daily_settlement", exc)
+
+        if self._is_market_day(world.current_tick, tuning):
+            try:
+                self._settle_market(world, tuning)
+            except Exception as exc:  # noqa: BLE001 — 集市结算失败不拖垮回血与后续 tick
                 world.event_log.append(
                     world.current_tick,
                     "agent_error",
                     {
-                        "agent_id": agent.agent_id,
-                        "agent_name": agent.name,
-                        "phase": "daily_settlement",
+                        "agent_id": "_market",
+                        "agent_name": "集市",
+                        "phase": "market_settlement",
                         "error": repr(exc),
                         "traceback": traceback.format_exc(limit=2),
                     },
                 )
+
+        for agent in list(world.state.agents.values()):
+            try:
+                if not agent.alive or agent.incapacitated:
+                    continue
+                self._recover_health(world, agent, tuning)
+            except Exception as exc:  # noqa: BLE001
+                self._log_agent_error(world, agent, "health_recovery", exc)
+
+    def _log_agent_error(self, world, agent: AgentState, phase: str, exc: Exception) -> None:
+        world.event_log.append(
+            world.current_tick,
+            "agent_error",
+            {
+                "agent_id": agent.agent_id,
+                "agent_name": agent.name,
+                "phase": phase,
+                "error": repr(exc),
+                "traceback": traceback.format_exc(limit=2),
+            },
+        )
+
+    # -- 集市日：赶路扣体力 + 以物易物撮合（任务11）------------------------- #
+    def _is_market_day(self, tick: int, tuning: AgentTuning) -> bool:
+        mkt = tuning.market
+        return tick % mkt.market_day_interval == mkt.market_day_offset
+
+    def _settle_market(self, world, tuning: AgentTuning) -> None:
+        """集市日结算：按家到集市距离扣往返体力、判参与资格、撮合、写一条日摘要。
+
+        v1 只按 home_node → market_node 计距（当前 location 不随动作更新），不建模实际所在位置
+        与到场停留时长；远途/体弱者不参与。
+        """
+        mkt = tuning.market
+        move_rate = tuning.utility.move_stamina_per_tu
+        skipped = {"dead_or_incap": 0, "too_far": 0, "too_weak": 0}
+        participants: list[AgentState] = []
+        travel: dict[str, float] = {}
+        for agent in sorted(world.state.agents.values(), key=lambda a: a.agent_id):
+            if not agent.alive or agent.incapacitated:
+                skipped["dead_or_incap"] += 1
+                continue
+            one_way = (
+                self._spatial.travel_tu(agent.home_node, mkt.market_node)
+                if self._spatial is not None
+                else float("inf")
+            )
+            if math.isinf(one_way) or one_way > mkt.market_max_distance_tu:
+                skipped["too_far"] += 1
+                continue
+            cost = 2.0 * one_way * move_rate
+            if agent.stamina - cost < mkt.market_min_stamina:
+                skipped["too_weak"] += 1
+                continue
+            agent.stamina = max(0.0, agent.stamina - cost)
+            travel[agent.agent_id] = round(cost, 2)
+            participants.append(agent)
+
+        trade_count = self._match_market(world, tuning, participants, travel)
+
+        world.event_log.append(
+            world.current_tick,
+            "market_day_summary",
+            {
+                "market_node": mkt.market_node,
+                "market_day": world.current_tick,
+                "participants": [
+                    {
+                        "agent_id": a.agent_id,
+                        "agent_name": a.name,
+                        "travel_stamina_cost": travel[a.agent_id],
+                    }
+                    for a in participants
+                ],
+                "participant_count": len(participants),
+                "skipped": skipped,
+                "trade_count": trade_count,
+            },
+        )
+
+    def _match_market(
+        self,
+        world,
+        tuning: AgentTuning,
+        participants: list[AgentState],
+        travel: dict[str, float],
+    ) -> int:
+        """按 NPC id 稳定排序后两两撮合（A<B 只撮合一次），返回成交笔数。
+
+        约定：seller 给出 give_item、换回 take_item；buyer 给出 take_item、换回 give_item。
+        只卖富余、只补短缺；不成交不写事件；各物品总量守恒、不得为负。
+        """
+        mkt = tuning.market
+        items = list(mkt.trade_values.keys())
+        count = 0
+        for i, seller in enumerate(participants):
+            for buyer in participants[i + 1:]:
+                for give in items:
+                    for take in items:
+                        if give == take:
+                            continue
+                        if not (
+                            getattr(seller, give) > mkt.surplus_threshold[give]
+                            and getattr(seller, take) < mkt.deficit_threshold[take]
+                        ):
+                            continue
+                        if not (
+                            getattr(buyer, take) > mkt.surplus_threshold[take]
+                            and getattr(buyer, give) < mkt.deficit_threshold[give]
+                        ):
+                            continue
+                        ratio = mkt.trade_values[give] / mkt.trade_values[take]
+                        avail_give = getattr(seller, give) - mkt.surplus_threshold[give]
+                        need_give = mkt.deficit_threshold[give] - getattr(buyer, give)
+                        avail_take = getattr(buyer, take) - mkt.surplus_threshold[take]
+                        need_take = mkt.deficit_threshold[take] - getattr(seller, take)
+                        give_max = min(
+                            avail_give,
+                            need_give,
+                            avail_take / ratio,
+                            need_take / ratio,
+                            mkt.max_trade_units,
+                        )
+                        give_qty = _floor_to_step(give_max, mkt.trade_unit_step)
+                        if give_qty < mkt.trade_unit_step:
+                            continue
+                        take_qty = give_qty * ratio
+                        if take_qty > avail_take + 1e-9 or take_qty > need_take + 1e-9:
+                            continue
+                        v_give = mkt.trade_values[give] * give_qty
+                        v_take = mkt.trade_values[take] * take_qty
+                        if abs(v_give - v_take) / max(v_give, v_take, 1e-9) > mkt.trade_value_tolerance:
+                            continue
+
+                        seller_before = _inventory(seller, items)
+                        buyer_before = _inventory(buyer, items)
+                        setattr(seller, give, getattr(seller, give) - give_qty)
+                        setattr(seller, take, getattr(seller, take) + take_qty)
+                        setattr(buyer, give, getattr(buyer, give) + give_qty)
+                        setattr(buyer, take, getattr(buyer, take) - take_qty)
+                        count += 1
+                        world.event_log.append(
+                            world.current_tick,
+                            "trade_executed",
+                            {
+                                "market_day": world.current_tick,
+                                "market_node": mkt.market_node,
+                                "seller_id": seller.agent_id,
+                                "seller_name": seller.name,
+                                "buyer_id": buyer.agent_id,
+                                "buyer_name": buyer.name,
+                                "give_item": give,
+                                "give_qty": round(give_qty, 3),
+                                "take_item": take,
+                                "take_qty": round(take_qty, 3),
+                                "seller_inv_before": seller_before,
+                                "seller_inv_after": _inventory(seller, items),
+                                "buyer_inv_before": buyer_before,
+                                "buyer_inv_after": _inventory(buyer, items),
+                                "trade_value_ratio": round(ratio, 3),
+                                "travel_stamina_cost": {
+                                    seller.agent_id: travel.get(seller.agent_id, 0.0),
+                                    buyer.agent_id: travel.get(buyer.agent_id, 0.0),
+                                },
+                            },
+                        )
+        return count
 
     def _process_death(self, world, agent: AgentState, tuning: AgentTuning) -> None:
         """失能满 death_grace_ticks 仍未恢复 → 死亡；写一次 agent_died 并按配置核销债务。

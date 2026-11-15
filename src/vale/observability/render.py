@@ -28,7 +28,23 @@ ACTION_VERB = {
     "borrow_grain": "借粮",
     "hunt": "打猎",
     "fish": "捕鱼",
+    "weave": "织布",
 }
+
+# 作物/交易物品 → (量词, 存栏描述)。任务11：grain/vegetable 由田块 crop_type 决定。
+ITEM_DESC = {
+    "grain": ("石", "存粮"),
+    "vegetable": ("担", "存菜"),
+    "meat": ("斤", "肉存"),
+    "fish": ("尾", "鱼存"),
+    "cloth": ("匹", "布存"),
+}
+
+
+def _item_name(item: Optional[str]) -> str:
+    return {"grain": "粮", "vegetable": "菜", "meat": "肉", "fish": "鱼", "cloth": "布"}.get(
+        item or "", item or "?"
+    )
 
 # 采集类动作 → (动词, 产物名)。任务09：hunt 打猎产肉；任务10：fish 捕鱼产鱼。
 # 新增采集生计只需在此加一行，gather_success/fail/injury 渲染自动复用，无需新增渲染函数。
@@ -102,9 +118,12 @@ def _render_action(payload: dict, names: Optional[dict[str, str]]) -> tuple[str,
     elif action == "collect_water":
         body = f"去{tname or '?'}打了水"
     elif action == "harvest":
-        gain = _safe_diff(payload.get("grain_after"), payload.get("grain_before"))
+        crop = payload.get("crop") or "grain"
+        unit, label = ITEM_DESC.get(crop, ("石", f"{crop}存"))
+        gain = _safe_diff(payload.get(f"{crop}_after"), payload.get(f"{crop}_before"))
+        after = payload.get(f"{crop}_after")
         repaid = _safe_diff(payload.get("debt_before"), payload.get("debt_after"))
-        body = f"在{tname or '?'}秋收，打下 {gain} 石（存粮剩 {_num(payload.get('grain_after'))}）"
+        body = f"在{tname or '?'}秋收，打下 {gain} {unit}（{label}剩 {_num(after)}）"
         if repaid and repaid != "0":
             body += f"，还债 {repaid} 石"
     elif action == "borrow_grain":
@@ -115,6 +134,8 @@ def _render_action(payload: dict, names: Optional[dict[str, str]]) -> tuple[str,
         body = f"去{tname or '?'}打猎（肉存 {_num(payload.get('meat_after'))}）"
     elif action == "fish":
         body = f"去{tname or '?'}捕鱼（鱼存 {_num(payload.get('fish_after'))}）"
+    elif action == "weave":
+        body = f"在{tname or '?'}织布（布存 {_num(payload.get('cloth_after'))} 匹）"
     else:  # 理论上不会到，兜底
         body = f"执行了 {action}"
         degraded = True
@@ -272,6 +293,62 @@ def _render_debt_forgiven(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
+def _render_trade_executed(payload: dict) -> tuple[str, bool]:
+    buyer = payload.get("buyer_name") or payload.get("buyer_id") or "?"
+    seller = payload.get("seller_name") or payload.get("seller_id") or "?"
+    give = _item_name(payload.get("give_item"))
+    take = _item_name(payload.get("take_item"))
+    give_qty = _num(payload.get("give_qty"))
+    take_qty = _num(payload.get("take_qty"))
+    text = f"[{buyer}] 以 {take_qty} {take} 向 [{seller}] 换得 {give_qty} {give}（集市）"
+    degraded = not all(
+        k in payload for k in ("buyer_id", "seller_id", "give_item", "take_item", "give_qty", "take_qty")
+    )
+    return text, degraded
+
+
+def _render_market_day_summary(payload: dict) -> tuple[str, bool]:
+    count = _num(payload.get("participant_count"))
+    trades = _num(payload.get("trade_count"))
+    skipped = payload.get("skipped") or {}
+    causes = []
+    for key, label in (("too_far", "路远"), ("too_weak", "体力不足"), ("dead_or_incap", "亡故失能")):
+        n = skipped.get(key, 0) if isinstance(skipped, dict) else 0
+        if n:
+            causes.append(f"{label} {_num(n)} 人")
+    suffix = f"（{'，'.join(causes)}未至）" if causes else ""
+    text = f"[集市] 集市日：{count} 人赴集，成交 {trades} 笔{suffix}"
+    degraded = "participant_count" not in payload
+    return text, degraded
+
+
+def _render_weave_success(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    amount = _num(payload.get("amount"))
+    after = _num(payload.get("cloth_after"))
+    text = f"[{name}] 织成 {amount} 匹布（布存 {after} 匹）"
+    degraded = not all(k in payload for k in ("agent_id", "amount"))
+    return text, degraded
+
+
+def _render_weave_fail(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    reason = payload.get("reason", "未成布")
+    text = f"[{name}] 织布未成（{reason}）"
+    degraded = not all(k in payload for k in ("agent_id", "reason"))
+    return text, degraded
+
+
+def _render_cold_exposure(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    cloth = _num(payload.get("cloth"))
+    before = _num(payload.get("health_before"))
+    after = _num(payload.get("health_after"))
+    text = f"[{name}] 家中只有 {cloth} 匹布，不足御寒，健康 {before} → {after}"
+    degraded = not all(k in payload for k in ("agent_id", "health_before", "health_after"))
+    return text, degraded
+
+
 def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderResult:
     """渲染单条事件为一行中文摘要。永不抛出。"""
     if evt.get("_payload_broken"):
@@ -339,6 +416,21 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "debt_forgiven":
             text, degraded = _render_debt_forgiven(payload)
             reason = "missing_debt_field" if degraded else None
+        elif event_type == "trade_executed":
+            text, degraded = _render_trade_executed(payload)
+            reason = "missing_trade_field" if degraded else None
+        elif event_type == "market_day_summary":
+            text, degraded = _render_market_day_summary(payload)
+            reason = "missing_market_field" if degraded else None
+        elif event_type == "weave_success":
+            text, degraded = _render_weave_success(payload)
+            reason = "missing_weave_field" if degraded else None
+        elif event_type == "weave_fail":
+            text, degraded = _render_weave_fail(payload)
+            reason = "missing_weave_field" if degraded else None
+        elif event_type == "cold_exposure":
+            text, degraded = _render_cold_exposure(payload)
+            reason = "missing_cold_field" if degraded else None
         else:
             # 未知事件类型兜底：展示原始载荷键（截断），不崩
             keys = ", ".join(list(payload.keys())[:8])

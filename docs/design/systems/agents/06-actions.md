@@ -48,7 +48,12 @@
       满足条件则执行，修改状态，生成 action_executed 事件。
 ```
 
-## 4. 可行性门控（任务 08 补充）
+## 4. 可行性门控（任务 08 补充；任务 11 增加生存门控）
+
+### 4.0 生存必要性门控（任务 11）
+- 见 `05-decision-making.md §3.2`：有食物且饥饿将跨伤害阈值时强制 `eat`；无食物时不触发，不掩盖「无粮可吃」的死亡。该门控属决策可行性过滤，不参与效用打分，也不写事件。
+
+
 
 ### 4.1 farm 长势封顶
 - 当前作物模型为简化标量：`world.state.field_growth` 以节点为键存 0–100 的长势值，agent 取其 `work_node` 对应值作为感知字段 `work_field_growth`。完整作物模型见 `human-environment/01-production/...` 下的作物设计（未来落地），当前以标量近似。
@@ -78,13 +83,20 @@
 - 生计分层涌现：打猎 `survival=0.1`（纯经济远征，只在饱腹+田封顶的农闲窗口出猎）、捕鱼 `survival=0.8`（断粮时压过 rest 的维生手段）；贫民区→河边近路（1.5 TU）使贫民捕鱼可行，与远田阶级壁垒（东片田 3.5 TU）并存。
 - 测试：`tests/test_task10_lifecycle_and_fishery.py` 覆盖鱼产出/失败/季节天气修正/eat 消耗鱼/扩展点回归。
 
-### 5.2b 纺织（weave）——未来接入点（仅标注，任务 10 不实现）
-- 接入方式与渔业完全同构（§5.2 六步）：资源节点（亚麻/桑田）、`AgentState.cloth` 字段、`gathering.actions.weave` 配置（`output_field: cloth`）、`fulfill` 需新增 `craft` 维度或复用 `economy`、`GATHER_DESC["weave"]`。
-- **性别规范接入点**：`weave` 属传统女性主导动作（§2.4），接入时应挂 `norm_penalty` 门槛（男性执行扣分），该机制当前未实现，需先落地 norm_penalty 通道。
-- **经济闭环预留**：布匹（cloth）当前无可消费路径；接入时需同步设计交换/价值系统（如以布抵债），否则 `cloth` 只是无消费者的囤积字段。
-- 本任务仅在配置 schema 与文档标注此接入点，不写任何 weave 代码。
+### 5.2b 纺织（weave）已落地（任务 11）
+- 实现方式与采集动作**不同构**：纺织不挂资源节点与随机采集表，而是仿 `farm` 的「配置驱动固定动作」——`fulfill.weave={economy:1.6}`、`action.stamina_cost.weave=15`、目标节点为自身 `work_node`，核心结算走 `_execute_weave`，不写第二套通用分支。
+- 成功率 = `textile.base_success_rate × textile.season_modifier[season]`（冬季 0.8 手僵减产），成功产 `textile.cloth_per_weave` 匹布，分别写 `weave_success` / `weave_fail`。
+- **v1 不做原料链**：布由劳动直接产出，不消耗麻/棉；`cloth` 的消费路径是冬季保暖门槛与集市交易，不再是囤积字段。原料链（亚麻/桑田、织机节点）为后续接入点：新增 `loom` 节点并把 `zhou_qiaoniang.work_node` 从 `market` 迁走即可，代码无需改动。
+- **性别规范未接入**：`norm_penalty` 通道仍未实现，本任务不做男性织布惩罚（裁决 6.1：不做性别天赋，规范惩罚留待后续）。
 
-### 5.3 守恒与可追溯
+### 5.3 集市交易（任务 11，结算阶段而非动作）
+- 交易不是候选动作，而是**每日结算阶段**的跨人机制：`market_day_interval/offset` 决定集市日（默认每 10 天），逐人按 `home_node → market_node` 算往返 TU 扣体力；距离超 `market_max_distance_tu` 记 `too_far`，扣完低于 `market_min_stamina` 记 `too_weak`，均不扣体力。
+- 撮合：按 `agent_id` 稳定排序后两两（A<B 只撮合一次），对 `trade_values` 中的物品两两组合，判「卖方富余且短缺对方物品、买方反之」；成交量按 `trade_unit_step` 向下取整，受 `max_trade_units` 与双方富余/短缺双向夹逼；交换价值相对误差超 `trade_value_tolerance` 不成交。
+- 定价为**固定相对价值**（粮 1 / 菜 1.2 / 肉 2 / 鱼 1.5 / 布 3），无行情波动；v1 只按家到集市计距，不建模实际所在位置与到场停留时长（`location` 仍不随动作更新）。
+- 事件：每次成交 `trade_executed`（买卖双方 + give/take 数量 + 双方库存快照 + 赶路体力）；每个集市日一条 `market_day_summary`（参与者、分原因跳过计数、成交笔数）。不成交不写事件。
+- 守恒：撮合只做物品转移，各物品总量不变、不为负；坏配置（偏移越界、价值≤0、阈值缺失或倒挂、步长≤0）在启动时由 schema 直接报错。
+
+### 5.4 守恒与可追溯
 - 每次采集产出写入 `gather_success` 事件（`output_before/after` + `amount`），可重建世界总产出；
 - `eat` 按 `food_fields` 优先级消耗，粮与肉各自守恒、不为负；
 - 打猎不凭空消灭角色（受伤 `max(0, ...)`），死亡仍只由 `health<=0` 触发生命周期。

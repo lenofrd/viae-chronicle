@@ -32,6 +32,7 @@ nodes:
     type: social
     district: 镇中心东侧
     description: 祠堂东侧的广场，无固定建筑；赶集日与货郎到来时作为交易场地。
+    travel_cost_from_well_tu: 0.6        # [调参] 任务11 裁决：赶集功能前置。不补此距离则 market 在空间图中孤立、赶路成本恒为 ∞
     attributes: { 风险: 无, 步行难度: 平地 }
 
   - id: herbalist
@@ -99,8 +100,9 @@ nodes:
     name: 西片田
     type: field
     district: 镇西
-    description: 约三十亩，贫瘠坡地，灌溉条件差；多由贫农耕作。
+    description: 约三十亩，贫瘠坡地，灌溉条件差；多由贫农耕作。任务11：坡地宜菜，改种蔬菜（林远转菜农）。
     travel_cost_from_well_tu: 2.5
+    crop_type: vegetable                 # 任务11 裁决：west_field 种菜，不产粮；粮产平衡不动
     attributes: { 风险: 无, 步行难度: 坡地 }
 
   - id: south_field
