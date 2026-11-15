@@ -3,8 +3,9 @@
 *.check.log
 *.check.out
 
-# AI 助手工作区，不进版本库
+# AI 助手工作区与本地规则，不进版本库
 .ai/
+.trae/
 
 # Python 缓存与测试产物，不进版本库
 __pycache__/
