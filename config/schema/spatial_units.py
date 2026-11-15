@@ -31,7 +31,7 @@ class SpatialNode(BaseModel):
         description="从镇中心水井出发的单程耗时（TU），来源：05-distances.md",
     )
     # 仅 field 节点有意义：该田块种什么作物（同时是 AgentState 的产出字段名）。
-    # 缺省 grain，向后兼容；新增作物（如 fruit）只需在配置与 crop_gain 中加一项。
+    # 缺省 grain，向后兼容；新增作物（如 fruit）只需在配置与 base_yield 中加一项。
     crop_type: str = Field("grain", description="田块作物类型（grain / vegetable / 未来 fruit）")
     # crops.md §4.5 产量公式因子：田块面积（仅 field 节点参与计算）。
     # 默认 1.0 = 与既有固定产出等价；阶段二只作乘数占位，不提产。

@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from vale.core.calendar import DAYS_PER_YEAR
 from vale.core.state import AgentState, HouseholdState
 
 
@@ -42,17 +43,33 @@ def work_node_of(world, agent: AgentState) -> str:
 
     个人偏好由 AgentModule 对账保证有效（失效时置 None）；家庭 ``work_nodes`` 为空
     （无田、非田默认点）时退回家庭默认 ``work_node``，与既有语义一致。
+
+    田块按「可劳作成员在 member_ids 中的顺序」对位分配：第 k 个可劳作成员取
+    第 k 块田（列表长度即按可劳作人数截断，见 AgentModule._desired_work_nodes）。
+    不可劳作成员（未成年/高龄）不占劳作位，取默认田 nodes[0]——若用原始
+    member_ids 下标取模，未成年穿插在中间时两个劳力会撞到同一块田、另一块闲置。
     """
     if agent.work_node:
         return agent.work_node
     household = household_of(world, agent)
     nodes = household.work_nodes
     if nodes:
-        try:
-            index = household.member_ids.index(agent.agent_id)
-        except ValueError:
-            index = 0
-        return nodes[index % len(nodes)]
+        tuning = world.config.agents.tuning
+
+        def capable(member: AgentState) -> bool:
+            age = (world.current_tick - member.birth_tick) // DAYS_PER_YEAR
+            return tuning.aging.stage_for(age).work_allowed
+
+        if not agent.alive or not capable(agent):
+            return nodes[0]
+        rank = 0
+        for member_id in household.member_ids:
+            if member_id == agent.agent_id:
+                break
+            member = world.state.agents.get(member_id)
+            if member is not None and member.alive and capable(member):
+                rank += 1
+        return nodes[rank % len(nodes)]
     return household.work_node
 
 

@@ -2287,7 +2287,7 @@ class AgentModule:
         mother.children_ids.append(child_id)
         father.children_ids.append(child_id)
         mother.last_birth_tick = world.current_tick
-        # 阶段二 C：新生儿不继承个人偏好，取家庭可分配田块（按成员序确定性分配）
+        # 阶段二 C：新生儿不继承个人偏好，取家庭可分配田块（按可劳作成员序确定性分配）
         work = work_node_of(world, child)
         work_source = "household_allocation" if household.work_nodes else "household"
         # 阶段二 §3.0：分娩健康代价（01-physical-state §4.4 普通分娩 health −10）

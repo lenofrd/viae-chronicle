@@ -192,7 +192,7 @@ tuning:
     house_max_members: 8                # [调参] 单户成员上限；婚配并入与出生前校验
 
   labor:                                # 阶段二 C：劳作点分配（修缺陷，不调参）
-    allocation_policy: deterministic_distance  # 家庭可分配田块：默认田优先，其余按家→田距离+节点 id；户内按成员序轮流接田
+    allocation_policy: deterministic_distance  # 家庭可分配田块：默认田优先，其余按家→田距离+节点 id；户内按可劳作成员序对位接田
 
   split:                                # 任务12 第3步：分家
     min_members: 4                      # [调参] 户内人数下限（含夫妻与子女）

@@ -115,7 +115,7 @@ def test_c_invalid_preference_is_released(world):
 
 
 def test_c_household_work_nodes_distance_order(world):
-    """可分配田块：默认田优先，其余按家→田距离升序；户内按成员序轮流接田（确定性）。"""
+    """可分配田块：默认田优先，其余按家→田距离升序；户内按可劳作成员序对位接田（确定性）。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
     mother, father, household = _isolated_couple(world, fillers=0)
@@ -124,13 +124,38 @@ def test_c_household_work_nodes_distance_order(world):
 
     # rich_district → south/east 均 2.5 TU（并列按节点 id），west 3.5 TU
     assert household.work_nodes == ["south_field", "east_field"]
-    assert work_node_of(world, mother) == "south_field"   # member_ids[0]
-    assert work_node_of(world, father) == "east_field"    # member_ids[1]
+    assert work_node_of(world, mother) == "south_field"   # 可劳作序 0
+    assert work_node_of(world, father) == "east_field"    # 可劳作序 1
     event = world.event_log.by_type("household_work_nodes_changed")[-1]["payload"]
     assert event["household_id"] == "hh_test"
     assert event["before"] == []
     assert event["after"] == ["south_field", "east_field"]
     assert event["reason"] == "reassigned"
+
+
+def test_c_capable_members_get_distinct_fields(world):
+    """回归：不可劳作成员穿插在 member_ids 中间时，可劳作成员不得撞同一块田。
+
+    旧实现按原始 member_ids 下标取模（长度=可劳作人数），[m1, 未成年, f1, 未成年]
+    时 m1@0、f1@2 → 2%2=0 两人同上 south_field，east_field 闲置。
+    """
+    mod = _module(world)
+    tuning = world.config.agents.tuning
+    mother, father, household = _isolated_couple(world, fillers=0)
+    _add_agent(world, "k9", sex=AgentSex.MALE, age=5,
+               household_id="hh_test", home="rich_district")
+    _add_agent(world, "k8", sex=AgentSex.MALE, age=5,
+               household_id="hh_test", home="rich_district")
+    household.member_ids = [mother.agent_id, "k9", father.agent_id, "k8"]
+
+    mod._reconcile_work_nodes(world, tuning)  # noqa: SLF001
+
+    # 可劳作成员仍只有夫妻 2 人，列表长度 2；两人按可劳作序对位不同田
+    assert household.work_nodes == ["south_field", "east_field"]
+    assert work_node_of(world, mother) == "south_field"   # 可劳作序 0
+    assert work_node_of(world, father) == "east_field"    # 可劳作序 1，不再撞车
+    # 不可劳作成员不占劳作位，取默认田
+    assert work_node_of(world, world.state.agents["k9"]) == "south_field"
 
 
 def test_c_single_member_household_keeps_default_field(world):
@@ -161,7 +186,7 @@ def test_c_newborn_takes_household_allocation(world):
     child = world.state.agents["child_1"]
     assert child.work_node is None
     assert household.work_nodes == ["south_field", "east_field"]
-    assert work_node_of(world, child) == "south_field"  # member_ids[2] → 2 % 2 = 0
+    assert work_node_of(world, child) == "south_field"  # 不可劳作不占位 → 默认田
     payload = world.event_log.by_type("agent_born")[-1]["payload"]
     assert payload["work_node_source"] == "household_allocation"
     assert payload["work_node"] == "south_field"

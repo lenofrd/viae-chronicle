@@ -202,7 +202,7 @@ class LaborTuning(BaseModel):
     """劳作点分配（阶段二 C，修缺陷、不调参）。
 
     家庭可分配田块 = 默认田优先，其余按「家→田距离升序、节点 id 升序」；
-    户内按 member_ids 顺序轮流接田（确定性，禁止随机）。
+    户内按可劳作成员序对位接田（未成年/高龄不占劳作位；确定性，禁止随机）。
     """
 
     allocation_policy: Literal["deterministic_distance"] = Field(

@@ -376,7 +376,7 @@ def test_d7_newborn_attributes_use_parent_average_and_minimum(world):
 def test_d8_newborn_uses_household_work_node(world):
     """D8 改写 + 阶段二 C：新生儿加入母亲家庭，劳作点取家庭可分配田块，源标注 household_allocation。
 
-    阶段二 C 起 work_node 解析为「个人偏好 → 家庭 work_nodes（按成员序确定性分配）→ 家庭默认」，
+    阶段二 C 起 work_node 解析为「个人偏好 → 家庭 work_nodes（按可劳作成员序确定性对位分配）→ 家庭默认」，
     新生儿无个人偏好，故取家庭分配；work_nodes 为空（无田/非田默认点）时仍回退家庭默认。
     """
     mod = _module(world)
