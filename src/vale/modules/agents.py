@@ -1144,13 +1144,14 @@ class AgentModule:
         # 清偿完毕（amount==0）的记录移出列表，保持债务列表干净
         household.debts = [d for d in household.debts if d.amount > 0]
 
-    # -- 每日结算：死亡+继承 → 催收 → 集市 → 婚配 → 生育 → 回血 ----------- #
+    # -- 每日结算：死亡+继承 → 催收会话 → 强制催收 → 集市 → 婚配 → 生育 → 回血 --- #
     def _settle(self, world, tuning: AgentTuning) -> None:
         """tick 末尾统一结算。逐人错误隔离：单人结算失败写 agent_error，不拖垮世界。
 
-        顺序（任务12 A3 固定）：死亡判定 → 继承（资产转移+债务继承/核销）→ 催收
-        → 集市 → 婚配 → 生育 → 健康回血。继承必须先于债务处理，否则债务无处继承。
-        死者/失能者不参与催收、集市、婚配、生育与回血。
+        顺序（任务12 A3 固定）：死亡判定 → 继承（资产转移+债务继承/核销）→ 催收会话
+        → 强制催收 → 集市 → 婚配 → 生育 → 健康回血。继承必须先于债务处理，否则债务无处继承。
+        催收会话先于强制扣粮（任务15 阶段三修正）：让「有粮赖账」窗口先被会话看到，
+        否则库存会被 _collect_debts 先扣走。死者/失能者不参与催收、集市、婚配、生育与回血。
         """
         dead_now: list[AgentState] = []
         for agent in list(world.state.agents.values()):
@@ -1168,6 +1169,22 @@ class AgentModule:
                 self._handle_death(world, agent, tuning)
             except Exception as exc:  # noqa: BLE001
                 self._log_agent_error(world, agent, "inheritance", exc)
+
+        # 任务15 阶段三：催收会话先于强制扣粮，看到「有粮赖账」窗口（只有 market_credit 债务参与）
+        try:
+            self._settle_debt_disputes(world, tuning)
+        except Exception as exc:  # noqa: BLE001 — 冲突结算失败不拖垮集市/婚配/回血
+            world.event_log.append(
+                world.current_tick,
+                "agent_error",
+                {
+                    "agent_id": "_conflict",
+                    "agent_name": "债务催收",
+                    "phase": "debt_dispute",
+                    "error": repr(exc),
+                    "traceback": traceback.format_exc(limit=2),
+                },
+            )
 
         for agent in list(world.state.agents.values()):
             try:
@@ -1317,6 +1334,7 @@ class AgentModule:
             participants.append((household, executor))
 
         trade_count = self._match_market(world, tuning, participants, travel)
+        credit_count = self._settle_market_credit(world, tuning, participants)
 
         world.event_log.append(
             world.current_tick,
@@ -1339,6 +1357,7 @@ class AgentModule:
                 "participant_count": len(participants),
                 "skipped": skipped,
                 "trade_count": trade_count,
+                "credit_count": credit_count,
             },
         )
 
@@ -1434,6 +1453,126 @@ class AgentModule:
                             },
                         )
         return count
+
+    # -- 集市赊账（任务15 阶段二）：短缺家庭向富余家庭挂账 ------------------ #
+    def _settle_market_credit(
+        self,
+        world,
+        tuning: AgentTuning,
+        participants: list[tuple[HouseholdState, AgentState]],
+    ) -> int:
+        """集市日赊账：买方短缺、卖方富余时当期交粮并生成 ``debt_formed(origin="market_credit")``。
+
+        约束（裁决 §3.1/§3.3，全部来自配置）：
+        - 仅 ``credit.eligible_items``；零利息；单户未清偿赊账 ≤ ``max_per_household``；
+        - 已有赊账逾期未清时不再新增（防雪球）；
+        - 粮当期从卖方家庭转买方家庭，逐笔事件记录双方库存，守恒且不为负。
+        返回新增赊账笔数。仅参加集市的家庭可赊。
+        """
+        credit = tuning.market.credit
+        if not credit.enabled or not participants:
+            return 0
+        step = tuning.market.trade_unit_step
+        tick = world.current_tick
+        count = 0
+        for buyer_hh, _buyer in participants:  # participants 已按 household_id 稳定排序
+            outstanding = sum(
+                rec.amount for rec in buyer_hh.debts if rec.origin == "market_credit"
+            )
+            overdue = any(rec.origin == "market_credit" and rec.overdue for rec in buyer_hh.debts)
+            if overdue:
+                continue  # 已有赊账逾期未清：不再新增，避免雪球
+            headroom = credit.max_per_household - outstanding
+            if headroom <= 0:
+                continue
+            for item in credit.eligible_items:
+                if item not in HouseholdState.model_fields:
+                    continue
+                stock = getattr(buyer_hh, item, 0.0)
+                if stock >= credit.min_shortage:
+                    continue
+                need = credit.min_shortage - stock
+                seller = self._pick_credit_seller(
+                    participants, buyer_hh, item, credit.min_surplus
+                )
+                if seller is None:
+                    continue
+                amount = _floor_to_step(
+                    min(need, getattr(seller, item, 0.0) - credit.min_surplus, headroom),
+                    step,
+                )
+                if amount < step:
+                    continue
+                buyer_before = round(stock, 2)
+                seller_before = round(getattr(seller, item, 0.0), 2)
+                setattr(seller, item, round(seller_before - amount, 2))
+                setattr(buyer_hh, item, round(buyer_before + amount, 2))
+                due_tick = tick + credit.due_days
+                buyer_hh.debts.append(
+                    DebtRecord(
+                        debtor_household_id=buyer_hh.household_id,
+                        creditor_household_id=seller.household_id,
+                        amount=round(amount, 2),
+                        originated_tick=tick,
+                        due_tick=due_tick,
+                        origin="market_credit",
+                    )
+                )
+                debtor_head = world.state.agents.get(buyer_hh.head_id or "")
+                creditor_head = world.state.agents.get(seller.head_id or "")
+                world.event_log.append(
+                    tick,
+                    "debt_formed",
+                    {
+                        "creditor_id": (
+                            creditor_head.agent_id if creditor_head else seller.household_id
+                        ),
+                        "creditor_name": (
+                            creditor_head.name if creditor_head else seller.household_id
+                        ),
+                        "debtor_id": (
+                            debtor_head.agent_id if debtor_head else buyer_hh.household_id
+                        ),
+                        "debtor_name": (
+                            debtor_head.name if debtor_head else buyer_hh.household_id
+                        ),
+                        "creditor_household_id": seller.household_id,
+                        "debtor_household_id": buyer_hh.household_id,
+                        "household_id": buyer_hh.household_id,
+                        "debt_type": item,
+                        "origin": "market_credit",
+                        "amount": round(amount, 2),
+                        "due_tick": due_tick,
+                        "originated_tick": tick,
+                        "debtor_grain_before": buyer_before,
+                        "debtor_grain_after": round(getattr(buyer_hh, item, 0.0), 2),
+                        "creditor_grain_before": seller_before,
+                        "creditor_grain_after": round(getattr(seller, item, 0.0), 2),
+                        "debt_before": round(outstanding, 2),
+                        "debt_after": round(outstanding + amount, 2),
+                    },
+                )
+                count += 1
+                break  # 单户单集市日只新增一笔赊账
+        return count
+
+    @staticmethod
+    def _pick_credit_seller(
+        participants: list[tuple[HouseholdState, AgentState]],
+        buyer_hh: HouseholdState,
+        item: str,
+        min_surplus: float,
+    ) -> Optional[HouseholdState]:
+        """选富余最多的其他参加家庭（并列按 household_id 稳定）；无则 None。"""
+        candidates = [
+            hh
+            for hh, _agent in participants
+            if hh.household_id != buyer_hh.household_id
+            and getattr(hh, item, 0.0) >= min_surplus
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda h: (getattr(h, item, 0.0), h.household_id))
 
     def _process_death(self, world, agent: AgentState, tuning: AgentTuning) -> None:
         """失能满 death_grace_ticks 仍未恢复 → 死亡；写一次 agent_died。
@@ -1797,6 +1936,7 @@ class AgentModule:
                             "creditor_id": heir_head.agent_id if heir_head is not None else heir_hh.household_id,
                             "creditor_name": heir_head.name if heir_head is not None else heir_hh.household_id,
                             "creditor_household_id": heir_hh.household_id,
+                            "debtor_household_id": other.household_id,
                             "amount": round(rec.amount, 2),
                             "due_tick": rec.due_tick,
                         },
@@ -2411,6 +2551,7 @@ class AgentModule:
                         "amount_paid": round(pay, 2),
                         "remaining": round(rec.amount, 2),
                         "overdue": rec.overdue,
+                        "originated_tick": rec.originated_tick,
                         "debtor_grain_after": round(household.grain, 2),
                         "creditor_grain_after": round(creditor_hh.grain, 2),
                     },
@@ -2452,6 +2593,305 @@ class AgentModule:
                     },
                 )
         household.debts = [d for d in household.debts if d.amount > 0]
+
+    # -- 债务纠纷：2 轮私下催收（任务15 阶段二）---------------------------- #
+    def _settle_debt_disputes(self, world, tuning: AgentTuning) -> int:
+        """赊账逾期 ≥ trigger_overdue_days 且「有粮但不还」时，债权家庭发起一次私下催收。
+
+        触发窗口：``refusal_threshold < 债务家庭存粮 ≤ trigger_max_grain``。断粮
+        （≤ refusal_threshold）不进会话，走既有 debt_defaulted / debt_collection_attempt
+        强制扣粮路径；存粮高于上限说明有能力偿还，不需要私下催收。
+
+        收窄实现（裁决 §3.2）：只有 ``origin="market_credit"`` 的债务参与；每笔债务最多
+        发起一次会话（``dispute_started_tick`` 标记；延期后清零，进入下一周期）；拒绝后
+        不再重复发起，后续仍走既有 debt_defaulted / debt_collection_attempt。
+        仅用已有事实：家庭库存、逾期天数、事件流中的 debt_defaulted / debt_repaid、亲缘关系。
+        返回发起的会话数。
+        """
+        cfg = tuning.conflict.debt_dispute
+        tick = world.current_tick
+        living_ids = {h.household_id for h in living_households(world)}
+        candidates: list[tuple[HouseholdState, DebtRecord]] = []
+        for household in sorted(world.state.households.values(), key=lambda h: h.household_id):
+            if household.household_id not in living_ids:
+                continue
+            for rec in household.debts:
+                if rec.origin != "market_credit" or rec.amount <= 0:
+                    continue
+                if rec.dispute_started_tick is not None:
+                    continue
+                if tick - rec.due_tick < cfg.trigger_overdue_days:
+                    continue
+                if household.grain <= cfg.refusal_threshold:
+                    continue  # 断粮：不走会话，交给既有 debt_defaulted / collection_attempt
+                if household.grain > cfg.trigger_max_grain:
+                    continue  # 有粮且超过上限：有能力偿还，无需私下催收
+                if rec.creditor_household_id not in living_ids:
+                    continue
+                candidates.append((household, rec))
+        if not candidates:
+            return 0
+
+        defaulted, repaid = self._debt_history_sets(world)
+        count = 0
+        for index, (debtor_hh, rec) in enumerate(candidates):
+            creditor_hh = world.state.households.get(rec.creditor_household_id)
+            if creditor_hh is None:
+                continue
+            self._negotiate_debt(
+                world, tuning, debtor_hh, creditor_hh, rec,
+                defaulted=defaulted, repaid=repaid, index=index,
+            )
+            count += 1
+        # 清偿完毕的记录移出列表
+        for household, _rec in candidates:
+            household.debts = [d for d in household.debts if d.amount > 0]
+        return count
+
+    def _negotiate_debt(
+        self,
+        world,
+        tuning: AgentTuning,
+        debtor_hh: HouseholdState,
+        creditor_hh: HouseholdState,
+        rec: DebtRecord,
+        *,
+        defaulted: set[str],
+        repaid: set[str],
+        index: int = 0,
+    ) -> dict:
+        """执行固定 2 轮私下催收，返回结果摘要（便于测试与日志）。
+
+        第 1 轮：债权人提诉求（全额 / 部分 / 延期）——由既有事实决定：
+          亲缘 → 延期；有违约前科 → 全额；否则 → 部分。
+        第 2 轮：债务人回应（还款 / 请求延期 / 拒绝）——由库存与 refusal_threshold 决定；
+          请求延期时，债权人按「亲缘或曾守约」接受，否则坚持 → 破裂。
+        四种结果：repaid / partial_repaid / deferred / broken；两轮后必结束，不悬置。
+        """
+        cfg = tuning.conflict.debt_dispute
+        tick = world.current_tick
+        debtor_id = debtor_hh.head_id or debtor_hh.household_id
+        creditor_id = creditor_hh.head_id or creditor_hh.household_id
+        debtor_name = self._head_name(world, debtor_hh)
+        creditor_name = self._head_name(world, creditor_hh)
+        conflict_id = (
+            f"cf-{tick}-{debtor_hh.household_id}-{creditor_hh.household_id}-{index}"
+        )
+        kin = self._households_are_kin(world, debtor_hh, creditor_hh)
+        prior_default = debtor_hh.household_id in defaulted
+        prior_honored = debtor_hh.household_id in repaid
+
+        # 第 1 轮：债权人诉求
+        if kin:
+            proposal = "deferral"
+        elif prior_default:
+            proposal = "full"
+        else:
+            proposal = "partial"
+        if proposal == "full":
+            proposed_amount = round(rec.amount, 2)
+        elif proposal == "partial":
+            proposed_amount = round(rec.amount * cfg.partial_ratio, 2)
+        else:
+            proposed_amount = 0.0
+
+        world.event_log.append(
+            tick,
+            "conflict_started",
+            {
+                "conflict_id": conflict_id,
+                "conflict_type": "debt-disputes",
+                "creditor_id": creditor_id,
+                "creditor_name": creditor_name,
+                "creditor_household_id": creditor_hh.household_id,
+                "debtor_id": debtor_id,
+                "debtor_name": debtor_name,
+                "debtor_household_id": debtor_hh.household_id,
+                "household_id": debtor_hh.household_id,
+                "trigger_event": "market_credit_overdue",
+                "amount": round(rec.amount, 2),
+                "overdue_ticks": tick - rec.due_tick,
+            },
+        )
+
+        # 第 2 轮：债务人回应（只依赖库存与既有事实，不引入 trust/grudge 新状态）
+        if proposal == "deferral":
+            response = "accept_deferral"
+        elif debtor_hh.grain >= proposed_amount > 0:
+            response = "repay"
+        elif debtor_hh.grain <= cfg.refusal_threshold:
+            response = "refuse"
+        else:
+            response = "request_deferral"
+
+        for round_no, actor, proposal_key, amount_key, responder, response_key in (
+            (1, creditor_id, proposal, proposed_amount, debtor_id, None),
+            (2, debtor_id, None, None, creditor_id, response),
+        ):
+            world.event_log.append(
+                tick,
+                "conflict_negotiation_round",
+                {
+                    "conflict_id": conflict_id,
+                    "round": round_no,
+                    "initiator": actor,
+                    "responder": responder,
+                    "proposal": proposal_key,
+                    "proposal_amount": amount_key,
+                    "response": response_key,
+                },
+            )
+
+        result: dict = {
+            "conflict_id": conflict_id,
+            "proposal": proposal,
+            "response": response,
+        }
+
+        if response == "repay":
+            pay = min(proposed_amount, debtor_hh.grain, rec.amount)
+            creditor_hh.grain = round(creditor_hh.grain + pay, 2)
+            debtor_hh.grain = round(debtor_hh.grain - pay, 2)
+            rec.amount = round(rec.amount - pay, 2)
+            rec.overdue = rec.amount > 0
+            rec.dispute_started_tick = tick
+            # 会话已扣粮：同 tick 后续 _collect_debts 不得重复扣（按催收间隔节流到下一周期）
+            rec.last_collected_tick = tick
+            world.event_log.append(
+                tick,
+                "debt_repaid",
+                {
+                    "creditor_id": creditor_id,
+                    "creditor_name": creditor_name,
+                    "creditor_household_id": creditor_hh.household_id,
+                    "debtor_id": debtor_id,
+                    "debtor_name": debtor_name,
+                    "debtor_household_id": debtor_hh.household_id,
+                    "household_id": debtor_hh.household_id,
+                    "amount": round(pay, 2),
+                    "remaining": round(rec.amount, 2),
+                    "source": "debt_dispute",
+                    "originated_tick": rec.originated_tick,
+                    "debtor_grain_after": round(debtor_hh.grain, 2),
+                    "creditor_grain_after": round(creditor_hh.grain, 2),
+                },
+            )
+            resolution = "repaid" if rec.amount <= 0 else "partial_repaid"
+            result["resolution"] = resolution
+            world.event_log.append(
+                tick,
+                "conflict_resolved",
+                {
+                    "conflict_id": conflict_id,
+                    "resolution": resolution,
+                    "amount_paid": round(pay, 2),
+                    "remaining": round(rec.amount, 2),
+                    "creditor_household_id": creditor_hh.household_id,
+                    "debtor_household_id": debtor_hh.household_id,
+                },
+            )
+            return result
+
+        accept_deferral = response == "accept_deferral" or (
+            response == "request_deferral" and (kin or prior_honored)
+        )
+        if accept_deferral:
+            old_due = rec.due_tick
+            rec.due_tick = tick + cfg.deferral_days
+            rec.overdue = False
+            rec.dispute_started_tick = None  # 延期后进入下一周期，仍可再次触发
+            result["resolution"] = "deferred"
+            world.event_log.append(
+                tick,
+                "debt_deferred",
+                {
+                    "conflict_id": conflict_id,
+                    "creditor_id": creditor_id,
+                    "creditor_name": creditor_name,
+                    "creditor_household_id": creditor_hh.household_id,
+                    "debtor_id": debtor_id,
+                    "debtor_name": debtor_name,
+                    "debtor_household_id": debtor_hh.household_id,
+                    "household_id": debtor_hh.household_id,
+                    "amount": round(rec.amount, 2),
+                    "old_due_tick": old_due,
+                    "new_due_tick": rec.due_tick,
+                    "deferral_days": cfg.deferral_days,
+                },
+            )
+            world.event_log.append(
+                tick,
+                "conflict_resolved",
+                {
+                    "conflict_id": conflict_id,
+                    "resolution": "deferred",
+                    "new_due_tick": rec.due_tick,
+                    "creditor_household_id": creditor_hh.household_id,
+                    "debtor_household_id": debtor_hh.household_id,
+                },
+            )
+            return result
+
+        # 拒绝（或债权人坚持不延期）→ 破裂；该笔不再重复发起会话
+        rec.dispute_started_tick = tick
+        reason = "refused" if response == "refuse" else "creditor_insists"
+        result["resolution"] = "broken"
+        result["reason"] = reason
+        world.event_log.append(
+            tick,
+            "conflict_broken",
+            {
+                "conflict_id": conflict_id,
+                "reason": reason,
+                "amount": round(rec.amount, 2),
+                "overdue_ticks": tick - rec.due_tick,
+                "creditor_household_id": creditor_hh.household_id,
+                "debtor_household_id": debtor_hh.household_id,
+            },
+        )
+        return result
+
+    @staticmethod
+    def _head_name(world, household: HouseholdState) -> str:
+        """家庭对外称谓：存活户主名 → 户主 id → 家庭 id。"""
+        head = world.state.agents.get(household.head_id or "")
+        if head is not None and head.alive:
+            return head.name
+        return household.head_id or household.household_id
+
+    @staticmethod
+    def _households_are_kin(world, a: HouseholdState, b: HouseholdState) -> bool:
+        """两户是否存在直接亲缘（配偶/父母/子女），只读已有亲缘字段，不引入新状态。"""
+        a_ids = set(a.member_ids)
+        b_ids = set(b.member_ids)
+        for member_id in a_ids:
+            agent = world.state.agents.get(member_id)
+            if agent is None:
+                continue
+            if agent.spouse_id in b_ids:
+                return True
+            if agent.mother_id in b_ids or agent.father_id in b_ids:
+                return True
+            if any(child in b_ids for child in agent.children_ids):
+                return True
+        return False
+
+    @staticmethod
+    def _debt_history_sets(world) -> tuple[set[str], set[str]]:
+        """从事件流反查「有违约前科」「曾守约」的家庭集合（不新增状态）。"""
+        defaulted: set[str] = set()
+        repaid: set[str] = set()
+        for evt in world.event_log.by_type("debt_defaulted"):
+            payload = evt.get("payload") or {}
+            hid = payload.get("debtor_household_id") or payload.get("household_id")
+            if hid:
+                defaulted.add(hid)
+        for evt in world.event_log.by_type("debt_repaid"):
+            payload = evt.get("payload") or {}
+            hid = payload.get("debtor_household_id") or payload.get("household_id")
+            if hid:
+                repaid.add(hid)
+        return defaulted, repaid
 
     def _recover_health(self, world, agent: AgentState, tuning: AgentTuning) -> None:
         """饥饿低于阈值且体力高于阈值时回血，封顶 100；仅数值实际变化时写 health_recovered。

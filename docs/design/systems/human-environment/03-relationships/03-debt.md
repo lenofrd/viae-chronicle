@@ -99,16 +99,18 @@
 
 ## 8. 实现状态（任务 08）
 
-> 本节记录任务 08 已落地的粮食债务闭环；利息/人情、债务转移与豁免、trust/obligation 联动、07-conflicts 债务纠纷触发等为未来完整模型，当前未实现。
+> 本节记录已落地的粮食债务闭环；利息/人情、trust/obligation 联动、完整 07-conflicts（调解/村规/公开惩罚）仍为未来模型。任务 15 阶段二已落地集市赊账与债务纠纷 2 轮私下催收（见 §8.2 与 [03-debt-disputes](../07-conflicts/03-debt-disputes.md)）。
 
 ### 8.1 数据结构（已实现）
-- `DebtRecord`（见 `src/vale/core/state.py`）：`creditor_id`、`amount`（≥0）、`originated_tick`、`due_tick`、`last_collected_tick`（可空）、`overdue`。
-- `AgentState.debts: list[DebtRecord]` 为唯一事实源；`AgentState.debt` 改为 `@computed_field` 派生值（= 各记录 `amount` 求和），**只读不可赋值**，消除双写不一致。任何对 `agent.debt = X` 的赋值会抛 `AttributeError`，须操作 `.debts` 列表。
+- `DebtRecord`（见 `src/vale/core/state.py`）：`debtor_household_id`、`creditor_household_id`、`amount`（≥0）、`originated_tick`、`due_tick`、`last_collected_tick`（可空）、`overdue`；任务 15 追加可选 `origin`（None = 借粮，`"market_credit"` = 集市赊账）与 `dispute_started_tick`（催收会话标记）。
+- `HouseholdState.debts: list[DebtRecord]` 为唯一事实源（任务 12 起债务已家庭化，不再挂在 `AgentState`）；`HouseholdState.debt` 为 `@computed_field` 派生值（= 各记录 `amount` 求和），**只读不可赋值**，消除双写不一致。任何对 `household.debt = X` 的赋值会抛 `AttributeError`，须操作 `.debts` 列表。
 
 ### 8.2 演化规则（已实现）
 - **债务形成**（`borrow_grain` 动作）：在他人中按存粮降序选存粮 ≥ 借出量的债主（纯函数 `select_creditor`，感知与执行共用保证一致）；扣债主粮、加借粮者粮（世界总粮守恒），append `DebtRecord`，`due_tick = 当前 tick + debt.due_days`。无债主 → 动作不可行。
+- **集市赊账**（任务 15，`_settle_market_credit`）：集市日买方短缺、卖方富余时当期交粮并追加 `origin="market_credit"` 的 `DebtRecord`；零利息，单户上限与期限见 `market.credit`。
 - **每日结算**（`AgentModule._settle`，在全部 agent 动作循环之后统一执行，避免迭代中改状态）：
   - 到期催收：`tick >= due_tick` 且（首次 或 `tick - last_collected_tick >= collection_interval_days`）时触发；有粮足额 → 扣粮还债主、记录减少/清零；部分 → 扣尽存粮、剩余标 `overdue`；零粮 → 标 `overdue`。
+  - 赊账逾期催收会话（任务 15）：逾期 ≥ `conflict.debt_dispute.trigger_overdue_days`，且债务家庭「有粮但不还」（`refusal_threshold < 存粮 ≤ trigger_max_grain`）时，发起固定 2 轮私下催收；断粮走既有 `debt_defaulted` / `debt_collection_attempt` 强制扣粮。结果写 `conflict_*` 与 `debt_repaid` / `debt_deferred`。
   - 逾期者 `borrow_grain` 在评分阶段判为不可行，直至逾期债务清零。
 - **秋收还款**（`_repay_debts`，秋收动作内调用）：按 `(due_tick, originated_tick)` 升序，单笔还 `min(rec.amount, 预算, 存粮)`，预算上限复用已批准的 `agriculture.harvest_debt_repayment`；清偿记录移出列表。
 - 逐人 try/except，失败写 `agent_error`（`phase="daily_settlement"`），不拖垮主循环。
@@ -117,12 +119,15 @@
 ### 8.3 事件载荷（已实现，观察层可读）
 | event_type | 触发 | 关键字段 |
 |---|---|---|
-| `debt_formed` | 借粮成功 | creditor/debtor 的 id+name, debt_type, amount, due_tick, originated_tick, 双方 grain_before/after, debt_before/after |
+| `debt_formed` | 借粮成功 / 集市赊账 | creditor/debtor 的 id+name, debt_type, **origin（赊账时="market_credit"）**, amount, due_tick, originated_tick, 双方 grain_before/after, debt_before/after |
 | `debt_collected` | 到期催收（足额或部分） | creditor/debtor 的 id+name, amount_paid, remaining, overdue, 双方 grain_after |
 | `debt_defaulted` | 到期零粮（每笔一次，状态变更） | creditor/debtor 的 id+name, amount, overdue_ticks |
-| `debt_repaid` | 秋收还款 | creditor/debtor 的 id+name, amount, remaining, source, 双方 grain_after |
+| `debt_repaid` | 秋收还款 / 催收会话达成还款 | creditor/debtor 的 id+name, amount, remaining, source（`harvest` / `debt_dispute`）, 双方 grain_after |
 | `debt_collection_attempt` | 已逾期债务周期性零粮催收（任务 10） | creditor/debtor 的 id+name, amount, overdue_ticks, interval_days |
-| `debt_forgiven` | 死亡核销（逐笔，任务 10） | creditor/debtor 的 id+name, amount, cause |
+| `debt_deferred` | 催收会话达成延期（任务 15） | creditor/debtor 的 id+name, amount, old_due_tick, new_due_tick, deferral_days |
+| `debt_written_off` | 继承结算核销（无继承人 / 比例余额） | creditor/debtor 的 id+name, amount, reason |
+| `debt_transferred` | 债权/债务转移 | 双方家庭 id、creditor/debtor id+name, amount, due_tick |
+
 
 > 1 tick = 1 天（`time.tu_per_tick=10`），`due_days` / `collection_interval_days` 直接映射为 tick 差。
 
@@ -145,9 +150,10 @@
 
 **due_days=180 复核结论**：保留 180，非临时平衡——180 天使借粮到期落在次年春季，有意跨越秋收窗口（tick 181+），借款人秋收后有粮可还；配合 §10 的违约去重，到期后即使无力偿还也只刷一次违约 + 周期性催收尝试，不再有结构性集中违约刷屏。
 
-## 11. 任务 10：死亡核销（坏账）
+## 11. 死亡与债务核销（坏账，口径已家庭化）
 
-- 失能满宽限期死亡的 agent，其剩余债务按 `death.forgive_debt_on_death` 核销：**逐笔写 `debt_forgiven`**（载荷：creditor/debtor 的 id+name、amount、cause="death"），债务列表清空，绝不静默消失。
+- 失能满宽限期死亡的 agent，其家庭债务由**继承结算**统一处理（`_handle_death` → `_execute_inheritance`），不再走 `debt_forgiven`：有继承人按 `inheritance.debt_ratio` 转移（`debt_transferred`）、余额核销（`debt_written_off`，`reason="inheritance_remainder"`）；无继承人全部逐笔核销（`reason="no_heir"`）。
+- **`death.forgive_debt_on_death` 无调用点**，任务 15 阶段二删除（配置与 schema 字段一并移除），行为变化为零：死亡核销此前已由继承结算接管；`debt_forgiven` 仅保留旧库回放与「继承人即债权人」分支的兼容。
 - **守恒语义**：核销是**账面坏账**（死者无粮可还，债主承担损失），不移动粮食——世界总粮不变、世界总债减少且每笔减少都有事件，可审计。
-- 事件载荷见 §8.3 表（`debt_forgiven` 行）。观察层渲染：「[债主] 核销 [债务人] 债务 N 石（原因：death）」。
+- 事件载荷见 §8.3 表（`debt_written_off` 行）。观察层渲染：「[债务人] 欠 [债权人] 的 N 石债务核销（reason）」。
 - 失能（未死）期间不催收、不回血——避免对垂死之人重复刷违约/催收事件（详见 agents/01-physical-state.md §4.5a）。

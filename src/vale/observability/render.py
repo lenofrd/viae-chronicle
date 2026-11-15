@@ -476,6 +476,81 @@ def _render_debt_forgiven(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
+# -- 债务纠纷（任务15 阶段二：2 轮私下催收）-------------------------------- #
+def _render_conflict_started(payload: dict) -> tuple[str, bool]:
+    creditor = payload.get("creditor_name") or payload.get("creditor_id") or "?"
+    debtor = payload.get("debtor_name") or payload.get("debtor_id") or "?"
+    amount = _num(payload.get("amount"))
+    overdue = payload.get("overdue_ticks")
+    text = f"[{creditor}] 因 [{debtor}] 赊账逾期 {overdue} 天未还，私下上门讨债（欠 {amount} 石）"
+    degraded = not all(
+        k in payload for k in ("conflict_id", "creditor_id", "debtor_id", "amount")
+    )
+    return text, degraded
+
+
+def _render_conflict_negotiation_round(payload: dict) -> tuple[str, bool]:
+    creditor = payload.get("initiator") or "?"
+    round_no = payload.get("round")
+    proposal = payload.get("proposal")
+    amount = _num(payload.get("proposal_amount"))
+    if round_no == 1:
+        demand = {"full": "全额偿还", "partial": "先还一部分", "deferral": "宽限些时日"}.get(
+            proposal, "还债"
+        )
+        text = f"[{creditor}] 第 1 轮开口：{demand} {amount} 石" if amount else (
+            f"[{creditor}] 第 1 轮开口：{demand}"
+        )
+    else:
+        response = payload.get("response")
+        reply = {
+            "repay": "当场筹措还粮",
+            "accept_deferral": "接受宽限",
+            "request_deferral": "请求再延一期",
+            "refuse": "一口回绝",
+        }.get(response, "沉默")
+        text = f"第 2 轮：债务人{reply}"
+    degraded = not all(k in payload for k in ("conflict_id", "round"))
+    return text, degraded
+
+
+def _render_conflict_resolved(payload: dict) -> tuple[str, bool]:
+    resolution = payload.get("resolution", "?")
+    label = {"repaid": "已还清", "partial_repaid": "部分偿还", "deferred": "同意延期"}.get(
+        resolution, resolution
+    )
+    if resolution == "deferred":
+        text = f"[债务纠纷] 双方谈妥：延期至 tick {payload.get('new_due_tick', '?')}"
+    else:
+        text = f"[债务纠纷] 双方谈妥：{label}（本次还 {_num(payload.get('amount_paid'))} 石，余 {_num(payload.get('remaining'))}）"
+    degraded = not all(k in payload for k in ("conflict_id", "resolution"))
+    return text, degraded
+
+
+def _render_conflict_broken(payload: dict) -> tuple[str, bool]:
+    reason = payload.get("reason", "?")
+    label = {"refused": "债务人拒不还债", "creditor_insists": "债主不肯再宽限"}.get(
+        reason, reason
+    )
+    amount = _num(payload.get("amount"))
+    text = f"[债务纠纷] 谈崩：{label}（欠 {amount} 石）"
+    degraded = not all(k in payload for k in ("conflict_id", "reason"))
+    return text, degraded
+
+
+def _render_debt_deferred(payload: dict) -> tuple[str, bool]:
+    debtor = payload.get("debtor_name") or payload.get("debtor_id") or "?"
+    creditor = payload.get("creditor_name") or payload.get("creditor_id") or "?"
+    amount = _num(payload.get("amount"))
+    new_due = payload.get("new_due_tick")
+    days = payload.get("deferral_days")
+    text = f"[{debtor}] 欠 [{creditor}] 的 {amount} 石延期 {days} 天（新到期 tick {new_due}）"
+    degraded = not all(
+        k in payload for k in ("debtor_id", "creditor_id", "amount", "new_due_tick")
+    )
+    return text, degraded
+
+
 def _render_trade_executed(payload: dict) -> tuple[str, bool]:
     buyer = payload.get("buyer_name") or payload.get("buyer_id") or "?"
     seller = payload.get("seller_name") or payload.get("seller_id") or "?"
@@ -622,6 +697,21 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "debt_forgiven":
             text, degraded = _render_debt_forgiven(payload)
             reason = "missing_debt_field" if degraded else None
+        elif event_type == "debt_deferred":
+            text, degraded = _render_debt_deferred(payload)
+            reason = "missing_debt_field" if degraded else None
+        elif event_type == "conflict_started":
+            text, degraded = _render_conflict_started(payload)
+            reason = "missing_conflict_field" if degraded else None
+        elif event_type == "conflict_negotiation_round":
+            text, degraded = _render_conflict_negotiation_round(payload)
+            reason = "missing_conflict_field" if degraded else None
+        elif event_type == "conflict_resolved":
+            text, degraded = _render_conflict_resolved(payload)
+            reason = "missing_conflict_field" if degraded else None
+        elif event_type == "conflict_broken":
+            text, degraded = _render_conflict_broken(payload)
+            reason = "missing_conflict_field" if degraded else None
         elif event_type == "trade_executed":
             text, degraded = _render_trade_executed(payload)
             reason = "missing_trade_field" if degraded else None

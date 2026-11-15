@@ -81,7 +81,7 @@ tuning:
   death:                                # 任务10 新增：死亡与失能生命周期
     incapacitation_health_threshold: 0  # health 触底（<=0）→ 失能，停止主动动作
     death_grace_ticks: 7                # 失能满 7 天仍未恢复 → 死亡（0=立即死亡）
-    forgive_debt_on_death: true         # 死亡时核销剩余债务，写 debt_forgiven（可追溯，不静默消失）
+    # 任务15：forgive_debt_on_death 无调用点，已删除；债务核销统一走继承结算 debt_written_off
 
   gathering:                            # 任务09 新增：采集类生计（打猎/捕鱼），代码不写死动作名
     actions:
@@ -118,6 +118,22 @@ tuning:
     max_trade_units: 10                 # [调参] 单次成交 give 侧上限
     trade_unit_step: 0.5                # [调参] 成交量最小步长
     trade_value_tolerance: 0.2          # [调参] 交换价值相对误差容忍度
+    credit:                             # 任务15 阶段二新增：集市赊账（零利息，当期交粮、到期还粮）
+      enabled: true                     # 开启切片
+      eligible_items: [grain]           # 首切片只允许粮
+      max_per_household: 10             # [调参] 单户未清偿赊账上限（约家庭年需求 1/10，防雪球）
+      due_days: 60                      # [调参] 一季，秋后还
+      min_surplus: 10                   # [调参] 卖方至少余 10 才赊
+      min_shortage: 5                   # [调参] 买方存粮 < 5 才赊入（须 < min_surplus）
+
+  conflict:                             # 任务15 阶段二新增：债务纠纷（只做机制，不调参）
+    debt_dispute:                       # 「有粮赖账」时的 2 轮私下催收；断粮走强制扣粮
+      trigger_overdue_days: 30          # [调参] 逾期一月触发催收
+      trigger_max_grain: 5              # [调参] 有粮上限：refusal_threshold < 存粮 ≤ 此值才进会话
+      max_rounds: 2                     # 固定 2 轮（不可调；非 2 启动即报错）
+      partial_ratio: 0.5                # [调参] 部分还款比例
+      deferral_days: 60                 # [调参] 延期一季
+      refusal_threshold: 2              # [调参] 库存不高于此值即拒绝；阶段三第1轮 0→2，须 < trigger_max_grain
 
   textile:                              # 任务11 新增：纺织与冬季保暖（布为耐用品，不每日消耗）
     cloth_per_weave: 2                  # [调参] 一次成功织布产量（匹）

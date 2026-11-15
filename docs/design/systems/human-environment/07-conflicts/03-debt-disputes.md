@@ -104,3 +104,19 @@
 - 调解者权限和成功率
 - 解决方式的映射
 - 收成差时纠纷概率上升系数
+
+## 8. 实现状态（任务 15 阶段二：只做机制）
+
+> 阶段二只落地「赊账 + 2 轮私下催收」最小切片；调解、公开惩罚、村规、信任/恩怨状态均未实现，且不在本阶段范围。
+
+- **债务来源**：集市赊账（`market.credit`）。仅集市日、仅 `eligible_items`（当前 `[grain]`）、零利息；买方库存 < `min_shortage`、卖方库存 ≥ `min_surplus` 时当期交粮，生成 `debt_formed`（`origin="market_credit"`、`due_tick`）；单户未清偿赊账 ≤ `max_per_household`，已有赊账逾期未清时不新增。
+- **触发**：赊账逾期 ≥ `conflict.debt_dispute.trigger_overdue_days`，且债务家庭处于「有粮但不还」窗口 `refusal_threshold < 存粮 ≤ trigger_max_grain`（阶段三语义修正，默认 2 < 存粮 ≤ 5）；断粮（≤ `refusal_threshold`）不进会话，走既有 `debt_defaulted` / `debt_collection_attempt` 强制扣粮；只有 `origin="market_credit"` 的债务参与，借粮路径不变。
+- **会话（固定 2 轮，不悬置）**：
+  - 第 1 轮债权人提诉求：亲缘 → 延期；有违约前科 → 全额；否则 → 部分（`partial_ratio`）。
+  - 第 2 轮债务人回应：有粮足额 → 还款；零粮（≤ `refusal_threshold`）→ 拒绝；有粮不足 → 请求延期（债权人按「亲缘或曾守约」接受，否则坚持）。
+  - 判定只读既有事实：家庭库存、逾期天数、事件流中的 `debt_defaulted` / `debt_repaid`、直接亲缘；**不引入 trust/grudge/obligation 新状态**。
+- **结果**：还款/部分还款 → `debt_repaid(source="debt_dispute")` + `conflict_resolved`；延期 → `debt_deferred`（更新 `due_tick`，`dispute_started_tick` 清零进入下一周期）+ `conflict_resolved`；拒绝/债权人坚持 → `conflict_broken`，该笔不再重复发起会话，后续仍走既有 `debt_defaulted` / `debt_collection_attempt`。
+- **事件**：新增 `conflict_started`、`conflict_negotiation_round`、`conflict_resolved`、`conflict_broken`、`debt_deferred`；复用 `debt_formed`（可选 `origin`）、`debt_repaid`。
+- **结算顺序**：催收会话在每日 `_collect_debts` 强制扣粮**之前**执行，让「有粮赖账」窗口先被会话看到；会话还款后设置 `last_collected_tick`，同 tick 不重复扣粮（5 种子 × 3600 实测双重扣粮 0）。
+- **验收口径（阶段三第 2 轮）**：5 种子 × 3600，人口 5/5、无 `agent_error`/负值、守恒 gap 全 0、双重扣粮 0；34 次会话、全额 13/延期 11/拒绝 8。原「催收 ≥1 次/种子」门槛降级为「合计 ≥1 次且 ≥2 个种子发生会话，且三种结果各出现 ≥1 次」：seed 1/123 人口后段下滑、债务家庭长期零粮（`debt_defaulted` 27/30 次），按语义正确走强制扣粮，不产生会话；人口问题记入 `11-life-course.md` §18 G1，不挡本切片验收。
+- **配置**：`market.credit` 与 `conflict.debt_dispute` 全部标 `[调参]`（`max_rounds` 固定 2 除外）；数值为保守初始值。

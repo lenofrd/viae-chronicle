@@ -218,6 +218,8 @@ def _prepare_single_pair(world):
 def test_trade_executes_and_conserves_items(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
+    # 本用例只验证以物易物撮合：关闭任务15赊账，避免买方成交后又被赊账补到 min_shortage
+    tuning.market.credit.enabled = False
     lin, zhao = _prepare_single_pair(world)
     mod._settle_market(world, tuning)  # noqa: SLF001
 

@@ -60,6 +60,11 @@ class DebtRecord(BaseModel):
     due_tick: int = Field(..., ge=0)
     last_collected_tick: Optional[int] = Field(default=None, ge=0)
     overdue: bool = False
+    # 任务15 阶段二：债务来源（None = 旧借粮；"market_credit" = 集市赊账）。
+    # 只有赊账走 2 轮私下催收；借粮逻辑保持不变。
+    origin: Optional[str] = Field(default=None)
+    # 该笔债务是否已发起过催收会话；拒绝后不再重复发起（延期时清零，进入下一周期）
+    dispute_started_tick: Optional[int] = Field(default=None, ge=0)
 
 
 class HouseholdState(BaseModel):

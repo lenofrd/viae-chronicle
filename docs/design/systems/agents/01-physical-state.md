@@ -89,8 +89,9 @@
 条件：失能满 death_grace_ticks（默认 7，0=立即死亡）仍未恢复
 效果：AgentState.alive = False，记录 died_tick
       写一次 agent_died（载荷：tick/agent/原因/失能 tick/死亡 tick/health/遗留债务）
-      按 forgive_debt_on_death 核销剩余债务：逐笔写 debt_forgiven（可追溯，不静默消失），
-      债务列表清空；核销是坏账处理（债主承担损失），不移动粮食（世界总粮不变，总债减少有事件）
+      由继承结算统一核销剩余债务：有继承人按 debt_ratio 转移（debt_transferred）、
+      余额与无继承人债务逐笔写 debt_written_off（可追溯，不静默消失）；
+      核销是坏账处理（债主承担损失），不移动粮食（世界总粮不变，总债减少有事件）
 
 幂等性：两阶段事件各自只写一次（状态机幂等：已失能/已死亡直接短路返回）。
 死者保留在 WorldState.agents 中（人生档案），但完全不参与任何处理。
