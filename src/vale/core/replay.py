@@ -247,6 +247,8 @@ class _Replayer:
                 amount=max(0.0, round(float(payload.get("amount", 0.0)), 2)),
                 originated_tick=int(payload.get("originated_tick", tick)),
                 due_tick=int(payload.get("due_tick", tick)),
+                # 旧库无 origin（借粮）；新库赊账为 "market_credit"
+                origin=payload.get("origin"),
             )
         )
         for key, agent_key in (
@@ -374,6 +376,38 @@ class _Replayer:
         if creditor_household_id is None:
             return
         self._reduce_debt(debtor_hh, creditor_household_id, float(payload.get("amount", 0.0)))
+
+    # -- 集市赊账与债务纠纷（任务15 阶段二）--------------------------------- #
+    def _on_debt_deferred(self, payload: dict, tick: int) -> None:
+        debtor_hh = self.state.households.get(payload.get("debtor_household_id") or "")
+        creditor_hh_id = payload.get("creditor_household_id")
+        if debtor_hh is None or not creditor_hh_id:
+            return
+        rec = self._find_record(debtor_hh, creditor_hh_id)
+        if rec is None:
+            return
+        rec.due_tick = int(payload.get("new_due_tick", tick))
+        rec.overdue = False
+        rec.dispute_started_tick = None  # 延期后进入下一周期
+
+    def _on_conflict_started(self, payload: dict, tick: int) -> None:
+        """标记该笔赊账已发起过催收会话，保证回放后不重复触发（金额不变）。"""
+        debtor_hh = self.state.households.get(payload.get("debtor_household_id") or "")
+        creditor_hh_id = payload.get("creditor_household_id")
+        if debtor_hh is None or not creditor_hh_id:
+            return
+        rec = self._find_record(debtor_hh, creditor_hh_id)
+        if rec is not None:
+            rec.dispute_started_tick = tick
+
+    def _on_conflict_negotiation_round(self, payload: dict, tick: int) -> None:
+        return  # 纯叙事事件，不改状态
+
+    def _on_conflict_resolved(self, payload: dict, tick: int) -> None:
+        return  # 金额/期限变更已由 debt_repaid / debt_deferred 重建
+
+    def _on_conflict_broken(self, payload: dict, tick: int) -> None:
+        return  # dispute_started_tick 已由 conflict_started 标记
 
     # -- 家庭生命周期事件（迁移第2步）------------------------------------- #
     def _on_household_merged(self, payload: dict, tick: int) -> None:

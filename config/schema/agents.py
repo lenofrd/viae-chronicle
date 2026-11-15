@@ -112,8 +112,9 @@ class DeathTuning(BaseModel):
     """死亡与失能生命周期（任务 10 新增）。数值全部来自 agents.yaml，代码不写死。
 
     - health 触底（<= incapacitation_health_threshold）→ 失能，停止一切主动动作，写一次
-      agent_incapacitated；失能满 death_grace_ticks 仍未恢复 → 死亡，写一次 agent_died，
-      并按 forgive_debt_on_death 核销剩余债务（写 debt_forgiven，可追溯，不静默消失）。
+      agent_incapacitated；失能满 death_grace_ticks 仍未恢复 → 死亡，写一次 agent_died。
+    - 债务核销统一由继承结算完成（debt_written_off）；``forgive_debt_on_death`` 无调用点，
+      任务 15 阶段二删除（见 03-debt.md §11）。
     """
 
     incapacitation_health_threshold: float = Field(
@@ -121,9 +122,6 @@ class DeathTuning(BaseModel):
     )
     death_grace_ticks: int = Field(
         7, ge=0, description="失能后多少 tick 仍未恢复则死亡（0 = 立即死亡）"
-    )
-    forgive_debt_on_death: bool = Field(
-        True, description="死亡时是否核销剩余债务（写 debt_forgiven 事件，可追溯）"
     )
 
 
@@ -363,6 +361,68 @@ class GatheringTuning(BaseModel):
     actions: dict[str, GatheringActionTuning] = Field(default_factory=dict)
 
 
+class MarketCreditTuning(BaseModel):
+    """集市赊账（任务15 阶段二，全部 [调参]）。
+
+    仅集市日、仅 ``eligible_items`` 内物品；零利息；当期交粮、到期还粮。
+    单户未清偿赊账总额 ≤ ``max_per_household``，已有赊账逾期未清时不新增（防雪球）。
+    阈值按物品统一取值（首切片只有 grain，与裁决 §3.3 一致）。
+    """
+
+    enabled: bool = Field(True, description="是否开启集市赊账")
+    eligible_items: list[str] = Field(
+        default_factory=lambda: ["grain"], description="可赊账物品（须在 market.trade_values 内）"
+    )
+    max_per_household: float = Field(
+        10.0, ge=0, description="单户未清偿赊账总额上限"
+    )
+    due_days: int = Field(60, ge=1, description="赊账到期天数（1 tick = 1 天）")
+    min_surplus: float = Field(10.0, ge=0, description="卖方至少余此库存才可赊出")
+    min_shortage: float = Field(5.0, ge=0, description="买方库存低于此值才可赊入")
+
+    @model_validator(mode="after")
+    def _credit_valid(self) -> "MarketCreditTuning":
+        if not self.eligible_items:
+            raise ValueError("market.credit.eligible_items must not be empty")
+        if self.min_shortage >= self.min_surplus:
+            raise ValueError("market.credit.min_shortage must be < min_surplus")
+        return self
+
+
+class DebtDisputeTuning(BaseModel):
+    """债务纠纷 2 轮私下催收（任务15 阶段二，除 max_rounds 外均为 [调参]）。
+
+    ``max_rounds`` 固定为 2（裁决：不做通用会话框架、不悬置），非法值启动即报错。
+    """
+
+    trigger_overdue_days: int = Field(
+        30, ge=0, description="赊账逾期满多少天且存粮处于「有粮赖账」窗口时触发催收会话"
+    )
+    trigger_max_grain: float = Field(
+        5.0, ge=0, description="有粮上限：refusal_threshold < 存粮 ≤ 此值才进催收会话（阶段三语义修正）"
+    )
+    max_rounds: Literal[2] = Field(2, description="固定 2 轮：债权人提诉求 → 债务人回应")
+    partial_ratio: float = Field(0.5, gt=0, le=1, description="部分还款比例")
+    deferral_days: int = Field(60, ge=1, description="延期天数")
+    refusal_threshold: float = Field(
+        2.0, ge=0, description="债务家庭库存不高于此值时拒绝（阶段三第1轮 0→2）"
+    )
+
+    @model_validator(mode="after")
+    def _window_valid(self) -> "DebtDisputeTuning":
+        if self.refusal_threshold >= self.trigger_max_grain:
+            raise ValueError(
+                "conflict.debt_dispute.refusal_threshold must be < trigger_max_grain"
+            )
+        return self
+
+
+class ConflictTuning(BaseModel):
+    """冲突系统配置（任务15 阶段二只实现债务纠纷）。"""
+
+    debt_dispute: DebtDisputeTuning = Field(default_factory=DebtDisputeTuning)
+
+
 class MarketTuning(BaseModel):
     """赶集交易（任务11）：集市日结算、以物易物、固定相对价格。
 
@@ -387,6 +447,8 @@ class MarketTuning(BaseModel):
     trade_value_tolerance: float = Field(
         0.2, ge=0, le=1, description="交换价值相对误差容忍度"
     )
+    # 任务15 阶段二：集市赊账（非断粮型债务来源，见 conflicts/03-debt-disputes）
+    credit: MarketCreditTuning = Field(default_factory=MarketCreditTuning)
 
     @model_validator(mode="after")
     def _validate_rules(self) -> "MarketTuning":
@@ -405,6 +467,9 @@ class MarketTuning(BaseModel):
                 raise ValueError(
                     f"threshold inverted for {item}: deficit >= surplus"
                 )
+        for item in self.credit.eligible_items:
+            if item not in self.trade_values:
+                raise ValueError(f"market.credit.eligible_items[{item}] not in trade_values")
         return self
 
 
@@ -429,6 +494,8 @@ class AgentTuning(BaseModel):
     death: DeathTuning = Field(default_factory=DeathTuning)
     gathering: GatheringTuning = Field(default_factory=GatheringTuning)
     market: MarketTuning = Field(default_factory=MarketTuning)
+    # 任务15 阶段二：债务纠纷（2 轮私下催收），其余冲突类型仍在设计层
+    conflict: ConflictTuning = Field(default_factory=ConflictTuning)
     textile: TextileTuning = Field(default_factory=TextileTuning)
     aging: AgingTuning = Field(default_factory=AgingTuning)
     marriage: MarriageTuning = Field(default_factory=MarriageTuning)
