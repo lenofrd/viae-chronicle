@@ -26,17 +26,23 @@ _PERSON_PREFIXES = (
     "from", "to", "head", "old_head", "new_head", "last_member",
 )
 _MEMBER_FIELDS = ("members", "members_after", "members_before")
+# conflict_negotiation_round 用裸 id（initiator/responder），无 _id/_name 后缀，单独提取；
+# 不并入 _PERSON_PREFIXES 循环，以免给前缀循环加裸字段兜底时误伤 season_changed 的裸 from/to。
+_PERSON_BARE_ID_FIELDS = ("initiator", "responder")
 _FOCUS_WORK = {"gather_success", "gather_fail", "gather_injury", "weave_success", "weave_fail"}
 _FOCUS_SOCIAL = {
     "agent_born", "agent_married", "agent_died", "agent_incapacitated",
     "household_merged", "household_split", "household_head_changed",
     "household_dissolved", "birth_asset_transfer",
+    # 任务15 债务纠纷：人与人的拉扯，归入关系与生命；交涉轮次也入 tab，避免会话完全消失。
+    "conflict_started", "conflict_negotiation_round", "conflict_resolved", "conflict_broken",
 }
 _FOCUS_ECONOMY = {
     "trade_executed", "market_day_summary", "inheritance_executed",
     "inheritance_escheated", "debt_formed", "debt_collected", "debt_repaid",
     "debt_defaulted", "debt_transferred", "debt_written_off", "debt_forgiven",
     "debt_collection_attempt", "birth_asset_transfer",
+    "debt_deferred",  # 任务15：债务延期是经济行为
 }
 _WORK_ACTIONS = {"farm", "harvest", "collect_water", "hunt", "fish", "gather", "weave"}
 _ECONOMY_ACTIONS = {"eat", "harvest", "borrow_grain", "trade", "buy", "sell"}
@@ -52,6 +58,11 @@ _TURNING_POINTS = {
     "migration_completed": "迁徙",
     "household_moved": "迁徙",
     "household_split": "分家 / 迁徙",
+    # 任务15 债务纠纷：交涉始末为关键转折；negotiation_round 轮次不加，避免每笔两次轮次刷屏。
+    "conflict_started": "债务交涉",
+    "conflict_resolved": "债务议和",
+    "conflict_broken": "交涉破裂",
+    "debt_deferred": "债务延期",
 }
 
 
@@ -242,6 +253,8 @@ def event_people(event: dict[str, Any]) -> list[dict[str, str]]:
         _add_person(
             people, seen, payload.get(f"{prefix}_id"), payload.get(f"{prefix}_name")
         )
+    for bare in _PERSON_BARE_ID_FIELDS:
+        _add_person_value(people, seen, payload.get(bare))
     for field_name in _MEMBER_FIELDS:
         members = payload.get(field_name)
         if isinstance(members, list):
