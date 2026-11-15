@@ -242,19 +242,16 @@ def test_borrow_conserves_grain_over_200_ticks(world):
 # 1080 tick 不全员灭绝（验收核心）
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("seed", [0, 1, 7, 42, 123])
-def test_1080_ticks_not_all_extinct_tech_debt(seed):
-    """技术债（任务12 step2 收尾）：人口承载力未解决，本测试暂不把“不全员灭绝”作为门禁。
-
-    原断言：assert survivors, f"seed={seed} 全员灭绝，违反可持续性下限"
-    解除条件：阶段三完成人口承载力调参后恢复。
-    """
+def test_1080_ticks_not_all_extinct(seed):
+    """1080 tick 不全员灭绝（阶段三验收：技术债断言已恢复）。"""
     w = _build(seed)
     curve: list[int] = []
     for tick in range(1, 1081):
         run_tick(w)
         if tick % 200 == 0:
             curve.append(sum(1 for a in w.state.agents.values() if a.alive))
-    print(f"[tech_debt] seed={seed} population_curve={curve}")
+    survivors = [a for a in w.state.agents.values() if a.alive]
+    assert survivors, f"seed={seed} 全员灭绝，违反可持续性下限"
     assert len(curve) == 5  # 每 200 tick 采样一次
     assert all(count >= 0 for count in curve)
     # 不变量（任务10：fish 加入守恒集合）

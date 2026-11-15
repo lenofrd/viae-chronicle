@@ -38,10 +38,22 @@ def living_households(world) -> list[HouseholdState]:
 
 
 def work_node_of(world, agent: AgentState) -> str:
-    """个人劳作点偏好优先；None 取家庭默认工作节点。"""
+    """劳作点解析（阶段二 C）：个人偏好 → 家庭可分配田块 → 家庭默认。
+
+    个人偏好由 AgentModule 对账保证有效（失效时置 None）；家庭 ``work_nodes`` 为空
+    （无田、非田默认点）时退回家庭默认 ``work_node``，与既有语义一致。
+    """
     if agent.work_node:
         return agent.work_node
-    return household_of(world, agent).work_node
+    household = household_of(world, agent)
+    nodes = household.work_nodes
+    if nodes:
+        try:
+            index = household.member_ids.index(agent.agent_id)
+        except ValueError:
+            index = 0
+        return nodes[index % len(nodes)]
+    return household.work_node
 
 
 def home_node_of(world, agent: AgentState) -> str:

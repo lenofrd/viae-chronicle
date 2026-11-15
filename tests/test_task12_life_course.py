@@ -374,19 +374,24 @@ def test_d7_newborn_attributes_use_parent_average_and_minimum(world):
 
 
 def test_d8_newborn_uses_household_work_node(world):
-    """D8 改写：新生儿加入母亲家庭，劳作点取家庭默认，源标注 household。"""
+    """D8 改写 + 阶段二 C：新生儿加入母亲家庭，劳作点取家庭可分配田块，源标注 household_allocation。
+
+    阶段二 C 起 work_node 解析为「个人偏好 → 家庭 work_nodes（按成员序确定性分配）→ 家庭默认」，
+    新生儿无个人偏好，故取家庭分配；work_nodes 为空（无田/非田默认点）时仍回退家庭默认。
+    """
     mod = _module(world)
     tuning = world.config.agents.tuning
     mother = world.state.agents["zhao_cuilan"]
     father = world.state.agents["lin_yuan"]
-    hh(world, mother).work_node = "south_field"
+    household = hh(world, mother)
+    household.work_node = "south_field"
     mod._give_birth(world, mother, father, tuning)  # noqa: SLF001
     child = world.state.agents["child_1"]
     assert child.work_node is None
-    assert work_node_of(world, child) == "south_field"
+    assert work_node_of(world, child) in household.work_nodes
     payload = world.event_log.by_type("agent_born")[-1]["payload"]
-    assert payload["work_node_source"] == "household"
-    assert payload["work_node"] == "south_field"
+    assert payload["work_node_source"] == "household_allocation"
+    assert payload["work_node"] == work_node_of(world, child)
 
 
 # =========================================================================== #
@@ -408,7 +413,8 @@ def test_d9_dependent_consumes_household_stock(world):
     father = world.state.agents["lin_yuan"]
     hh(world, mother).grain = 100.0
     hh(world, father).grain = 10.0
-    cost = tuning.physiology.eat_grain_cost
+    # 阶段三第2轮：未成年口粮按 consumption.minor_food_share 扣减（成年不变）
+    cost = tuning.physiology.eat_grain_cost * tuning.consumption.minor_food_share
 
     mod._execute(world, child, "eat", _eat_perception(child, home_node_of(world, child)), tuning)  # noqa: SLF001
     assert hh(world, mother).grain == pytest.approx(100.0 - cost)

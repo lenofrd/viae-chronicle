@@ -61,20 +61,23 @@ class AgricultureTuning(BaseModel):
     field_growth_per_farm: float = Field(5.0, ge=0, description="每次 farm 提升的长势")
     max_field_growth: float = Field(100.0, gt=0)
     harvest_growth_threshold: float = Field(80.0, ge=0, description="可秋收的最低长势")
-    # 作物名 -> 秋收产出量。作物名同时是 AgentState 的字段名（grain / vegetable / 未来 fruit），
-    # 与 spatial 节点上的 crop_type 对齐；新增作物只加配置，不改 harvest 核心结算。
-    crop_gain: dict[str, float] = Field(
-        default_factory=lambda: {"grain": 30.0}, description="各作物秋收产出量"
+    # crops.md §4.5 基准产量：expected_yield = base_yield × area × fertility × moisture
+    #   × growth_health × (1 − disaster_damage)。作物名同时是家庭库存字段名（grain / vegetable /
+    #   未来 fruit），与 spatial 节点上的 crop_type 对齐；新增作物只加配置，不改 harvest 核心结算。
+    # 阶段二其余因子取中性值（area=1、fertility=1、moisture=1、growth_health=1、disaster=0），
+    # 故产出与既有 crop_gain 逐项相等。
+    base_yield: dict[str, float] = Field(
+        default_factory=lambda: {"grain": 30.0}, description="各作物基准产量（crops.md §4.5 base_yield）"
     )
     harvest_debt_repayment: float = Field(10.0, ge=0, description="秋收时偿还的债务（石）")
 
     @model_validator(mode="after")
-    def _crop_gain_valid(self) -> "AgricultureTuning":
-        if not self.crop_gain:
-            raise ValueError("agriculture.crop_gain must not be empty")
-        for crop, gain in self.crop_gain.items():
+    def _base_yield_valid(self) -> "AgricultureTuning":
+        if not self.base_yield:
+            raise ValueError("agriculture.base_yield must not be empty")
+        for crop, gain in self.base_yield.items():
             if gain < 0:
-                raise ValueError(f"crop_gain[{crop}] must be >= 0")
+                raise ValueError(f"base_yield[{crop}] must be >= 0")
         return self
 
 
@@ -195,6 +198,19 @@ class HouseholdTuning(BaseModel):
     house_max_members: int = Field(8, ge=2, description="单户成员上限；婚配并入前校验")
 
 
+class LaborTuning(BaseModel):
+    """劳作点分配（阶段二 C，修缺陷、不调参）。
+
+    家庭可分配田块 = 默认田优先，其余按「家→田距离升序、节点 id 升序」；
+    户内按 member_ids 顺序轮流接田（确定性，禁止随机）。
+    """
+
+    allocation_policy: Literal["deterministic_distance"] = Field(
+        "deterministic_distance",
+        description="田块分配策略；阶段二只有确定性距离一种，非法值启动即报错",
+    )
+
+
 class SplitTuning(BaseModel):
     """分家（任务12 第3步，[调参]）。
 
@@ -251,6 +267,17 @@ class BirthTuning(BaseModel):
     default_surname: str = "某"
     name_fallback_suffix: str = "{name}{n}"
     asset_transfer_ratio: float = Field(0.1, ge=0, le=1, description="出生时父母各转移的存量比例")
+    # 阶段二 B：出生前校验户容量。原值 false = 旧行为（出生不看容量）；新值 true = 超限跳过本次生育。
+    # 理由：诊断显示最大户 10–11 人、超容 tick 占 3%–30%，出生路径完全绕过 house_max_members。
+    # 影响：只压需求峰值，不自动分家；婚配容量（Q6）语义不变。
+    respect_house_capacity: bool = Field(
+        True, description="出生前校验 len(member_ids)+1 <= house_max_members；超限跳过本次生育"
+    )
+    # 阶段二 §3.0「有设计」分支：01-physical-state.md §4.4 普通分娩 health −10。
+    # 难产（−40 + 死亡风险）设计未给概率，孕期体力限制依赖未实现的 pregnancy_stage，均登记缺口。
+    mother_health_cost: float = Field(
+        10.0, ge=0, le=100, description="分娩健康代价（设计值 −10；难产分支待设计）"
+    )
 
     @model_validator(mode="after")
     def _birth_valid(self) -> "BirthTuning":
@@ -291,6 +318,18 @@ class DependencyTuning(BaseModel):
 
     max_age: int = Field(16, ge=0)
     feed_from_parent: bool = True
+
+
+class ConsumptionTuning(BaseModel):
+    """食物消费端系数（阶段三第2轮，[调参]）。
+
+    只作用于 ``eat`` 的库存扣减量：未成年人单次进食按 ``minor_food_share`` 扣减，
+    成年恒为 1.0；饥饿降低量、动作评分与效用公式均不变。
+    """
+
+    minor_food_share: float = Field(
+        0.7, ge=0, le=1, description="未成年人单次进食的库存消耗系数（1.0 = 与成年同量）"
+    )
 
 
 class TimeTuning(BaseModel):
@@ -396,7 +435,9 @@ class AgentTuning(BaseModel):
     birth: BirthTuning = Field(default_factory=BirthTuning)
     inheritance: InheritanceTuning = Field(default_factory=InheritanceTuning)
     dependency: DependencyTuning = Field(default_factory=DependencyTuning)
+    consumption: ConsumptionTuning = Field(default_factory=ConsumptionTuning)
     household: HouseholdTuning = Field(default_factory=HouseholdTuning)
+    labor: LaborTuning = Field(default_factory=LaborTuning)
     split: SplitTuning = Field(default_factory=SplitTuning)
     time: TimeTuning = Field(default_factory=TimeTuning)
 

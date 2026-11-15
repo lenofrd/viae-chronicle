@@ -61,6 +61,12 @@
       产后休养（1–2 个月）：max_stamina 恢复中，无法进行重体力劳作
 ```
 
+> **部分已落地（盈余经济阶段二，2026-11-15）**：出生时母亲 `health −= birth.mother_health_cost`（默认 10，
+> 即「普通成功 −10」），`agent_born` 追加 `mother_health_before/after`，见 [11-life-course §7.1](file:///f:/viae-chronicle/docs/design/systems/agents/11-life-course.md#L160-L169)。
+> **未实现**：`pregnancy_started` / `pregnancy_stage`（孕期分段与体力限制）、难产风险、产后休养——
+> 本节**框架完整、只缺数值**（孕期时长、难产概率、产后恢复参数），阶段三前补数值即可实现，不需重新设计
+> （缺口登记见 [11-life-course §18 G6](file:///f:/viae-chronicle/docs/design/systems/agents/11-life-course.md#L421)）。
+
 ### 4.5 健康与死亡
 ```
 条件：health <= 0 或 age > 寿命阈值（考虑性别差异，女性略高）

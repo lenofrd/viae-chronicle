@@ -78,7 +78,10 @@ def test_borrow_transaction_conserves_grain(world):
     run_tick(world)
     world.config.agents.tuning.gathering.actions.clear()
     lin = world.state.agents["lin_yuan"]
-    hh(world, lin).grain = 0.0
+    # 断粮 = 四个食物字段全部清零（阶段三第1轮：捕鱼产出提高后，仅清 grain 会残留首日渔获，
+    # 使“断粮”前置不成立、用例随未 seeded 气候/采集随机偶发失败）
+    for field in ("grain", "vegetable", "meat", "fish"):
+        setattr(hh(world, lin), field, 0.0)
     lin.hunger = 95.0
     lin.stamina = 100.0  # 体力满：borrow > rest（同 test_borrow_grain_triggers_when_low_grain）
     for _ in range(12):

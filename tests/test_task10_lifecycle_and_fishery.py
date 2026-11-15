@@ -423,12 +423,8 @@ def test_new_gather_action_plugs_in_without_core_changes(world):
 # 长程：1800 tick × 5 种子不全员灭绝（任务 §6.14）
 # =========================================================================== #
 @pytest.mark.parametrize("seed", [0, 1, 7, 42, 123])
-def test_1800_ticks_not_all_extinct_with_diverse_food_tech_debt(seed):
-    """技术债（任务12 step2 收尾）：人口承载力未解决，暂不把存活人数作为门禁。
-
-    原断言：assert alive, f"seed={seed} 1800 tick 全员灭绝"
-    解除条件：阶段三完成人口承载力调参后恢复。
-    """
+def test_1800_ticks_not_all_extinct_with_diverse_food(seed):
+    """1800 tick 不全员灭绝（阶段三验收：技术债断言已恢复）。"""
     w = _build(seed)
     harvest_grain = 0.0
     fish_amount = 0.0
@@ -437,7 +433,8 @@ def test_1800_ticks_not_all_extinct_with_diverse_food_tech_debt(seed):
         run_tick(w)
         if tick % 200 == 0:
             curve.append(sum(1 for a in w.state.agents.values() if a.alive))
-    print(f"[tech_debt] seed={seed} population_curve={curve}")
+    alive = sum(1 for a in w.state.agents.values() if a.alive)
+    assert alive, f"seed={seed} 1800 tick 全员灭绝"
     assert len(curve) == 9
     assert all(count >= 0 for count in curve)
     for a in w.state.agents.values():

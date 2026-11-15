@@ -409,6 +409,41 @@ def _render_household_dissolved(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
+def _render_household_work_nodes_changed(payload: dict) -> tuple[str, bool]:
+    household = payload.get("household_id") or "?"
+    before = payload.get("before") or []
+    after = payload.get("after") or []
+    workers = payload.get("work_capable_members")
+    suffix = f"（可劳作 {_num(workers)} 人）" if workers is not None else ""
+    text = (
+        f"家庭 {household} 可分配田块由 {'/'.join(map(str, before)) or '无'} "
+        f"调整为 {'/'.join(map(str, after)) or '无'}{suffix}"
+    )
+    degraded = not all(k in payload for k in ("household_id", "after"))
+    return text, degraded
+
+
+def _render_agent_work_node_changed(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    before = payload.get("before") or "无"
+    after = payload.get("after") or "家庭分配"
+    text = f"[{name}] 劳作点由 {before} 改为 {after}"
+    if payload.get("reason") == "preference_invalid":
+        text += "（原偏好失效）"
+    degraded = not all(k in payload for k in ("agent_id", "reason"))
+    return text, degraded
+
+
+def _render_birth_skipped(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    household = payload.get("household_id") or "?"
+    count = _num(payload.get("member_count"))
+    cap = _num(payload.get("house_max_members"))
+    text = f"家庭 {household} 已有 {count} 人达上限 {cap}，[{name}] 本次生育顺延"
+    degraded = not all(k in payload for k in ("agent_id", "house_max_members"))
+    return text, degraded
+
+
 def _render_debt_written_off(payload: dict) -> tuple[str, bool]:
     creditor = payload.get("creditor_name") or payload.get("creditor_id") or "?"
     debtor = payload.get("debtor_name") or payload.get("debtor_id") or "?"
@@ -569,6 +604,15 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "household_dissolved":
             text, degraded = _render_household_dissolved(payload)
             reason = "missing_household_field" if degraded else None
+        elif event_type == "household_work_nodes_changed":
+            text, degraded = _render_household_work_nodes_changed(payload)
+            reason = "missing_household_field" if degraded else None
+        elif event_type == "agent_work_node_changed":
+            text, degraded = _render_agent_work_node_changed(payload)
+            reason = "missing_life_field" if degraded else None
+        elif event_type == "birth_skipped":
+            text, degraded = _render_birth_skipped(payload)
+            reason = "missing_life_field" if degraded else None
         elif event_type == "debt_written_off":
             text, degraded = _render_debt_written_off(payload)
             reason = "missing_debt_field" if degraded else None

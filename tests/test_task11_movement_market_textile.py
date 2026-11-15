@@ -417,7 +417,7 @@ def test_west_field_yields_vegetable_not_grain(world):
     world.state.field_growth["west_field"] = 90.0
     p = mod._perceive(world, lin)  # noqa: SLF001
     mod._execute(world, lin, "harvest", p, tuning)  # noqa: SLF001
-    assert hh(world, lin).vegetable == pytest.approx(tuning.agriculture.crop_gain["vegetable"])
+    assert hh(world, lin).vegetable == pytest.approx(tuning.agriculture.base_yield["vegetable"])
     assert hh(world, lin).grain == pytest.approx(10.0)  # 菜田不产粮
     ev = world.event_log.by_type("agent_action_taken")[-1]["payload"]
     assert ev["crop"] == "vegetable"
@@ -449,7 +449,7 @@ def test_crop_type_is_configurable_without_core_change(world):
     world.state.field_growth["east_field"] = 90.0
     p = mod._perceive(world, zhao)  # noqa: SLF001
     mod._execute(world, zhao, "harvest", p, tuning)  # noqa: SLF001
-    assert hh(world, zhao).vegetable == pytest.approx(tuning.agriculture.crop_gain["vegetable"])
+    assert hh(world, zhao).vegetable == pytest.approx(tuning.agriculture.base_yield["vegetable"])
 
 
 # --------------------------------------------------------------------------- #
@@ -573,19 +573,16 @@ def test_survival_gate_not_triggered_without_food(world):
 # 八、阶段二长程自检（2 种子 × 1080 tick）
 # --------------------------------------------------------------------------- #
 @pytest.mark.parametrize("seed", [0, 7])
-def test_phase_two_long_run_has_survivors_and_no_errors_tech_debt(seed):
-    """技术债（任务12 step2 收尾）：人口承载力未解决，暂不把存活人数作为门禁。
-
-    原断言：assert [a for a in w.state.agents.values() if a.alive]
-    解除条件：阶段三完成人口承载力调参后恢复。
-    """
+def test_phase_two_long_run_has_survivors_and_no_errors(seed):
+    """长程自检：1080 tick 有存活人口且无 agent_error（阶段三验收：技术债断言已恢复）。"""
     w = _build(seed)
     curve: list[int] = []
     for tick in range(1, 1081):
         run_tick(w)
         if tick % 200 == 0:
             curve.append(sum(1 for a in w.state.agents.values() if a.alive))
-    print(f"[tech_debt] seed={seed} population_curve={curve}")
+    survivors = [a for a in w.state.agents.values() if a.alive]
+    assert survivors
     assert len(curve) == 5
     assert all(count >= 0 for count in curve)
     assert not w.event_log.by_type("agent_error")
