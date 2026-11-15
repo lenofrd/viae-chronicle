@@ -18,14 +18,32 @@ class EventFilter:
     tick_to: Optional[int] = None    # 包含
     limit: Optional[int] = None      # None = 不限
     reverse: bool = False
+    # 任务12 D14：timeline 开启参与人匹配（姓名或 id 命中 participants），events list 保持旧行为
+    match_participants: bool = False
 
 
-def _matches_agent(evt: dict, agent: str) -> bool:
-    """人物筛选：payload.agent_name 命中；无该字段的事件（天气/换季）不匹配。"""
+def _matches_agent(evt: dict, agent: str, match_participants: bool = False) -> bool:
+    """人物筛选：默认 payload.agent_name 命中；开启参与人匹配时再看 participants。
+
+    无该字段的事件（天气/换季）不匹配。参与者元素支持 dict（id/name）或字符串。
+    """
     payload = evt.get("payload")
     if not isinstance(payload, dict):
         return False
-    return payload.get("agent_name") == agent
+    if payload.get("agent_name") == agent:
+        return True
+    if not match_participants:
+        return False
+    participants = payload.get("participants")
+    if not isinstance(participants, list):
+        return False
+    for p in participants:
+        if isinstance(p, dict):
+            if agent in (p.get("name"), p.get("id")):
+                return True
+        elif isinstance(p, str) and p == agent:
+            return True
+    return False
 
 
 def apply_filter(events: list[dict], f: EventFilter) -> list[dict]:
@@ -34,7 +52,7 @@ def apply_filter(events: list[dict], f: EventFilter) -> list[dict]:
     for evt in events:
         if f.event_types and evt.get("event_type") not in f.event_types:
             continue
-        if f.agent and not _matches_agent(evt, f.agent):
+        if f.agent and not _matches_agent(evt, f.agent, f.match_participants):
             continue
         tick = evt.get("tick")
         if f.tick_from is not None and (tick is None or tick < f.tick_from):

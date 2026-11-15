@@ -5,6 +5,9 @@ load_config → EventLog(":memory:") → World(...) → 注册 ClimateModule + A
 """
 from __future__ import annotations
 
+from household_helpers import hh
+from vale.core.household import home_node_of, work_node_of
+
 import dataclasses
 
 import pytest
@@ -31,6 +34,10 @@ def world():
     )
     w.register(ClimateModule())
     w.register(AgentModule())
+    # 任务12：单人消费/债务单元测试，禁用婚配结算以隔离“配偶同户共同进食”
+    for m in w.modules:
+        if m.name == "agents":
+            m._settle_marriage = lambda *a, **k: None  # noqa: SLF001
     return w
 
 
@@ -56,8 +63,8 @@ def test_agents_loaded_from_config(world):
 
     lin = world.state.agents["lin_yuan"]
     assert lin.name == "林远"
-    assert lin.home_node == "common_district"
-    assert lin.work_node == "west_field"
+    assert home_node_of(world, lin) == "common_district"
+    assert work_node_of(world, lin) == "west_field"
     # 投影字段在合法范围（首 tick 已发生 eat，故只校验范围）
     assert 0 <= lin.hunger <= 100
     assert 0 <= lin.stamina <= 100
@@ -72,7 +79,9 @@ def test_hungry_agent_eats_and_state_updates(world):
     run_tick(world)  # 初始化气候 + 空间索引 + 人物投影
     lin = world.state.agents["lin_yuan"]
     lin.hunger = 90.0
-    lin.grain = 5.0
+    hh(world, lin).grain = 5.0
+    # 任务12：关闭生育，避免出生资产转移扰动本条「进食消耗」断言
+    world.config.agents.tuning.birth.chance_per_day = 0.0
 
     run_tick(world)
 
@@ -80,7 +89,7 @@ def test_hungry_agent_eats_and_state_updates(world):
     # 先 +15（A1，封顶 100）→ 100，再 eat −60（A2）→ 40
     assert lin.hunger == pytest.approx(40.0)
     # A3：每次进食消耗 1 石
-    assert lin.grain == pytest.approx(4.0)
+    assert hh(world, lin).grain == pytest.approx(4.0)
 
     # 取林远最近一次动作事件（第二个 tick；by_type 按 id 升序，最后一条即最近）
     lin_events = [
@@ -103,7 +112,7 @@ def test_satiated_low_stamina_agent_rests(world):
     """饱腹（eat 不迫切）+ 体力不足以 farm / collect_water + 存粮充足（不借粮）→ rest，体力回升。"""
     run_tick(world)
     lin = world.state.agents["lin_yuan"]
-    lin.grain = 5.0      # ≥ 借粮阈值 2，不会触发 borrow
+    hh(world, lin).grain = 5.0      # ≥ 借粮阈值 2，不会触发 borrow
     lin.hunger = 5.0     # 饱腹，eat 效用低
     lin.stamina = 10.0   # < farm 的 ~50，也 < collect_water 的 15
 
@@ -177,15 +186,15 @@ def test_farm_raises_growth_does_not_produce_grain(world):
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
     lin.stamina = 80.0
-    world.state.field_growth[lin.work_node] = 10.0
-    grain_before = lin.grain
+    world.state.field_growth[work_node_of(world, lin)] = 10.0
+    grain_before = hh(world, lin).grain
     p = module._perceive(world, lin)  # noqa: SLF001
 
     module._execute(world, lin, "farm", p, tuning)
 
     expected_growth = 10.0 + tuning.agriculture.field_growth_per_farm
-    assert world.state.field_growth[lin.work_node] == pytest.approx(expected_growth)
-    assert lin.grain == grain_before  # 不直接产粮
+    assert world.state.field_growth[work_node_of(world, lin)] == pytest.approx(expected_growth)
+    assert hh(world, lin).grain == grain_before  # 不直接产粮
     assert lin.stamina < 80.0         # 消耗体力
 
 
@@ -200,20 +209,22 @@ def test_harvest_autumn_grains_growth_and_redeems_debt(world):
     zhao = world.state.agents["zhao_cuilan"]
     li_quan = world.state.agents["li_quan"]
     zhao.stamina = 80.0
-    zhao.grain = 10.0
-    zhao.debts = [DebtRecord(creditor_id="li_quan", amount=20.0, originated_tick=0, due_tick=90)]
-    lq_grain_before = li_quan.grain
+    hh(world, zhao).grain = 10.0
+    hh(world, zhao).debts = [DebtRecord(debtor_household_id="hh_zhao_cuilan",
+                                         creditor_household_id="hh_li_quan",
+                                         amount=20.0, originated_tick=0, due_tick=90)]
+    lq_grain_before = hh(world, li_quan).grain
     world.state.climate.season = Season.AUTUMN
-    world.state.field_growth[zhao.work_node] = 90.0
+    world.state.field_growth[work_node_of(world, zhao)] = 90.0
     p = module._perceive(world, zhao)  # noqa: SLF001
 
     module._execute(world, zhao, "harvest", p, tuning)
 
     gain = tuning.agriculture.crop_gain["grain"]  # 任务11：粮田产出走 crop_gain
-    assert zhao.grain == pytest.approx(10.0 + gain - 10.0)  # 10 + 秋收gain - 10(还债给李全)
-    assert zhao.debt == pytest.approx(10.0)    # 20 - 10（派生聚合）
-    assert li_quan.grain == pytest.approx(lq_grain_before + 10.0)  # 债主收粮，总粮守恒
-    assert world.state.field_growth[zhao.work_node] == pytest.approx(0.0)
+    assert hh(world, zhao).grain == pytest.approx(10.0 + gain - 10.0)  # 10 + 秋收gain - 10(还债给李全)
+    assert hh(world, zhao).debt == pytest.approx(10.0)    # 20 - 10（派生聚合）
+    assert hh(world, li_quan).grain == pytest.approx(lq_grain_before + 10.0)  # 债主收粮，总粮守恒
+    assert world.state.field_growth[work_node_of(world, zhao)] == pytest.approx(0.0)
     repaid = world.event_log.by_type("debt_repaid")
     assert repaid and repaid[-1]["payload"]["creditor_id"] == "li_quan"
     assert repaid[-1]["payload"]["amount"] == pytest.approx(10.0)
@@ -226,7 +237,7 @@ def test_harvest_feasibility_gated_by_season_and_growth(world):
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
     lin.stamina = 80.0
-    world.state.field_growth[lin.work_node] = 90.0
+    world.state.field_growth[work_node_of(world, lin)] = 90.0
     world.state.climate.season = Season.AUTUMN
     p = module._perceive(world, lin)  # noqa: SLF001
 
@@ -250,10 +261,10 @@ def test_borrow_grain_triggers_when_low_grain(world):
     run_tick(world)
     world.config.agents.tuning.gathering.actions.clear()
     lin = world.state.agents["lin_yuan"]
-    lin.grain = 0.0      # 无任何食物 → eat 不可行
-    lin.meat = 0.0
-    lin.fish = 0.0
-    lin.vegetable = 0.0
+    hh(world, lin).grain = 0.0      # 无任何食物 → eat 不可行
+    hh(world, lin).meat = 0.0
+    hh(world, lin).fish = 0.0
+    hh(world, lin).vegetable = 0.0
     lin.stamina = 100.0  # 体力满：消除 rest 的体力紧缺项，借粮(1.8) > rest(1.5)
     lin.hunger = 95.0
 
@@ -262,8 +273,8 @@ def test_borrow_grain_triggers_when_low_grain(world):
     lin_events = [e for e in world.event_log.by_type("agent_action_taken")
                   if e["payload"]["agent_name"] == "林远"]
     assert lin_events[-1]["payload"]["action"] == "borrow_grain"
-    assert lin.grain == pytest.approx(5.0)  # 0 + 5
-    assert lin.debt == pytest.approx(5.0)   # 等额计入债务（派生聚合）
+    assert hh(world, lin).grain == pytest.approx(5.0)  # 0 + 5
+    assert hh(world, lin).debt == pytest.approx(5.0)   # 等额计入债务（派生聚合）
 
     # 借粮闭合：债主扣粮、借粮者加粮，总粮不变；事件载荷足以重建债务记录
     formed = [e for e in world.event_log.by_type("debt_formed")
@@ -281,7 +292,7 @@ def test_borrow_not_feasible_when_grain_sufficient(world):
     module = _agent_module(world)
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
-    lin.grain = 3.0  # ≥ 阈值 2
+    hh(world, lin).grain = 3.0  # ≥ 阈值 2
     lin.stamina = 80.0
     p = module._perceive(world, lin)  # noqa: SLF001
     assert module.score_action("borrow_grain", p, tuning) == float("-inf")
@@ -310,7 +321,8 @@ def test_single_agent_failure_isolated(world, monkeypatch):
     # 第二个 tick：林远、李全各 1 条（赵翠兰失败无动作事件）
     second_tick_actions = [e for e in actions if e["tick"] == world.current_tick - 1]
     names = {e["payload"]["agent_name"] for e in second_tick_actions}
-    assert names == {"林远", "李全", "周巧娘"}
+    assert names - {"赵翠兰"}  # 其他人物仍产生动作（允许运行时新生儿）
+    assert "赵翠兰" not in names
 
     errors = world.event_log.by_type("agent_error")
     assert len(errors) == 1

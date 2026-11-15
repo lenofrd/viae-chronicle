@@ -264,12 +264,160 @@ def _render_agent_incapacitated(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
+# 死因中文映射（任务12）；未知值原样展示且不降级（兼容旧事件 health_bottomed）
+CAUSE_DESC = {
+    "starvation": "饿死",
+    "aging": "衰老",
+    "injury": "伤重",
+    "illness": "病故",
+    "health_bottomed": "健康耗尽",
+}
+
+
 def _render_agent_died(payload: dict) -> tuple[str, bool]:
     name = payload.get("agent_name") or payload.get("agent_id") or "?"
     cause = payload.get("cause", "?")
     debt = _num(payload.get("outstanding_debt"))
-    text = f"[{name}] 死亡（{cause}），遗留债务 {debt} 石"
+    text = f"[{name}] 死亡（{CAUSE_DESC.get(cause, cause)}），遗留债务 {debt} 石"
     degraded = not all(k in payload for k in ("agent_id", "died_tick"))
+    return text, degraded
+
+
+def _render_agent_aged(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    age = _num(payload.get("age"))
+    old_stage = payload.get("old_stage", "?")
+    new_stage = payload.get("new_stage", "?")
+    before = _num(payload.get("health_cap_before"))
+    after = _num(payload.get("health_cap_after"))
+    if payload.get("stage_changed"):
+        text = f"[{name}] 年满 {age} 岁，入{new_stage}（健康上限 {before} → {after}）"
+    else:
+        text = f"[{name}] 年满 {age} 岁，仍在{new_stage}（健康上限 {before} → {after}）"
+    if old_stage == "?":
+        text = f"[{name}] 年满 {age} 岁（健康上限 {before} → {after}）"
+    degraded = not all(k in payload for k in ("agent_id", "age", "health_cap_after"))
+    return text, degraded
+
+
+def _render_agent_married(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    spouse = payload.get("spouse_name") or payload.get("spouse_id") or "?"
+    dist = _num(payload.get("distance_tu"))
+    text = f"[{name}] 与 [{spouse}] 结为夫妻（相距 {dist} TU）"
+    degraded = not all(k in payload for k in ("agent_id", "spouse_id"))
+    return text, degraded
+
+
+def _render_agent_born(payload: dict) -> tuple[str, bool]:
+    child = payload.get("child_name") or payload.get("agent_name") or payload.get("child_id") or "?"
+    mother = payload.get("mother_name") or payload.get("mother_id") or "?"
+    father = payload.get("father_name") or payload.get("father_id") or "?"
+    pop = payload.get("population_after")
+    suffix = f"，人口 {_num(pop)}" if pop is not None else ""
+    text = f"[{child}] 出生（母 {mother}，父 {father}{suffix}）"
+    degraded = not all(k in payload for k in ("child_id", "mother_id", "father_id"))
+    return text, degraded
+
+
+def _render_birth_asset_transfer(payload: dict) -> tuple[str, bool]:
+    parent = payload.get("parent_name") or payload.get("parent_id") or "?"
+    child = payload.get("child_name") or payload.get("child_id") or "?"
+    items = payload.get("items") or {}
+    parts = []
+    if isinstance(items, dict):
+        for item, qty in items.items():
+            unit = ITEM_DESC.get(item, ("", ""))[0]
+            parts.append(f"{_item_name(item)} {_num(qty)} {unit}".strip())
+    text = f"[{parent}] 分给新生儿 [{child}] " + ("、".join(parts) if parts else "若干食物")
+    degraded = not all(k in payload for k in ("parent_id", "child_id", "items"))
+    return text, degraded
+
+
+def _render_inheritance_executed(payload: dict) -> tuple[str, bool]:
+    heir = payload.get("heir_name") or payload.get("heir_id") or "?"
+    deceased = payload.get("deceased_name") or payload.get("deceased_id") or "?"
+    item = payload.get("item")
+    amount = _num(payload.get("amount"))
+    unit = ITEM_DESC.get(item, ("", ""))[0]
+    after = _num(payload.get("heir_after"))
+    text = f"[{heir}] 继承 [{deceased}] 的{_item_name(item)} {amount} {unit}（继承后 {after}）".replace("  ", " ")
+    degraded = not all(k in payload for k in ("heir_id", "deceased_id", "item", "amount"))
+    return text, degraded
+
+
+def _render_inheritance_escheated(payload: dict) -> tuple[str, bool]:
+    deceased = payload.get("deceased_name") or payload.get("deceased_id") or "?"
+    item = payload.get("item")
+    amount = _num(payload.get("amount"))
+    unit = ITEM_DESC.get(item, ("", ""))[0]
+    text = f"[{deceased}] 的{_item_name(item)} {amount} {unit}无人继承，归公".replace("  ", " ")
+    degraded = not all(k in payload for k in ("deceased_id", "item", "amount"))
+    return text, degraded
+
+
+def _render_debt_transferred(payload: dict) -> tuple[str, bool]:
+    heir = payload.get("to_name") or payload.get("to_id") or "?"
+    deceased = payload.get("from_name") or payload.get("from_id") or "?"
+    creditor = payload.get("creditor_name") or payload.get("creditor_id") or "?"
+    amount = _num(payload.get("amount"))
+    text = f"[{heir}] 承继 [{deceased}] 欠 [{creditor}] 的债务 {amount} 石"
+    degraded = not all(k in payload for k in ("from_id", "to_id", "creditor_id", "amount"))
+    return text, degraded
+
+
+def _render_household_merged(payload: dict) -> tuple[str, bool]:
+    target = payload.get("target_household_id") or "?"
+    source = payload.get("source_household_id") or "?"
+    after_map = payload.get("target_assets_after") or {}
+    after = after_map.get("grain") if isinstance(after_map, dict) else None
+    members = len(payload.get("members_after") or [])
+    text = f"家庭 {source} 并入 {target}（现有 {members} 人，存粮 {_num(after)} 石）"
+    degraded = not all(k in payload for k in ("target_household_id", "source_household_id"))
+    return text, degraded
+
+
+def _render_household_split(payload: dict) -> tuple[str, bool]:
+    source = payload.get("source_household_id") or "?"
+    new_id = payload.get("new_household_id") or "?"
+    head = payload.get("head_name") or payload.get("head_id") or "?"
+    members = len(payload.get("members") or [])
+    home = payload.get("home_node") or "?"
+    text = f"家庭 {source} 分家：{head} 另立 {new_id}（{members} 人，住所 {home}）"
+    degraded = not all(k in payload for k in ("source_household_id", "new_household_id"))
+    return text, degraded
+
+
+def _render_household_head_changed(payload: dict) -> tuple[str, bool]:
+    household = payload.get("household_id") or "?"
+    old_head = payload.get("old_head_name") or payload.get("old_head_id") or "?"
+    new_head = payload.get("new_head_name") or payload.get("new_head_id") or "?"
+    suffix = "（未成年户主）" if payload.get("head_is_minor") else ""
+    text = f"家庭 {household} 户主由 [{old_head}] 变更为 [{new_head}]{suffix}"
+    degraded = not all(k in payload for k in ("household_id", "new_head_id"))
+    return text, degraded
+
+
+def _render_household_dissolved(payload: dict) -> tuple[str, bool]:
+    household = payload.get("household_id") or "?"
+    last = payload.get("last_member_name") or payload.get("last_member_id") or "?"
+    debts = payload.get("debts")
+    text = f"家庭 {household} 因最后成员 [{last}] 死亡而消亡"
+    if debts is not None:
+        text += f"（遗留债务 {_num(debts)} 笔）"
+    degraded = not all(k in payload for k in ("household_id", "last_member_id"))
+    return text, degraded
+
+
+def _render_debt_written_off(payload: dict) -> tuple[str, bool]:
+    creditor = payload.get("creditor_name") or payload.get("creditor_id") or "?"
+    debtor = payload.get("debtor_name") or payload.get("debtor_id") or "?"
+    amount = _num(payload.get("amount"))
+    reason = payload.get("reason", "")
+    text = f"[{debtor}] 欠 [{creditor}] 的 {amount} 石债务核销"
+    if reason:
+        text += f"（{reason}）"
+    degraded = not all(k in payload for k in ("amount",))
     return text, degraded
 
 
@@ -410,6 +558,20 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "agent_died":
             text, degraded = _render_agent_died(payload)
             reason = "missing_life_field" if degraded else None
+        elif event_type == "household_merged":
+            text, degraded = _render_household_merged(payload)
+        elif event_type == "household_split":
+            text, degraded = _render_household_split(payload)
+            reason = "missing_household_field" if degraded else None
+        elif event_type == "household_head_changed":
+            text, degraded = _render_household_head_changed(payload)
+            reason = "missing_household_field" if degraded else None
+        elif event_type == "household_dissolved":
+            text, degraded = _render_household_dissolved(payload)
+            reason = "missing_household_field" if degraded else None
+        elif event_type == "debt_written_off":
+            text, degraded = _render_debt_written_off(payload)
+            reason = "missing_debt_field" if degraded else None
         elif event_type == "debt_collection_attempt":
             text, degraded = _render_debt_collection_attempt(payload)
             reason = "missing_debt_field" if degraded else None
@@ -431,6 +593,27 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "cold_exposure":
             text, degraded = _render_cold_exposure(payload)
             reason = "missing_cold_field" if degraded else None
+        elif event_type == "agent_aged":
+            text, degraded = _render_agent_aged(payload)
+            reason = "missing_life_field" if degraded else None
+        elif event_type == "agent_married":
+            text, degraded = _render_agent_married(payload)
+            reason = "missing_life_field" if degraded else None
+        elif event_type == "agent_born":
+            text, degraded = _render_agent_born(payload)
+            reason = "missing_life_field" if degraded else None
+        elif event_type == "birth_asset_transfer":
+            text, degraded = _render_birth_asset_transfer(payload)
+            reason = "missing_life_field" if degraded else None
+        elif event_type == "inheritance_executed":
+            text, degraded = _render_inheritance_executed(payload)
+            reason = "missing_life_field" if degraded else None
+        elif event_type == "inheritance_escheated":
+            text, degraded = _render_inheritance_escheated(payload)
+            reason = "missing_life_field" if degraded else None
+        elif event_type == "debt_transferred":
+            text, degraded = _render_debt_transferred(payload)
+            reason = "missing_life_field" if degraded else None
         else:
             # 未知事件类型兜底：展示原始载荷键（截断），不崩
             keys = ", ".join(list(payload.keys())[:8])

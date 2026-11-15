@@ -30,6 +30,7 @@
 - **06-actions.md**：人物能执行的具体动作清单（区分社会期望与越轨行为）。
 - **09-dynamics.md**：习惯化、衰老、性别观念的代际演变。
 - **10-state-and-records.md**：人物快照与人生事件流。
+- **11-life-course.md**：家庭、出生、年龄分段、婚育、继承、分家与死因（任务 12 已落地）。
 
 ## 4. 状态变量总表（按角色挂载）
 | 模块 | 典型变量 | 变化速率 |
@@ -63,5 +64,6 @@
 - 决策：效用打分制，叠加社会规范成本。
 
 ## 8. 横切机制引用
-- 变化速率与滞后见 `09-dynamics/`。
-- 状态记录与快照遵循 `10-state-and-records/`。
+- 变化速率与滞后见 [09-dynamics.md](file:///f:/viae-chronicle/docs/design/systems/agents/09-dynamics.md)。
+- 状态记录与快照遵循 [10-state-and-records.md](file:///f:/viae-chronicle/docs/design/systems/agents/10-state-and-records.md)。
+- 家庭经济单位、婚育、继承、分家与死因见 [11-life-course.md](file:///f:/viae-chronicle/docs/design/systems/agents/11-life-course.md)。

@@ -1,0 +1,115 @@
+{
+ "seed": 1,
+ "ticks": 200,
+ "event_count": 1567,
+ "agents": {
+  "lin_yuan": {
+   "alive": true,
+   "born_tick": -6479,
+   "sex": "male",
+   "assets": {
+    "grain": 0.8,
+    "meat": 0.0,
+    "fish": 17.8,
+    "vegetable": 0.0,
+    "cloth": 136.0
+   },
+   "debt": 2.5,
+   "home_node": "common_district",
+   "work_node": "west_field",
+   "spouse_id": "zhou_qiaoniang",
+   "mother_id": null,
+   "father_id": null
+  },
+  "zhao_cuilan": {
+   "alive": true,
+   "born_tick": -8279,
+   "sex": "female",
+   "assets": {
+    "grain": 0.0,
+    "meat": 0.0,
+    "fish": 21.0,
+    "vegetable": 0.0,
+    "cloth": 20.0
+   },
+   "debt": 0.0,
+   "home_node": "poor_district",
+   "work_node": "east_field",
+   "spouse_id": "li_quan",
+   "mother_id": null,
+   "father_id": null
+  },
+  "li_quan": {
+   "alive": true,
+   "born_tick": -17279,
+   "sex": "male",
+   "assets": {
+    "grain": 109.75,
+    "meat": 0.0,
+    "fish": 2.7,
+    "vegetable": 0.0,
+    "cloth": 28.0
+   },
+   "debt": 0.0,
+   "home_node": "rich_district",
+   "work_node": "south_field",
+   "spouse_id": "zhao_cuilan",
+   "mother_id": null,
+   "father_id": null
+  },
+  "zhou_qiaoniang": {
+   "alive": false,
+   "born_tick": -11519,
+   "sex": "female",
+   "assets": {
+    "grain": 0.0,
+    "meat": 0.0,
+    "fish": 0.0,
+    "vegetable": 0.0,
+    "cloth": 0.0
+   },
+   "debt": 0.0,
+   "home_node": "common_district",
+   "work_node": "market",
+   "spouse_id": "lin_yuan",
+   "mother_id": null,
+   "father_id": null
+  },
+  "child_1": {
+   "alive": true,
+   "born_tick": 12,
+   "sex": "female",
+   "assets": {
+    "grain": 0.4,
+    "meat": 0.0,
+    "fish": 0.2,
+    "vegetable": 0.5,
+    "cloth": 0.0
+   },
+   "debt": 0.0,
+   "home_node": "common_district",
+   "work_node": "market",
+   "spouse_id": null,
+   "mother_id": "zhou_qiaoniang",
+   "father_id": "lin_yuan"
+  },
+  "child_2": {
+   "alive": true,
+   "born_tick": 133,
+   "sex": "female",
+   "assets": {
+    "grain": 0.75,
+    "meat": 0.0,
+    "fish": 0.3,
+    "vegetable": 0.0,
+    "cloth": 0.0
+   },
+   "debt": 0.0,
+   "home_node": "poor_district",
+   "work_node": "east_field",
+   "spouse_id": null,
+   "mother_id": "zhao_cuilan",
+   "father_id": "li_quan"
+  }
+ }
+}

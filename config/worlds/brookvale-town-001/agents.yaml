@@ -126,6 +126,71 @@ tuning:
     warmth_cloth_threshold: 3           # [调参] 冬季御寒所需布量（达到即免寒冷惩罚）
     cold_health_loss: 2                 # [调参] 无布御寒时每日健康损失
 
+  aging:                                # 任务12 新增：年龄分段与衰老
+    life_stages:                        # [调参] 年龄分段：体力/健康上限乘数、劳作许可、受伤风险
+      - { name: 幼年, min_age: 0, max_age: 12, stamina_max_mult: 0.40, stamina_recovery_mult: 0.80, health_max_mult: 0.70, work_allowed: false, injury_risk_mult: 0.5 }
+      - { name: 青年, min_age: 12, max_age: 30, stamina_max_mult: 1.00, stamina_recovery_mult: 1.00, health_max_mult: 1.00, work_allowed: true, injury_risk_mult: 1.0 }
+      - { name: 壮年, min_age: 30, max_age: 50, stamina_max_mult: 0.95, stamina_recovery_mult: 0.85, health_max_mult: 0.95, work_allowed: true, injury_risk_mult: 1.0 }
+      - { name: 老年, min_age: 50, max_age: null, stamina_max_mult: 0.60, stamina_recovery_mult: 0.55, health_max_mult: 0.65, work_allowed: true, injury_risk_mult: 1.5 }
+    health_cap_decline_start_age: 50    # [调参] 该年龄后健康上限每年下降
+    health_cap_decline_per_year: 3      # [调参] D3：老年健康上限年衰减
+    min_health_cap: 15                  # 域常量：健康上限下限（不再衰减到 0）
+    natural_death_min_age: 55           # [调参] D4：自然死亡最低年龄（裁决：50→55）
+    natural_death_health_threshold: 40  # [调参] D4：自然死亡健康阈值（裁决：60→40）
+    injury_cause_window_days: 30        # 死因归类：受伤后多少天内死亡记为 injury
+
+  marriage:                             # 任务12 新增：婚配资格
+    min_age: 16                         # [调参]
+    min_health: 50                      # [调参]
+    min_grain: 20                       # [调参]
+    max_distance_tu: 3.0                # [调参] 家到家的单程上限
+    allow_same_sex: false
+    remarriage_allowed: true            # D5：允许鳏寡再婚
+    forbid_close_kin: true              # D15：禁止亲子/同父/同母婚配
+    residence: patrilocal               # 第2步：只实现从夫居（其他枚举不实现）
+
+  birth:                                # 任务12 新增：生育与新生儿
+    min_age_female: 16                  # [调参]
+    max_age_female: 45                  # [调参]
+    max_age_male: 60                    # [调参]
+    min_health: 50                      # [调参]
+    interval_days: 360                  # [调参] D6：裁决 540→360
+    chance_per_day: 0.02                # [调参] D6：每对配偶每日生育概率
+    max_population: 12                  # A5：人口上限
+    low_population_adults: 2            # [调参] A5：成年人口下限阈值
+    low_population_fertility_boost: 2.0 # [调参] A5：低人口时的生育概率乘数
+    male_ratio: 0.5                     # 性别比例（seeded rng）
+    newborn_health_parent_ratio: 0.8    # D7：父母均值 × 0.8
+    newborn_stamina_parent_ratio: 0.8
+    newborn_min_health: 30              # D7：最低值（配置化）
+    newborn_min_stamina: 20
+    initial_hunger: 40
+    home_node_from: mother
+    work_node_from: mother              # D8：母亲→父亲→家 兜底
+    surname_from: father
+    default_surname: 林
+    given_names: [阿福, 阿寿, 小满, 春生, 秋生, 冬生, 水生, 禾生, 阿宁, 阿平, 阿安, 阿顺]
+    name_fallback_suffix: "{name}{n}"
+    asset_transfer_ratio: 0.1           # [调参] A4：出生时父母各转移 10% 食物
+
+  inheritance:                          # 任务12 新增：继承
+    asset_ratio: 1.0
+    debt_ratio: 0.5                     # [调参] D11：债务 0.5 转移、0.5 核销
+    priority: [spouse, children, parents]  # D10：单继承人顺位
+    escheat: true                       # D12：无继承人归公（只写事件，不建公账）
+
+  dependency:                           # 任务12 新增：依赖者进食
+    max_age: 16                         # [调参] D9：依赖年龄上限
+    feed_from_parent: true
+
+  household:                            # 任务12 迁移第2步：家庭规模
+    house_max_members: 8                # [调参] 单户成员上限；婚配并入前校验，超限静默跳过
+
+  split:                                # 任务12 第3步：分家
+    min_members: 4                      # [调参] 户内人数下限（含夫妻与子女）
+    asset_ratio: 0.5                    # [调参] 新户带走的资产/债务比例，余额留原户
+    home_node_candidates: []            # 新户住所候选；空则同节点分户（稳定轮转）
+
   time:
     tu_per_tick: 10                     # 1 Tick = 1 天 = 10 TU
     farm_tu: 5
@@ -134,6 +199,7 @@ agents:
   - id: lin_yuan
     name: 林远
     sex: male
+    surname: 林
     age: 18
     home_node: common_district
     work_node: west_field
@@ -142,6 +208,7 @@ agents:
   - id: zhao_cuilan
     name: 赵翠兰
     sex: female
+    surname: 赵
     age: 23
     home_node: poor_district
     work_node: east_field
@@ -150,6 +217,7 @@ agents:
   - id: li_quan
     name: 李全
     sex: male
+    surname: 李
     age: 48
     home_node: rich_district
     work_node: south_field             # 任务10：独立南片田，不再与赵翠兰共用 east_field（避免收割互冲长势清零）
@@ -158,6 +226,7 @@ agents:
   - id: zhou_qiaoniang                 # 任务11：第 4 个 NPC（织户），不写职业字段，靠初始布+效用+集市自然分工
     name: 周巧娘
     sex: female
+    surname: 周
     age: 32
     home_node: common_district         # 近水井与集市
     work_node: market                  # 织坊节点暂缺，先挂集市（loom 节点为后续接入点）

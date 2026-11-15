@@ -38,3 +38,4 @@
 ## 4. 与其他系统的接口
 - 读：04-needs-and-utility 的得分，02-psychological-state。
 - 写：06-actions 执行动作，interaction 发起会话。
+- 家庭内劳动分配：当前未实现，成人各自按个人 `work_node` 独立决策（见 [11-life-course.md](file:///f:/viae-chronicle/docs/design/systems/agents/11-life-course.md) §18 G2）。

@@ -9,6 +9,9 @@
 
 from __future__ import annotations
 
+from household_helpers import hh
+from vale.core.household import home_node_of, work_node_of
+
 import pytest
 
 from config.schema.natural_params import Season
@@ -34,6 +37,10 @@ def world():
     )
     w.register(ClimateModule())
     w.register(AgentModule())
+    # 任务12：单人借贷/债务单元测试，禁用婚配结算以隔离家庭合并对库存的影响
+    for m in w.modules:
+        if m.name == "agents":
+            m._settle_marriage = lambda *a, **k: None  # noqa: SLF001
     return w
 
 
@@ -47,16 +54,16 @@ def _module(world) -> AgentModule:
 def test_select_creditor_picks_richest(world):
     run_tick(world)  # 初始化 agents
     agents = world.state.agents
-    # li_quan 最富且 ≥5 → 选他
-    assert select_creditor(agents, "lin_yuan", 5.0).agent_id == "li_quan"
+    # li_quan 最富且 ≥5 → 选他的家庭
+    assert select_creditor(world, "hh_lin_yuan", 5.0).household_id == "hh_li_quan"
 
 
 def test_select_creditor_returns_none_when_none_sufficient(world):
     run_tick(world)  # 初始化 agents
     for a in world.state.agents.values():
         if a.agent_id != "lin_yuan":
-            a.grain = 3.0  # 都 < 5
-    assert select_creditor(world.state.agents, "lin_yuan", 5.0) is None
+            hh(world, a).grain = 3.0  # 都 < 5
+    assert select_creditor(world, "hh_lin_yuan", 5.0) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -71,7 +78,7 @@ def test_borrow_transaction_conserves_grain(world):
     run_tick(world)
     world.config.agents.tuning.gathering.actions.clear()
     lin = world.state.agents["lin_yuan"]
-    lin.grain = 0.0
+    hh(world, lin).grain = 0.0
     lin.hunger = 95.0
     lin.stamina = 100.0  # 体力满：borrow > rest（同 test_borrow_grain_triggers_when_low_grain）
     for _ in range(12):
@@ -94,14 +101,14 @@ def test_borrow_chooses_creditor_with_sufficient_grain(world):
     """
     run_tick(world)
     lin = world.state.agents["lin_yuan"]
-    world.state.agents["li_quan"].grain = 3.0  # 最富但 < 5，借不出
+    hh(world, world.state.agents["li_quan"]).grain = 3.0  # 最富但 < 5，借不出
     zhao = world.state.agents["zhao_cuilan"]
-    zhao.grain = 50.0
-    lin.grain = 1.0
+    hh(world, zhao).grain = 50.0
+    hh(world, lin).grain = 1.0
     module = _module(world)
     tuning = world.config.agents.tuning
     p = module._perceive(world, lin)  # noqa: SLF001
-    assert p.creditor_id == "zhao_cuilan"  # 感知层即跳过存粮不足者
+    assert p.creditor_household_id == "hh_zhao_cuilan"  # 感知层即跳过存粮不足者
 
     module._execute(world, lin, "borrow_grain", p, tuning)  # noqa: SLF001
 
@@ -120,10 +127,10 @@ def test_borrow_score_impossible_when_no_creditor(world):
     lin = world.state.agents["lin_yuan"]
     for a in world.state.agents.values():
         if a.agent_id != "lin_yuan":
-            a.grain = 1.0
-    lin.grain = 1.0
+            hh(world, a).grain = 1.0
+    hh(world, lin).grain = 1.0
     p = module._perceive(world, lin)  # noqa: SLF001
-    assert p.creditor_id is None
+    assert p.creditor_household_id is None
     assert module.score_action("borrow_grain", p, tuning) == IMPOSSIBLE
 
 
@@ -132,8 +139,8 @@ def test_borrow_score_impossible_when_overdue(world):
     module = _module(world)
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
-    lin.grain = 1.0
-    lin.debts = [DebtRecord(creditor_id="li_quan", amount=5.0,
+    hh(world, lin).grain = 1.0
+    hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=5.0,
                             originated_tick=0, due_tick=90, overdue=True)]
     p = module._perceive(world, lin)  # noqa: SLF001
     assert module.score_action("borrow_grain", p, tuning) == IMPOSSIBLE
@@ -148,17 +155,17 @@ def test_collection_full_payment_clears_debt(world):
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
     li = world.state.agents["li_quan"]
-    lin.grain = 20.0
-    lin.debts = [DebtRecord(creditor_id="li_quan", amount=10.0,
+    hh(world, lin).grain = 20.0
+    hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=10.0,
                             originated_tick=0, due_tick=90)]
-    li_before = li.grain
+    li_before = hh(world, li).grain
     world.current_tick = 90
     module._collect_debts(world, lin, tuning)  # noqa: SLF001
 
-    assert lin.grain == pytest.approx(10.0)   # 20 - 10
-    assert li.grain == pytest.approx(li_before + 10.0)
-    assert lin.debt == pytest.approx(0.0)
-    assert lin.debts == []  # 清偿完毕移出列表
+    assert hh(world, lin).grain == pytest.approx(10.0)   # 20 - 10
+    assert hh(world, li).grain == pytest.approx(li_before + 10.0)
+    assert hh(world, lin).debt == pytest.approx(0.0)
+    assert hh(world, lin).debts == []  # 清偿完毕移出列表
     ev = world.event_log.by_type("debt_collected")[-1]
     assert ev["payload"]["amount_paid"] == pytest.approx(10.0)
     assert ev["payload"]["remaining"] == pytest.approx(0.0)
@@ -171,16 +178,16 @@ def test_collection_partial_marks_overdue(world):
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
     li = world.state.agents["li_quan"]
-    lin.grain = 4.0
-    lin.debts = [DebtRecord(creditor_id="li_quan", amount=10.0,
+    hh(world, lin).grain = 4.0
+    hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=10.0,
                             originated_tick=0, due_tick=90)]
-    li_before = li.grain
+    li_before = hh(world, li).grain
     world.current_tick = 90
     module._collect_debts(world, lin, tuning)  # noqa: SLF001
 
-    assert lin.grain == pytest.approx(0.0)      # 扣尽
-    assert li.grain == pytest.approx(li_before + 4.0)
-    assert lin.debt == pytest.approx(6.0)       # 10 - 4，剩余逾期
+    assert hh(world, lin).grain == pytest.approx(0.0)      # 扣尽
+    assert hh(world, li).grain == pytest.approx(li_before + 4.0)
+    assert hh(world, lin).debt == pytest.approx(6.0)       # 10 - 4，剩余逾期
     ev = world.event_log.by_type("debt_collected")[-1]
     assert ev["payload"]["amount_paid"] == pytest.approx(4.0)
     assert ev["payload"]["remaining"] == pytest.approx(6.0)
@@ -193,16 +200,16 @@ def test_collection_defaulted_when_no_grain(world):
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
     li = world.state.agents["li_quan"]
-    lin.grain = 0.0
-    lin.debts = [DebtRecord(creditor_id="li_quan", amount=10.0,
+    hh(world, lin).grain = 0.0
+    hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=10.0,
                             originated_tick=0, due_tick=90)]
-    li_before = li.grain
+    li_before = hh(world, li).grain
     world.current_tick = 90
     module._collect_debts(world, lin, tuning)  # noqa: SLF001
 
-    assert li.grain == pytest.approx(li_before)  # 无粮可转
-    assert lin.debt == pytest.approx(10.0)       # 债务仍在，标逾期
-    assert lin.debts[0].overdue is True
+    assert hh(world, li).grain == pytest.approx(li_before)  # 无粮可转
+    assert hh(world, lin).debt == pytest.approx(10.0)       # 债务仍在，标逾期
+    assert hh(world, lin).debts[0].overdue is True
     ev = world.event_log.by_type("debt_defaulted")[-1]
     assert ev["payload"]["amount"] == pytest.approx(10.0)
 
@@ -213,8 +220,8 @@ def test_collection_interval_throttles_repeated_attempts(world):
     module = _module(world)
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
-    lin.grain = 100.0
-    lin.debts = [DebtRecord(creditor_id="li_quan", amount=10.0,
+    hh(world, lin).grain = 100.0
+    hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=10.0,
                             originated_tick=0, due_tick=90)]
     world.current_tick = 90
     module._collect_debts(world, lin, tuning)  # noqa: SLF001
@@ -222,7 +229,7 @@ def test_collection_interval_throttles_repeated_attempts(world):
     assert n_first == 1
 
     # 同日到期的新债务，但 last_collected 距当前不足 interval → 不再催收
-    lin.debts = [DebtRecord(creditor_id="li_quan", amount=8.0,
+    hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=8.0,
                             originated_tick=80, due_tick=90, last_collected_tick=90)]
     world.current_tick = 91
     module._collect_debts(world, lin, tuning)  # noqa: SLF001
@@ -237,20 +244,20 @@ def test_harvest_repayment_earliest_due_first(world):
     module = _module(world)
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
-    lin.grain = 100.0
+    hh(world, lin).grain = 100.0
     # 两笔债务：due 120 晚、due 90 早
-    lin.debts = [
-        DebtRecord(creditor_id="li_quan", amount=20.0, originated_tick=0, due_tick=120),
-        DebtRecord(creditor_id="li_quan", amount=20.0, originated_tick=0, due_tick=90),
+    hh(world, lin).debts = [
+        DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=20.0, originated_tick=0, due_tick=120),
+        DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=20.0, originated_tick=0, due_tick=90),
     ]
     world.state.climate.season = Season.AUTUMN
-    world.state.field_growth[lin.work_node] = 90.0
+    world.state.field_growth[work_node_of(world, lin)] = 90.0
     p = module._perceive(world, lin)  # noqa: SLF001
 
     module._execute(world, lin, "harvest", p, tuning)  # noqa: SLF001
 
-    early = [d for d in lin.debts if d.due_tick == 90]
-    late = [d for d in lin.debts if d.due_tick == 120]
+    early = [d for d in hh(world, lin).debts if d.due_tick == 90]
+    late = [d for d in hh(world, lin).debts if d.due_tick == 120]
     assert early[0].amount == pytest.approx(10.0)  # 20 - 10（还款上限全给最早到期）
     assert late[0].amount == pytest.approx(20.0)   # 未还
     repaid = world.event_log.by_type("debt_repaid")
@@ -322,7 +329,7 @@ def test_farm_score_impossible_when_growth_capped(world):
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
     cap = tuning.agriculture.max_field_growth
-    world.state.field_growth[lin.work_node] = cap
+    world.state.field_growth[work_node_of(world, lin)] = cap
     p = module._perceive(world, lin)  # noqa: SLF001
     assert module.score_action("farm", p, tuning) == IMPOSSIBLE
 
@@ -332,7 +339,7 @@ def test_no_farm_event_after_growth_capped(world):
     module = _module(world)
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
-    world.state.field_growth[lin.work_node] = tuning.agriculture.max_field_growth
+    world.state.field_growth[work_node_of(world, lin)] = tuning.agriculture.max_field_growth
     farm_before = [e for e in world.event_log.by_type("agent_action_taken")
                    if e["payload"].get("agent_name") == "林远" and e["payload"].get("action") == "farm"]
 
@@ -349,15 +356,15 @@ def test_no_farm_event_after_growth_capped(world):
 def test_debt_aggregate_matches_sum_of_records(world):
     run_tick(world)
     lin = world.state.agents["lin_yuan"]
-    lin.debts = [
-        DebtRecord(creditor_id="li_quan", amount=3.0, originated_tick=0, due_tick=90),
-        DebtRecord(creditor_id="zhao_cuilan", amount=7.0, originated_tick=0, due_tick=90),
+    hh(world, lin).debts = [
+        DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=3.0, originated_tick=0, due_tick=90),
+        DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_zhao_cuilan", amount=7.0, originated_tick=0, due_tick=90),
     ]
-    assert lin.debt == pytest.approx(10.0)
-    lin.debts[0].amount = 0.0  # 偿还一笔
-    assert lin.debt == pytest.approx(7.0)
-    lin.debts = []
-    assert lin.debt == pytest.approx(0.0)
+    assert hh(world, lin).debt == pytest.approx(10.0)
+    hh(world, lin).debts[0].amount = 0.0  # 偿还一笔
+    assert hh(world, lin).debt == pytest.approx(7.0)
+    hh(world, lin).debts = []
+    assert hh(world, lin).debt == pytest.approx(0.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -368,9 +375,9 @@ def test_invariant_no_negative_grain_or_debt_over_long_run(world):
     for _ in range(ticks):
         run_tick(world)
     for a in world.state.agents.values():
-        assert a.grain >= 0, f"{a.name} 存粮为负: {a.grain}"
-        assert a.debt >= 0, f"{a.name} 负债为负: {a.debt}"
-        for d in a.debts:
+        assert hh(world, a).grain >= 0, f"{a.name} 存粮为负: {hh(world, a).grain}"
+        assert hh(world, a).debt >= 0, f"{a.name} 负债为负: {hh(world, a).debt}"
+        for d in hh(world, a).debts:
             assert d.amount >= 0, f"{a.name} 单笔债务为负: {d.amount}"
     errors = world.event_log.by_type("agent_error")
     assert not errors, f"长模拟中出现 agent_error: {errors}"
@@ -393,7 +400,7 @@ def test_settlement_error_isolated_per_agent(world, monkeypatch):
     run_tick(world)  # 不应抛异常
 
     settle_errors = [e for e in world.event_log.by_type("agent_error")
-                     if e["payload"].get("phase") == "daily_settlement"]
+                     if e["payload"].get("phase") == "debt_collection"]
     assert any(e["payload"]["agent_name"] == "赵翠兰" for e in settle_errors)
     # 世界仍在推进：tick 应已自增
     assert world.current_tick >= 2

@@ -182,7 +182,7 @@ def cmd_agent(args: argparse.Namespace) -> None:
         return
 
     print(f"== {agent_cfg.name}（{agent_cfg.id}）==")
-    print(f"  性别：{agent_cfg.sex.value}  年龄：{agent_cfg.age}")
+    print(f"  性别：{agent_cfg.sex.value}  开局年龄：{agent_cfg.age}")
     print(f"  住所：{names.get(agent_cfg.home_node, agent_cfg.home_node)}")
     print(f"  田地：{names.get(agent_cfg.work_node, agent_cfg.work_node)}")
     print(f"  初始存粮：{agent_cfg.assets.grain:.0f} 石")
@@ -217,15 +217,18 @@ def _add_common_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--debug", action="store_true", default=argparse.SUPPRESS, help=DEBUG_HELP)
 
 
-def _add_filter_args(p: argparse.ArgumentParser) -> None:
+def _add_filter_args(p: argparse.ArgumentParser, default_limit: Optional[int] = 50,
+                     match_participants: bool = False) -> None:
     p.add_argument("--agent", help="按人物姓名筛选（payload.agent_name）")
     p.add_argument("--type", action="append", default=[],
                    help="按事件类型筛选，可重复传或逗号分隔，如 --type weather_changed --type agent_action_taken")
     p.add_argument("--from", dest="from_", help="范围下界：纯数字=tick，或「1年7月1日」")
     p.add_argument("--to", help="范围上界：纯数字=tick，或「1年9月30日」（含）")
-    p.add_argument("--limit", type=int, default=50, help="最多返回条数（默认 50）")
+    p.add_argument("--limit", type=int, default=default_limit,
+                   help=f"最多返回条数（默认 {default_limit if default_limit is not None else '全量'}）")
     p.add_argument("--all", action="store_true", help="全量，忽略 --limit")
     p.add_argument("--reverse", action="store_true", help="倒序（最新在前）")
+    p.set_defaults(match_participants=match_participants)
 
 
 def _build_filter(args, cfg) -> EventFilter:
@@ -242,6 +245,7 @@ def _build_filter(args, cfg) -> EventFilter:
         tick_to=tick_to,
         limit=limit,
         reverse=getattr(args, "reverse", False),
+        match_participants=getattr(args, "match_participants", False),
     )
 
 
@@ -378,7 +382,8 @@ def main() -> None:
     p_tl = ev_sub.add_parser("timeline", help="某人物的时间线")
     p_tl.add_argument("name", help="人物姓名，如 林远")
     _add_common_args(p_tl)
-    _add_filter_args(p_tl)
+    # D14：timeline 默认全量、并匹配 participants；events list 保持旧默认（50 条、仅 agent_name）
+    _add_filter_args(p_tl, default_limit=None, match_participants=True)
     p_tl.set_defaults(func=cmd_events_timeline)
 
     p_day = ev_sub.add_parser("day", help="某一天的全部事件")

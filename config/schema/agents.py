@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -124,6 +124,175 @@ class DeathTuning(BaseModel):
     )
 
 
+class LifeStageTuning(BaseModel):
+    """单个年龄分段（任务12）：体力/健康上限乘数与劳作许可，全部由配置提供。"""
+
+    name: str
+    min_age: int = Field(..., ge=0)
+    max_age: Optional[int] = Field(None, ge=0, description="不含上界；None = 无上限")
+    stamina_max_mult: float = Field(1.0, gt=0)
+    stamina_recovery_mult: float = Field(1.0, gt=0)
+    health_max_mult: float = Field(1.0, gt=0)
+    work_allowed: bool = Field(True, description="是否允许劳作类候选动作")
+    injury_risk_mult: float = Field(1.0, ge=0, description="受伤概率乘数")
+
+
+def _default_life_stages() -> list[LifeStageTuning]:
+    return [
+        LifeStageTuning(name="幼年", min_age=0, max_age=12, stamina_max_mult=0.4,
+                        stamina_recovery_mult=0.8, health_max_mult=0.7,
+                        work_allowed=False, injury_risk_mult=0.5),
+        LifeStageTuning(name="青年", min_age=12, max_age=30, stamina_max_mult=1.0,
+                        stamina_recovery_mult=1.0, health_max_mult=1.0,
+                        work_allowed=True, injury_risk_mult=1.0),
+        LifeStageTuning(name="壮年", min_age=30, max_age=50, stamina_max_mult=0.95,
+                        stamina_recovery_mult=0.85, health_max_mult=0.95,
+                        work_allowed=True, injury_risk_mult=1.0),
+        LifeStageTuning(name="老年", min_age=50, max_age=None, stamina_max_mult=0.6,
+                        stamina_recovery_mult=0.55, health_max_mult=0.65,
+                        work_allowed=True, injury_risk_mult=1.5),
+    ]
+
+
+class AgingTuning(BaseModel):
+    """年龄分段、健康上限衰减与自然死亡（任务12，全部 [调参]）。"""
+
+    life_stages: list[LifeStageTuning] = Field(default_factory=_default_life_stages)
+    health_cap_decline_start_age: int = Field(50, ge=0)
+    health_cap_decline_per_year: float = Field(3.0, ge=0)
+    min_health_cap: float = Field(15.0, ge=0, le=100)
+    natural_death_min_age: int = Field(55, ge=0)
+    natural_death_health_threshold: float = Field(40.0, ge=0, le=100)
+    injury_cause_window_days: int = Field(30, ge=0)
+
+    @model_validator(mode="after")
+    def _stages_valid(self) -> "AgingTuning":
+        stages = self.life_stages
+        if not stages:
+            raise ValueError("aging.life_stages must not be empty")
+        if stages[0].min_age != 0:
+            raise ValueError("aging.life_stages must start at min_age=0")
+        for prev, cur in zip(stages, stages[1:]):
+            if cur.min_age != prev.max_age:
+                raise ValueError("aging.life_stages must be contiguous (prev.max_age == cur.min_age)")
+        if stages[-1].max_age is not None:
+            raise ValueError("aging.life_stages last stage must have max_age=null")
+        return self
+
+    def stage_for(self, age: int) -> LifeStageTuning:
+        for stage in self.life_stages:
+            if stage.max_age is None or age < stage.max_age:
+                return stage
+        return self.life_stages[-1]
+
+    def stage_by_name(self, name: str) -> Optional[LifeStageTuning]:
+        return next((s for s in self.life_stages if s.name == name), None)
+
+
+class HouseholdTuning(BaseModel):
+    """家庭规模与住所（任务12 迁移第2步；分家参数留第3步）。"""
+
+    house_max_members: int = Field(8, ge=2, description="单户成员上限；婚配并入前校验")
+
+
+class SplitTuning(BaseModel):
+    """分家（任务12 第3步，[调参]）。
+
+    触发：户内人数 ≥ min_members 且存在“丈夫非户主”的已婚成年夫妻。
+    新户按 asset_ratio 带走资产/债务，余额留原户。
+    """
+
+    min_members: int = Field(4, ge=3, description="可触发分家的最大家庭人数")
+    asset_ratio: float = Field(0.5, gt=0, lt=1, description="新户带走的资产/债务比例")
+    home_node_candidates: list[str] = Field(
+        default_factory=list, description="新户住所候选（按新户 id 稳定轮转）；空则同节点分户"
+    )
+
+
+class MarriageTuning(BaseModel):
+    """婚配资格与居所制（任务12，[调参]）。"""
+
+    min_age: int = Field(16, ge=0)
+    min_health: float = Field(50.0, ge=0, le=100)
+    min_grain: float = Field(20.0, ge=0)
+    max_distance_tu: float = Field(3.0, gt=0)
+    allow_same_sex: bool = False
+    remarriage_allowed: bool = True
+    forbid_close_kin: bool = True
+    residence: Literal["patrilocal"] = Field(
+        "patrilocal", description="居所制；第2步只实现从夫居，其他枚举不实现/启动报错"
+    )
+
+
+class BirthTuning(BaseModel):
+    """生育与新生儿（任务12，[调参]）。"""
+
+    min_age_female: int = Field(16, ge=0)
+    max_age_female: int = Field(45, ge=0)
+    max_age_male: int = Field(60, ge=0)
+    min_health: float = Field(50.0, ge=0, le=100)
+    interval_days: int = Field(360, ge=1)
+    chance_per_day: float = Field(0.02, ge=0, le=1)
+    max_population: int = Field(12, ge=1)
+    low_population_adults: int = Field(2, ge=0)
+    low_population_fertility_boost: float = Field(2.0, ge=1)
+    male_ratio: float = Field(0.5, ge=0, le=1)
+    newborn_health_parent_ratio: float = Field(0.8, ge=0)
+    newborn_stamina_parent_ratio: float = Field(0.8, ge=0)
+    newborn_min_health: float = Field(30.0, ge=0, le=100)
+    newborn_min_stamina: float = Field(20.0, ge=0, le=100)
+    initial_hunger: float = Field(40.0, ge=0, le=100)
+    home_node_from: str = "mother"
+    work_node_from: str = "mother"
+    surname_from: str = "father"
+    given_names: list[str] = Field(
+        default_factory=lambda: ["阿福", "阿寿", "小满", "春生", "秋生", "冬生"]
+    )
+    default_surname: str = "某"
+    name_fallback_suffix: str = "{name}{n}"
+    asset_transfer_ratio: float = Field(0.1, ge=0, le=1, description="出生时父母各转移的存量比例")
+
+    @model_validator(mode="after")
+    def _birth_valid(self) -> "BirthTuning":
+        if not self.given_names:
+            raise ValueError("birth.given_names must not be empty")
+        if self.max_age_female < self.min_age_female:
+            raise ValueError("birth.max_age_female must be >= min_age_female")
+        if self.home_node_from not in ("mother", "father"):
+            raise ValueError("birth.home_node_from must be mother|father")
+        if self.work_node_from not in ("mother", "father"):
+            raise ValueError("birth.work_node_from must be mother|father")
+        if self.surname_from not in ("mother", "father"):
+            raise ValueError("birth.surname_from must be mother|father")
+        return self
+
+
+class InheritanceTuning(BaseModel):
+    """继承顺位与比例（任务12，[调参]）。"""
+
+    asset_ratio: float = Field(1.0, ge=0, le=1)
+    debt_ratio: float = Field(0.5, ge=0, le=1)
+    priority: list[str] = Field(default_factory=lambda: ["spouse", "children", "parents"])
+    escheat: bool = True
+
+    @model_validator(mode="after")
+    def _priority_valid(self) -> "InheritanceTuning":
+        if not self.priority:
+            raise ValueError("inheritance.priority must not be empty")
+        allowed = {"spouse", "children", "parents"}
+        bad = [p for p in self.priority if p not in allowed]
+        if bad:
+            raise ValueError(f"inheritance.priority has invalid entries: {bad}")
+        return self
+
+
+class DependencyTuning(BaseModel):
+    """依赖者进食（任务12，[调参]）。"""
+
+    max_age: int = Field(16, ge=0)
+    feed_from_parent: bool = True
+
+
 class TimeTuning(BaseModel):
     tu_per_tick: float = Field(10.0, ge=0)
     farm_tu: float = Field(5.0, ge=0)
@@ -222,6 +391,13 @@ class AgentTuning(BaseModel):
     gathering: GatheringTuning = Field(default_factory=GatheringTuning)
     market: MarketTuning = Field(default_factory=MarketTuning)
     textile: TextileTuning = Field(default_factory=TextileTuning)
+    aging: AgingTuning = Field(default_factory=AgingTuning)
+    marriage: MarriageTuning = Field(default_factory=MarriageTuning)
+    birth: BirthTuning = Field(default_factory=BirthTuning)
+    inheritance: InheritanceTuning = Field(default_factory=InheritanceTuning)
+    dependency: DependencyTuning = Field(default_factory=DependencyTuning)
+    household: HouseholdTuning = Field(default_factory=HouseholdTuning)
+    split: SplitTuning = Field(default_factory=SplitTuning)
     time: TimeTuning = Field(default_factory=TimeTuning)
 
 
@@ -235,7 +411,8 @@ class AgentConfig(BaseModel):
     id: str
     name: str
     sex: AgentSex
-    age: int = Field(..., ge=0)
+    age: int = Field(..., ge=0, description="开局年龄；运行时以 birth_tick 为唯一真相源")
+    surname: Optional[str] = Field(None, description="姓氏（任务12：子代取名用）")
     home_node: str
     work_node: str
     assets: AgentAssets
