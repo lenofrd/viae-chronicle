@@ -332,6 +332,24 @@ class _Replayer:
             payload.get("creditor_household_id")
             or self._hh_for(creditor_id, payload).household_id
         )
+        debtor_household_id = payload.get("debtor_household_id")
+        if debtor_household_id:
+            # 债权侧转移（Q5）：债务方不变，债权方从死者家庭改挂继承人家庭。
+            # 旧库无该键时走下方债务侧逻辑，保持既有重放行为。
+            debtor_hh = self.state.households.get(debtor_household_id)
+            if debtor_hh is None:
+                return
+            self._reduce_debt(debtor_hh, from_hh.household_id, amount)
+            debtor_hh.debts.append(
+                DebtRecord(
+                    debtor_household_id=debtor_hh.household_id,
+                    creditor_household_id=creditor_hh_id,
+                    amount=round(amount, 2),
+                    originated_tick=int(payload.get("originated_tick", tick)),
+                    due_tick=int(payload.get("due_tick", tick)),
+                )
+            )
+            return
         self._reduce_debt(from_hh, creditor_hh_id, amount)
         to_hh.debts.append(
             DebtRecord(
