@@ -90,6 +90,56 @@ def test_render_known_actions_not_degraded(action):
     assert "林远" in r.text
 
 
+# --------------------------------------------------------------------------
+# 渲染：B2 eat 文案修正（吃非粮按实际食物类型显示，不得误导为“存粮”）
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "food,before,after,label",
+    [
+        ("meat", 13, 12, "肉"),
+        ("fish", 7, 6, "鱼"),
+        ("vegetable", 5, 4, "菜"),
+    ],
+)
+def test_render_eat_non_grain_shows_actual_food(food, before, after, label):
+    """grain_before=0 且实际吃非粮：渲染含该食物类型，不含“存粮”，不降级。"""
+    payload = {
+        "agent_name": "林远", "action": "eat",
+        "grain_before": 0, "grain_after": 0,
+        "meat_before": 0, "meat_after": 0,
+        "fish_before": 0, "fish_after": 0,
+        "vegetable_before": 0, "vegetable_after": 0,
+    }
+    payload[f"{food}_before"] = before
+    payload[f"{food}_after"] = after
+    r = render_event({"id": 10, "tick": 1, "event_type": "agent_action_taken", "payload": payload})
+    assert not r.degraded
+    assert label in r.text
+    assert "存粮" not in r.text
+
+
+def test_render_eat_grain_text_unchanged():
+    """吃粮：文案与旧行为逐字一致（grain 10→8 → 「吃了些存粮（存粮剩 8 石）」）。"""
+    payload = {
+        "agent_name": "林远", "action": "eat",
+        "grain_before": 10, "grain_after": 8,
+        "meat_before": 0, "meat_after": 0,
+        "fish_before": 0, "fish_after": 0,
+        "vegetable_before": 0, "vegetable_after": 0,
+    }
+    r = render_event({"id": 11, "tick": 1, "event_type": "agent_action_taken", "payload": payload})
+    assert not r.degraded
+    assert r.text == "[林远] 吃了些存粮（存粮剩 8 石）"
+
+
+def test_render_eat_missing_before_fields_no_crash():
+    """旧事件缺 before 字段：按 0 兜底，不抛异常；无匹配非粮时回退吃粮文案。"""
+    payload = {"agent_name": "林远", "action": "eat", "grain_after": 3}
+    r = render_event({"id": 12, "tick": 1, "event_type": "agent_action_taken", "payload": payload})
+    assert not r.degraded
+    assert r.text == "[林远] 吃了些存粮（存粮剩 3 石）"
+
+
 def test_render_agent_error_ok():
     evt = {"id": 4, "tick": 2, "event_type": "agent_error",
            "payload": {"agent_name": "林远", "error": "ValueError('boom')", "traceback": "..."}}

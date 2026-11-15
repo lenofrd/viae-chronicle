@@ -109,7 +109,17 @@ def _render_action(payload: dict, names: Optional[dict[str, str]]) -> tuple[str,
         return f"[{name}] 执行了未知动作「{action or '?'}」", True
 
     if action == "eat":
-        body = f"吃了些存粮（存粮剩 {_num(payload.get('grain_after'))} 石）"
+        eaten = next(
+            (
+                f for f in ("meat", "fish", "vegetable")
+                if (payload.get(f + "_before") or 0) > (payload.get(f + "_after") or 0)
+            ),
+            None,
+        )
+        if eaten:
+            body = f"吃了些{_item_name(eaten)}（{_item_name(eaten)}剩 {_num(payload.get(eaten + '_after'))}）"
+        else:
+            body = f"吃了些存粮（存粮剩 {_num(payload.get('grain_after'))} 石）"
     elif action == "rest":
         body = f"在家歇息（体力 {_num(payload.get('stamina_after'))}）"
     elif action == "farm":
