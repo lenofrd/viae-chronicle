@@ -820,7 +820,8 @@ class ValeApp:
 
         def worker():
             try:
-                db_path = controller.start(seed=0) or controller.db_path
+                controller.start(seed=0)
+                db_path = controller.db_path
                 self.messages.put(("sim_started", controller, db_path))
             except Exception as exc:
                 try:

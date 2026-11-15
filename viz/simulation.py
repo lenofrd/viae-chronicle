@@ -1,6 +1,8 @@
 """纯 Python 模拟子进程控制器，不依赖任何 GUI 工具包。"""
 from __future__ import annotations
 
+from collections import deque
+
 import json
 import math
 import os
@@ -34,6 +36,8 @@ class SimulationController:
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._is_ready = False
+        self._stderr_tail: deque[str] = deque(maxlen=200)
+        self._stderr_reader: threading.Thread | None = None
 
     def start(self, seed: int = 0) -> None:
         with self._condition:
@@ -60,7 +64,7 @@ class SimulationController:
                 env=env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -80,17 +84,27 @@ class SimulationController:
             name="simulation-stdout",
             daemon=True,
         )
+        stderr_reader = threading.Thread(
+            target=self._drain_stderr,
+            args=(process,),
+            name="simulation-stderr",
+            daemon=True,
+        )
         with self._condition:
             self._process = process
             self._reader = reader
+            self._stderr_reader = stderr_reader
         reader.start()
+        stderr_reader.start()
 
         deadline = time.monotonic() + _READY_TIMEOUT
         with self._condition:
             while not self._is_ready and self.last_error is None:
                 returncode = process.poll()
                 if returncode is not None:
-                    self.last_error = f"模拟子进程在 ready 前退出（退出码 {returncode}）"
+                    stderr_text = "".join(self._stderr_tail).strip()
+                    detail = f"\nstderr 末尾：\n{stderr_text}" if stderr_text else ""
+                    self.last_error = f"模拟子进程在 ready 前退出（退出码 {returncode}）{detail}"
                     break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -124,6 +138,7 @@ class SimulationController:
         with self._condition:
             process = self._process
             reader = self._reader
+            stderr_reader = self._stderr_reader
 
         if process is None:
             with self._condition:
@@ -148,9 +163,10 @@ class SimulationController:
         else:
             process.wait(timeout=_KILL_TIMEOUT)
 
-        if reader is not None and reader is not threading.current_thread():
-            reader.join(timeout=_KILL_TIMEOUT)
-        for stream in (process.stdin, process.stdout):
+        for stream_reader in (reader, stderr_reader):
+            if stream_reader is not None and stream_reader is not threading.current_thread():
+                stream_reader.join(timeout=_KILL_TIMEOUT)
+        for stream in (process.stdin, process.stdout, process.stderr):
             if stream is not None:
                 try:
                     stream.close()
@@ -181,6 +197,17 @@ class SimulationController:
                 self.last_error = f"发送 {command} 命令失败：{exc}"
                 self._condition.notify_all()
                 raise RuntimeError(self.last_error) from exc
+
+    def _drain_stderr(self, process: subprocess.Popen[str]) -> None:
+        """持续读取子进程 stderr：防止 PIPE 缓冲区满阻塞子进程，
+        同时保留末尾若干行用于 ready 前崩溃的诊断。"""
+        try:
+            if process.stderr is None:
+                return
+            for line in process.stderr:
+                self._stderr_tail.append(line)
+        except Exception:
+            pass
 
     def _read_stdout(self, process: subprocess.Popen[str]) -> None:
         try:
