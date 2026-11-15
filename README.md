@@ -18,11 +18,29 @@
 ## 仓库结构
 
 ```text
-src/vale/              模拟核心（状态、模块、观察层）
-config/                世界配置与 schema
-docs/design/           设计图纸（核心资产，深度远超当前代码）
-tests/                 测试与事件流 fixture
-.ai/                   AI 协作工作区（不进 Git）
+src/vale/              模拟核心
+  core/                事件库、世界状态、调度器、日历、回放、快照、世界注册
+  modules/             可插拔模拟模块（climate 气候、agents 人物/家庭/经济）
+  observability/       只读观察层（事件查询、文本渲染、导出、CLI viewer）
+  cli.py, main.py      命令行入口（events list / timeline / run 等）
+  api/                 HTTP/查询接口占位（routes），当前非主要入口
+
+config/                世界配置与校验
+  schema/              Pydantic schema（配置缺省值、启动期校验）
+  shared/              跨世界共享参数
+  worlds/              具体世界实例（brookvale-town-001）与 _template
+
+docs/                  设计与协作文档（核心资产，深度远超当前代码）
+  design/              设计图纸：agents / human-environment / interaction / observability 等
+  collab/              面向人类协作者的进度文件（PROGRESS.md）
+
+tests/                 pytest 测试与事件流 fixture（旧库回放样本）
+viz/                   Tkinter 本地可视化（只读事件库，不写状态）
+scripts/               世界创建/冻结、文档与 schema 一致性检查
+data/                  运行时世界实例与 SQLite 事件库（不入 Git）
+.ai/                   本地 AI 工作区：STATUS、任务裁决、验收报告（不入 Git）
+.check/                本地诊断/长程验收脚本与输出（不入 Git）
+.trae/                 本地 Agent 规则（不入 Git）
 ```
 
 `docs/design/` 已有 130+ 份设计。**代码按图纸逐步落地，新增机制前先查 `docs/` 是否已有设计。**
@@ -37,9 +55,21 @@ python -m pytest -q
 
 ## 当前进展（2026-11-15）
 
-- 已完成：环境基座 → 人物生存 → 时间现实化 → 观察层 → 经济闭环 → 打猎 → 死亡/失能/渔业 → 移动校准/赶集/纺织/蔬菜。
-- 进行中：任务 12 家庭模型迁移，经济单位从个人资产改为 `Household` 家庭共同账户；第 1 步状态层与旧库重放完成，第 2 步家庭生命周期与劳动分配收尾中。
-- `main` 合入走 PR 审核；最新状态以维护者提供的 STATUS 为准。
+- 已合入 `main`：环境基座 → 人物生存 → 时间现实化 → 观察层 → 经济闭环 → 打猎 → 死亡/失能/渔业 → 移动校准/赶集/纺织/蔬菜 → 家庭经济模型（任务 12）→ 盈余经济补丁（任务 13）→ 债务转移窄修（任务 14）→ 社会冲突最小切片（任务 15）→ Tkinter 可视化（PR #2）。
+- 任务 15：集市赊账 +「有粮赖账」2 轮私下催收；5 种子 × 3600 验收通过（人口 5/5、34 次会话、三种结果、守恒与无负值）。
+- 已知技术债：G1 家庭口粮承载力（长程个别种子后段人口下滑）；部分还款自然流结构性低频（机制由单测覆盖）。
+- 下一阶段方向待定：货币系统评估、派生系统前置（教育/地位）、G1 承载力提产。
+- 协作者请看 [`docs/collab/PROGRESS.md`](docs/collab/PROGRESS.md)；最新内部状态以维护者提供的 STATUS 为准。
+
+## 协作方式
+
+本仓库面向多人协作，`main` 受保护，**所有改动走 Pull Request**。
+
+- **有疑问、发现数据异常、想提需求**：在 GitHub 仓库开 **Issue**，写清涉及的分支/commit、事件样本、复现步骤。
+- **想改代码或文档**：从 `main` 开分支 → 提 PR → 在网页上回复 Review 评论；不要直接 push `main`。
+- **合并**：至少 1 人审核通过后由维护者合并；PR 作者不能自审。
+- **讨论入口**：Issue / PR 评论 / Review；不另建本地问答文件。
+- 不依赖未合入分支或未稳定事件；`conflict_*` / `debt_deferred` 等事件自任务 15 合入起可用。
 
 ## 可视化 / 展示层
 
@@ -54,37 +84,25 @@ python -m pytest -q
 ### 功能要求
 
 1. **事件流面板**：按 tick 顺序显示事件，支持滚动、选中、查看事件详情（字段、参与者、家庭、地点）。
-2. **显示调节按钮**：
-   - 按事件类型筛选（出生、婚配、生育、死亡、继承、债务、交易、迁徙、灾害等）；
-   - 按角色、家庭、地点、时间范围筛选；
-   - 时间粒度切换（逐 tick / 按天 / 按事件簇）；
-   - 暂停时单步前进、跳转到指定 tick。
-3. **关注点**：
-   - 标记/收藏角色、家庭或事件；
-   - 高亮关键转折（出生、婚配、生育、死亡、继承、债务违约、迁徙）；
-   - 关注点独立面板，可快速跳转。
-4. **世界运行控制**：
-   - 运行 / 暂停 / 单步 / 速度调节；
-   - 运行状态与当前 tick 可见；
-   - **运行控制通过启动或控制模拟子进程、或连接 CLI 控制接口实现，不直接写事件库。**
-5. **角色与家庭视图**：角色档案（生卒、家庭、事件时间线）、家庭视图（按 `household_id` 聚合成员与家庭事件）。
+2. **显示调节按钮**：按事件类型/角色/家庭/地点/时间范围筛选；时间粒度切换（逐 tick / 按天 / 按事件簇）；暂停时单步、跳转指定 tick。
+3. **关注点**：标记/收藏角色、家庭或事件；高亮出生、婚配、生育、死亡、继承、债务违约、迁徙等关键转折。
+4. **世界运行控制**：运行 / 暂停 / 单步 / 速度；运行控制通过模拟子进程或 CLI 控制接口实现，不直接写事件库。
+5. **角色与家庭视图**：角色档案（生卒、家庭、事件时间线）、家庭视图（按 `household_id` 聚合）。
 
 ### 数据来源
 
 - 事件真相源：SQLite `events` 表（只读连接）。
 - 稳定接口：`events list` / `events timeline --household <id>` 的 JSON 输出。
 - 字段字典：`docs/design/systems/observability/01-event-viewer-cli.md`。
-- 样本数据（已在仓库内）：
-  - `tests/fixtures/legacy_events.json`
-  - `tests/fixtures/legacy_events_expected.json`
+- 样本数据：`tests/fixtures/legacy_events.json`、`legacy_events_expected.json`。
 
 ### 边界要求
 
 1. **事件库只读**：不写 SQLite、不建表、不改写事件；运行控制不得绕开模拟核心直接写状态。
-2. **不依赖内部 state schema**：不 import `src/vale/core/state.py`，不按 `AgentState` / `HouseholdState` 字段编程，只按事件 schema 编程。
+2. **不依赖内部 state schema**：不 import `src/vale/core/state.py`，只按事件 schema 编程。
 3. **只动 `viz/`**：不修改 `src/`、`config/`、`tests/`；不改 `events list` 默认行为。
 4. **不接 LLM 实时推理**；叙事渲染可后置。
-5. 分支 `feat/visualization`，不直接推 `main`，合入走 PR 审核。
+5. 分支开发、PR 审核合入，不直接推 `main`。
 
 ## 文档
 
@@ -93,6 +111,7 @@ python -m pytest -q
 - `docs/design/systems/observability/`：事件查看器与字段字典。
 - `docs/design/systems/agents/11-life-course.md`：生命历程与家庭模型。
 - `docs/design/locations/brookvale-town/`：溪谷镇剧本。
+- `docs/collab/PROGRESS.md`：面向协作者的已合入事实与 WIP 边界。
 
 ## 红线
 
