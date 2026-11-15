@@ -27,12 +27,14 @@ ACTION_VERB = {
     "harvest": "秋收",
     "borrow_grain": "借粮",
     "hunt": "打猎",
+    "fish": "捕鱼",
 }
 
-# 采集类动作 → (动词, 产物名)。任务09：hunt 打猎产肉；
-# 未来接入渔业只需在此加一行 "fish": ("捕鱼", "鱼")，gather_success/fail/injury 渲染自动复用。
+# 采集类动作 → (动词, 产物名)。任务09：hunt 打猎产肉；任务10：fish 捕鱼产鱼。
+# 新增采集生计只需在此加一行，gather_success/fail/injury 渲染自动复用，无需新增渲染函数。
 GATHER_DESC = {
     "hunt": ("打猎", "肉"),
+    "fish": ("捕鱼", "鱼"),
 }
 
 
@@ -111,6 +113,8 @@ def _render_action(payload: dict, names: Optional[dict[str, str]]) -> tuple[str,
                 f"（存粮剩 {_num(payload.get('grain_after'))}，欠债 {_num(payload.get('debt_after'))}）")
     elif action == "hunt":
         body = f"去{tname or '?'}打猎（肉存 {_num(payload.get('meat_after'))}）"
+    elif action == "fish":
+        body = f"去{tname or '?'}捕鱼（鱼存 {_num(payload.get('fish_after'))}）"
     else:  # 理论上不会到，兜底
         body = f"执行了 {action}"
         degraded = True
@@ -229,6 +233,45 @@ def _render_gather_injury(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
+def _render_agent_incapacitated(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    health = _num(payload.get("health"))
+    grace = payload.get("death_grace_ticks")
+    suffix = f"（{grace} 天后若未恢复将死亡）" if grace is not None else ""
+    text = f"[{name}] 健康触底（{health}），失能卧床，不再行动{suffix}"
+    degraded = not all(k in payload for k in ("agent_id", "health"))
+    return text, degraded
+
+
+def _render_agent_died(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    cause = payload.get("cause", "?")
+    debt = _num(payload.get("outstanding_debt"))
+    text = f"[{name}] 死亡（{cause}），遗留债务 {debt} 石"
+    degraded = not all(k in payload for k in ("agent_id", "died_tick"))
+    return text, degraded
+
+
+def _render_debt_collection_attempt(payload: dict) -> tuple[str, bool]:
+    debtor = payload.get("debtor_name") or payload.get("debtor_id") or "?"
+    creditor = payload.get("creditor_name") or payload.get("creditor_id") or "?"
+    amount = _num(payload.get("amount"))
+    overdue = payload.get("overdue_ticks")
+    text = f"[{creditor}] 向 [{debtor}] 催收 {amount} 石未果（已逾期 {overdue} 天）"
+    degraded = not all(k in payload for k in ("creditor_id", "debtor_id", "amount"))
+    return text, degraded
+
+
+def _render_debt_forgiven(payload: dict) -> tuple[str, bool]:
+    debtor = payload.get("debtor_name") or payload.get("debtor_id") or "?"
+    creditor = payload.get("creditor_name") or payload.get("creditor_id") or "?"
+    amount = _num(payload.get("amount"))
+    cause = payload.get("cause", "?")
+    text = f"[{creditor}] 核销 [{debtor}] 债务 {amount} 石（原因：{cause}）"
+    degraded = not all(k in payload for k in ("creditor_id", "debtor_id", "amount"))
+    return text, degraded
+
+
 def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderResult:
     """渲染单条事件为一行中文摘要。永不抛出。"""
     if evt.get("_payload_broken"):
@@ -284,6 +327,18 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "gather_injury":
             text, degraded = _render_gather_injury(payload)
             reason = "missing_gather_field" if degraded else None
+        elif event_type == "agent_incapacitated":
+            text, degraded = _render_agent_incapacitated(payload)
+            reason = "missing_life_field" if degraded else None
+        elif event_type == "agent_died":
+            text, degraded = _render_agent_died(payload)
+            reason = "missing_life_field" if degraded else None
+        elif event_type == "debt_collection_attempt":
+            text, degraded = _render_debt_collection_attempt(payload)
+            reason = "missing_debt_field" if degraded else None
+        elif event_type == "debt_forgiven":
+            text, degraded = _render_debt_forgiven(payload)
+            reason = "missing_debt_field" if degraded else None
         else:
             # 未知事件类型兜底：展示原始载荷键（截断），不崩
             keys = ", ".join(list(payload.keys())[:8])

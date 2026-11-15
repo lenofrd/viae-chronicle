@@ -71,6 +71,11 @@ def test_no_hardcoded_hunt_branch_in_candidates():
 # 打猎产出与守恒
 # --------------------------------------------------------------------------- #
 def test_hunt_action_occurs(world):
+    """田封顶 + 饱腹的农闲窗口应出猎（任务10：打猎为远征型经济动作，
+    仅在 farm 不可行（封顶）且 hunger 低（eat 不迫切）时胜出）。"""
+    cap = world.config.agents.tuning.agriculture.max_field_growth
+    for a in world.state.agents.values():
+        world.state.field_growth[a.work_node] = cap
     for _ in range(120):
         run_tick(world)
     actions = [e["payload"].get("action") for e in world.event_log.by_type("agent_action_taken")]
@@ -78,9 +83,13 @@ def test_hunt_action_occurs(world):
 
 
 def test_gather_success_produces_meat(world):
+    cap = world.config.agents.tuning.agriculture.max_field_growth
+    for a in world.state.agents.values():
+        world.state.field_growth[a.work_node] = cap
     for _ in range(120):
         run_tick(world)
-    succ = world.event_log.by_type("gather_success")
+    succ = [e for e in world.event_log.by_type("gather_success")
+            if e["payload"]["action"] == "hunt"]
     assert succ, "120 天内应至少打猎成功一次"
     # 产出守恒：单事件 output_after - output_before == amount
     e = succ[0]["payload"]
@@ -224,11 +233,17 @@ def test_1080_ticks_not_all_extinct(seed):
     w = _build(seed)
     for _ in range(1080):
         run_tick(w)
-    survivors = [a for a in w.state.agents.values() if a.health > 0]
+    # 任务10：死亡机制落地后以 alive 判灭绝（health=0 的死者不再「存活」）
+    survivors = [a for a in w.state.agents.values() if a.alive]
     assert survivors, f"seed={seed} 全员灭绝，违反可持续性下限"
-    # 附带不变量
-    assert all(a.grain >= 0 and a.meat >= 0 and a.debt >= 0 for a in w.state.agents.values())
+    # 附带不变量（任务10：fish 加入守恒集合）
+    assert all(a.grain >= 0 and a.meat >= 0 and a.fish >= 0 and a.debt >= 0
+               for a in w.state.agents.values())
     assert not w.event_log.by_type("agent_error")
+    # 失能/死亡事件幂等：每人至多一次
+    for evt_type in ("agent_incapacitated", "agent_died"):
+        ids = [e["payload"]["agent_id"] for e in w.event_log.by_type(evt_type)]
+        assert len(ids) == len(set(ids)), f"{evt_type} 事件重复"
 
 
 # --------------------------------------------------------------------------- #

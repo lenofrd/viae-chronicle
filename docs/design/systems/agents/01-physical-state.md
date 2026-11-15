@@ -68,6 +68,28 @@
       生成 death 事件，触发人文环境的丧葬、继承
 ```
 
+### 4.5a 失能与死亡生命周期（任务 10 落地）
+两阶段状态机（参数外置 `death:` 调参块，代码不写死）：
+```
+阶段一 失能（incapacitated）：
+条件：health <= incapacitation_health_threshold（默认 0）且尚未失能且存活
+效果：AgentState.incapacitated = True，记录 incapacitated_tick
+      写一次 agent_incapacitated（载荷：tick/agent/原因/health/hunger/stamina/宽限期）
+      立即停止感知/决策/执行——后续 tick 不再产生任何 agent_action_taken
+      不参与催收（避免对垂死之人重复刷违约）与回血（无法进食恢复）
+      饥饿累积与饥饿掉血仍发生（无法进食只会更糟）
+
+阶段二 死亡（alive=False）：
+条件：失能满 death_grace_ticks（默认 7，0=立即死亡）仍未恢复
+效果：AgentState.alive = False，记录 died_tick
+      写一次 agent_died（载荷：tick/agent/原因/失能 tick/死亡 tick/health/遗留债务）
+      按 forgive_debt_on_death 核销剩余债务：逐笔写 debt_forgiven（可追溯，不静默消失），
+      债务列表清空；核销是坏账处理（债主承担损失），不移动粮食（世界总粮不变，总债减少有事件）
+
+幂等性：两阶段事件各自只写一次（状态机幂等：已失能/已死亡直接短路返回）。
+死者保留在 WorldState.agents 中（人生档案），但完全不参与任何处理。
+```
+
 ### 4.6 健康回血（任务 08）
 ```
 条件：每日结算阶段，hunger < health_recovery_hunger_threshold
@@ -79,10 +101,11 @@
 ```
 说明：回血在 `AgentModule._settle` 结算阶段执行，**不覆盖** `_process_one` 中的饥饿扣血（4.2）——二者同日可并存（先扣后回，或条件不满足只扣不回）。健康上限 100 为域常量，非调参；回血速率/两阈值外置为 `health:` 调参块。长期饥饿或体力耗尽时条件不满足，不回血、不写事件。
 
-### 4.7 食物储备与多食物消耗（任务 09）
+### 4.7 食物储备与多食物消耗（任务 09，任务 10 扩展）
 - `AgentState` 新增 `meat` 字段（≥0），与 `grain` 并列构成食物储备；打猎产出写入 `meat`。
 - `eat` 消耗改为按 `physiology.food_fields`（默认 `[grain, meat]`）优先级：吃第一个存量 ≥ `eat_grain_cost` 的字段；都不够时吃尽存量最多的字段（不产生负值）。所有食物字段都 ≤ 0 时 `eat` 判为不可行。
-- **守恒与可扩展**：粮、肉各自守恒、不为负；未来接入渔业只需在 `AgentState` 加 `fish` 字段并在 `food_fields` 追加 `"fish"`，`eat` 核心代码不变。
+- **任务 10 落地渔业**：`AgentState` 新增 `fish` 字段（≥0），捕鱼产出写入 `fish`；`food_fields` 配置为 `[grain, meat, fish]`，`eat` 核心代码不变——验证了「加食物字段只改配置」的扩展点。
+- **守恒**：粮、肉、鱼各自守恒、不为负、可追溯（`agent_action_taken` 载荷含三者的 before/after）。
 
 ## 5. 与其他系统的接口
 - 读：食物存量、休息场所。

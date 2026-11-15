@@ -103,6 +103,14 @@ nodes:
     travel_cost_from_well_tu: 2.5
     attributes: { 风险: 无, 步行难度: 坡地 }
 
+  - id: south_field
+    name: 南片田
+    type: field
+    district: 镇南
+    description: 约四十亩，近翠溪下游，灌溉便利；里正李全名下的自耕田（任务10：独立田块，避免与他人共用长势清零）。
+    travel_cost_from_well_tu: 1.5
+    attributes: { 风险: 无, 步行难度: 平地 }
+
   - id: river_upstream
     name: 翠溪上游
     type: water
@@ -131,7 +139,9 @@ distance_edges:
   - { from_id: well, to_id: elder_house, one_way_tu: 0.5, difficulty: 平地, risk: 无 }
   - { from_id: well, to_id: east_field, one_way_tu: 1.5, difficulty: 平地, risk: 无 }
   - { from_id: well, to_id: west_field, one_way_tu: 2.5, difficulty: 坡地, risk: 无 }
+  - { from_id: well, to_id: south_field, one_way_tu: 1.5, difficulty: 平地, risk: 无 }
   - { from_id: well, to_id: river_town, one_way_tu: 1.0, difficulty: 平地, risk: 汛期有溺水风险 }
+  - { from_id: poor_district, to_id: river_town, one_way_tu: 1.5, difficulty: 平地, risk: 汛期有溺水风险 }  # [调参] 任务10：贫民区到翠溪镇前段的近路。原路径 poor→well→river 单程 3.0 TU（往返 6 TU），捕鱼打分恒负，赵翠兰宁肯空腹耕作也不捕鱼、每种子结构性饿死；此近路使贫民捕鱼单程 1.5 TU（与平民区相当），渔获可维生。远田（东片田单程 3.5 TU）的阶级壁垒保留，见 05-distances.md §4
   - { from_id: well, to_id: foothill, one_way_tu: 2.0, difficulty: 缓坡, risk: 野兽下山时危险 }
   - { from_id: foothill, to_id: low_mountain, one_way_tu: 4.0, difficulty: 山路崎岖, risk: 迷路 / 蛇虫 / 野狼 }
   - { from_id: low_mountain, to_id: deep_mountain, one_way_tu: 8.0, difficulty: 极高, risk: 浓雾 / 瘴气 / 妖兽 }

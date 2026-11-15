@@ -92,6 +92,25 @@ class HealthTuning(BaseModel):
     )
 
 
+class DeathTuning(BaseModel):
+    """死亡与失能生命周期（任务 10 新增）。数值全部来自 agents.yaml，代码不写死。
+
+    - health 触底（<= incapacitation_health_threshold）→ 失能，停止一切主动动作，写一次
+      agent_incapacitated；失能满 death_grace_ticks 仍未恢复 → 死亡，写一次 agent_died，
+      并按 forgive_debt_on_death 核销剩余债务（写 debt_forgiven，可追溯，不静默消失）。
+    """
+
+    incapacitation_health_threshold: float = Field(
+        0.0, ge=0, le=100, description="health 低于等于此值进入失能"
+    )
+    death_grace_ticks: int = Field(
+        7, ge=0, description="失能后多少 tick 仍未恢复则死亡（0 = 立即死亡）"
+    )
+    forgive_debt_on_death: bool = Field(
+        True, description="死亡时是否核销剩余债务（写 debt_forgiven 事件，可追溯）"
+    )
+
+
 class TimeTuning(BaseModel):
     tu_per_tick: float = Field(10.0, ge=0)
     farm_tu: float = Field(5.0, ge=0)
@@ -131,6 +150,7 @@ class AgentTuning(BaseModel):
     borrow: BorrowTuning = Field(default_factory=BorrowTuning)
     debt: DebtTuning = Field(default_factory=DebtTuning)
     health: HealthTuning = Field(default_factory=HealthTuning)
+    death: DeathTuning = Field(default_factory=DeathTuning)
     gathering: GatheringTuning = Field(default_factory=GatheringTuning)
     time: TimeTuning = Field(default_factory=TimeTuning)
 

@@ -47,10 +47,11 @@ def test_agents_loaded_from_config(world):
     ids = set(world.state.agents.keys())
     assert ids == {"lin_yuan", "zhao_cuilan", "li_quan"}
 
-    # 配置层：D1 初始存粮 15 / 3 / 100 正确加载（不受首 tick 行为影响）
+    # 配置层：初始存粮正确加载（不受首 tick 行为影响）。任务10 [调参]：林远 15→30、
+    # 赵翠兰 3→35（开春缓冲撑到首次秋收），李全 100 不变
     cfg_by_id = {a.id: a for a in world.config.agents.agents}
-    assert cfg_by_id["lin_yuan"].assets.grain == pytest.approx(15.0)
-    assert cfg_by_id["zhao_cuilan"].assets.grain == pytest.approx(3.0)
+    assert cfg_by_id["lin_yuan"].assets.grain == pytest.approx(30.0)
+    assert cfg_by_id["zhao_cuilan"].assets.grain == pytest.approx(35.0)
     assert cfg_by_id["li_quan"].assets.grain == pytest.approx(100.0)
 
     lin = world.state.agents["lin_yuan"]
@@ -189,7 +190,7 @@ def test_farm_raises_growth_does_not_produce_grain(world):
 
 
 def test_harvest_autumn_grains_growth_and_redeems_debt(world):
-    """秋季 harvest：长势清零、存粮 +30，并按债务记录还给债主（粮守恒，不凭空消债）。"""
+    """秋季 harvest：长势清零、存粮 +harvest_grain_gain，并按债务记录还给债主（粮守恒，不凭空消债）。"""
     run_tick(world)
     module = _agent_module(world)
     tuning = world.config.agents.tuning
@@ -205,7 +206,8 @@ def test_harvest_autumn_grains_growth_and_redeems_debt(world):
 
     module._execute(world, lin, "harvest", p, tuning)
 
-    assert lin.grain == pytest.approx(30.0)   # 10 + 30(秋收) - 10(还债给李全)
+    gain = tuning.agriculture.harvest_grain_gain  # 任务10 [调参]：30→75，农业重回主食
+    assert lin.grain == pytest.approx(10.0 + gain - 10.0)  # 10 + 秋收gain - 10(还债给李全)
     assert lin.debt == pytest.approx(10.0)    # 20 - 10（派生聚合）
     assert li_quan.grain == pytest.approx(lq_grain_before + 10.0)  # 债主收粮，总粮守恒
     assert world.state.field_growth[lin.work_node] == pytest.approx(0.0)
@@ -236,19 +238,25 @@ def test_harvest_feasibility_gated_by_season_and_growth(world):
 # 借粮：存粮 < 阈值触发 borrow_grain，存粮与债务同步增加
 # --------------------------------------------------------------------------- #
 def test_borrow_grain_triggers_when_low_grain(world):
+    """断粮（所有食物字段为 0）且无采集可选时，饥饿驱动借粮。
+
+    任务10 调参后：borrow fulfill survival 0.8 < eat 1.0（有食物先吃），
+    且渔业/打猎作为断粮觅食路径优先于借粮（survival 驱动）。故此用例清空采集动作，
+    隔离出「无任何食物、无采集」的决策分支。
+    """
     run_tick(world)
+    world.config.agents.tuning.gathering.actions.clear()
     lin = world.state.agents["lin_yuan"]
-    lin.grain = 1.0      # < 阈值 2
-    lin.stamina = 80.0
-    lin.hunger = 30.0
-    # debt 为派生值（computed_field），不可赋值；开局无债务即 0
+    lin.grain = 0.0      # 无任何食物 → eat 不可行
+    lin.stamina = 100.0  # 体力满：消除 rest 的体力紧缺项，借粮(1.8) > rest(1.5)
+    lin.hunger = 95.0
 
     run_tick(world)
 
     lin_events = [e for e in world.event_log.by_type("agent_action_taken")
                   if e["payload"]["agent_name"] == "林远"]
     assert lin_events[-1]["payload"]["action"] == "borrow_grain"
-    assert lin.grain == pytest.approx(6.0)  # 1 + 5
+    assert lin.grain == pytest.approx(5.0)  # 0 + 5
     assert lin.debt == pytest.approx(5.0)   # 等额计入债务（派生聚合）
 
     # 借粮闭合：债主扣粮、借粮者加粮，总粮不变；事件载荷足以重建债务记录

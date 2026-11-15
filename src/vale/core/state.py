@@ -76,10 +76,17 @@ class AgentState(BaseModel):
     fatigue: float = Field(default=0.0, ge=0, le=100)
     grain: float = Field(default=0.0, ge=0)
     meat: float = Field(default=0.0, ge=0)  # 任务09：非农生计（打猎）产出；与 grain 同属食物储备
+    fish: float = Field(default=0.0, ge=0)  # 任务10：渔业产出；按 physiology.food_fields 优先级被 eat 消耗
     # 债务列表为唯一真相源；debt 为派生聚合（见下方 computed_field）
     debts: list[DebtRecord] = Field(default_factory=list)
     last_action: Optional[str] = None
     recent_actions: list[str] = Field(default_factory=list)
+    # 生命状态（任务10）：alive=False 表示已死亡；incapacitated=True 表示失能（health 触底，
+    # 停止一切主动动作，等待死亡宽限期满或不再发生）。状态变更各写一次事件，不重复刷。
+    alive: bool = True
+    incapacitated: bool = False
+    incapacitated_tick: Optional[int] = Field(default=None, ge=0)
+    died_tick: Optional[int] = Field(default=None, ge=0)
 
     @computed_field  # type: ignore[misc]
     @property

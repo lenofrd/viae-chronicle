@@ -73,6 +73,17 @@
 5. **核心结算**：`_settle`（催收/回血）**不用改**——这正是扩展点验证目标。
 6. 写测试：在 `tests/test_hunting_and_sustainability.py` 仿照 `test_execute_gather_works_for_arbitrary_action_name` 加用例，断言新动作产出到指定字段且结算事件照常。
 
+### 5.2a 渔业已按此指南落地（任务 10）
+- `AgentState.fish` 字段、`gathering.actions.fish`（target_node=river_town，outdoor）、`food_fields=[grain, meat, fish]`、`GATHER_DESC["fish"]` 全部就位；`_execute_gather` 通用分支处理，核心结算零改动。
+- 生计分层涌现：打猎 `survival=0.1`（纯经济远征，只在饱腹+田封顶的农闲窗口出猎）、捕鱼 `survival=0.8`（断粮时压过 rest 的维生手段）；贫民区→河边近路（1.5 TU）使贫民捕鱼可行，与远田阶级壁垒（东片田 3.5 TU）并存。
+- 测试：`tests/test_task10_lifecycle_and_fishery.py` 覆盖鱼产出/失败/季节天气修正/eat 消耗鱼/扩展点回归。
+
+### 5.2b 纺织（weave）——未来接入点（仅标注，任务 10 不实现）
+- 接入方式与渔业完全同构（§5.2 六步）：资源节点（亚麻/桑田）、`AgentState.cloth` 字段、`gathering.actions.weave` 配置（`output_field: cloth`）、`fulfill` 需新增 `craft` 维度或复用 `economy`、`GATHER_DESC["weave"]`。
+- **性别规范接入点**：`weave` 属传统女性主导动作（§2.4），接入时应挂 `norm_penalty` 门槛（男性执行扣分），该机制当前未实现，需先落地 norm_penalty 通道。
+- **经济闭环预留**：布匹（cloth）当前无可消费路径；接入时需同步设计交换/价值系统（如以布抵债），否则 `cloth` 只是无消费者的囤积字段。
+- 本任务仅在配置 schema 与文档标注此接入点，不写任何 weave 代码。
+
 ### 5.3 守恒与可追溯
 - 每次采集产出写入 `gather_success` 事件（`output_before/after` + `amount`），可重建世界总产出；
 - `eat` 按 `food_fields` 优先级消耗，粮与肉各自守恒、不为负；

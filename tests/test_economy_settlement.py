@@ -63,11 +63,21 @@ def test_select_creditor_returns_none_when_none_sufficient(world):
 # 借粮闭合
 # --------------------------------------------------------------------------- #
 def test_borrow_transaction_conserves_grain(world):
-    """所有 debt_formed 事件中，借粮者增量 + 债主减量 == 0（粮守恒，不凭空产粮）。"""
-    for _ in range(60):
+    """所有 debt_formed 事件中，借粮者增量 + 债主减量 == 0（粮守恒，不凭空产粮）。
+
+    任务10 调参后开局存粮宽裕（30/35/100），自然演化 60 天不会借粮；
+    故构造断粮状态（清空采集动作 + 零食物 + 高饥饿）触发借粮再验证守恒。
+    """
+    run_tick(world)
+    world.config.agents.tuning.gathering.actions.clear()
+    lin = world.state.agents["lin_yuan"]
+    lin.grain = 0.0
+    lin.hunger = 95.0
+    lin.stamina = 100.0  # 体力满：borrow > rest（同 test_borrow_grain_triggers_when_low_grain）
+    for _ in range(12):
         run_tick(world)
     formed = world.event_log.by_type("debt_formed")
-    assert formed, "60 天内应至少发生一次借粮"
+    assert formed, "断粮且无采集时应在数日内发生借粮"
     total = 0.0
     for e in formed:
         p = e["payload"]
@@ -77,18 +87,23 @@ def test_borrow_transaction_conserves_grain(world):
 
 
 def test_borrow_chooses_creditor_with_sufficient_grain(world):
-    """最富者存粮不足时，改选存粮足够的次富者（不写死姓名）。"""
+    """最富者存粮不足时，改选存粮足够的次富者（不写死姓名）。
+
+    直接驱动 _execute（借粮闭合），与效用决策解耦：决策选择已由
+    test_borrow_grain_triggers_when_low_grain 覆盖。
+    """
     run_tick(world)
     lin = world.state.agents["lin_yuan"]
     world.state.agents["li_quan"].grain = 3.0  # 最富但 < 5，借不出
     zhao = world.state.agents["zhao_cuilan"]
     zhao.grain = 50.0
     lin.grain = 1.0
-    lin.stamina = 80.0
-    lin.hunger = 30.0
-    zhao_before = zhao.grain
+    module = _module(world)
+    tuning = world.config.agents.tuning
+    p = module._perceive(world, lin)  # noqa: SLF001
+    assert p.creditor_id == "zhao_cuilan"  # 感知层即跳过存粮不足者
 
-    run_tick(world)
+    module._execute(world, lin, "borrow_grain", p, tuning)  # noqa: SLF001
 
     formed = [e for e in world.event_log.by_type("debt_formed")
               if e["payload"]["debtor_id"] == "lin_yuan"]

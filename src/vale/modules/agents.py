@@ -205,19 +205,55 @@ class AgentModule:
         agent = world.state.agents[agent_cfg.id]
         phys = tuning.physiology
 
-        # 1. 每日自然生理演化（A1 饥饿增长；A4 饥饿过高掉健康）
+        # 已死亡：完全不参与当日任何处理（结算中的死亡判定已先于此处写好事件）
+        if not agent.alive:
+            return
+
+        # 1. 每日自然生理演化（A1 饥饿增长；A4 饥饿过高掉健康）—— 对失能者也发生（无法进食只会更糟）
         agent.hunger = min(100.0, agent.hunger + phys.hunger_gain_per_tick)
         if agent.hunger > phys.hunger_health_damage_threshold:
             agent.health = max(0.0, agent.health - phys.hunger_health_damage)
 
-        # 2. 感知（隔离层）
+        # 2. 生命状态门控（任务10）：health 触底 → 失能，停止一切主动动作；事件只写一次
+        if self._incapacitate_if_needed(world, agent, tuning):
+            return  # 本 tick 刚进入失能，不再感知/决策/执行
+        if agent.incapacitated:
+            return  # 已失能，持续不行动
+
+        # 3. 感知（隔离层）
         perception = self._perceive(world, agent)
 
-        # 3. 效用打分 → 选动作
+        # 4. 效用打分 → 选动作
         action = self._decide(perception, tuning)
 
-        # 4. 执行：更新快照 + 写事件
+        # 5. 执行：更新快照 + 写事件
         self._execute(world, agent, action, perception, tuning)
+
+    def _incapacitate_if_needed(self, world, agent: AgentState, tuning: AgentTuning) -> bool:
+        """health 触底且尚未失能 → 标记失能、写一次 agent_incapacitated。返回是否本 tick 刚失能。
+
+        纯状态机：已失能/已死亡直接返回 False，保证事件不重复。
+        """
+        if agent.incapacitated or not agent.alive:
+            return False
+        if agent.health > tuning.death.incapacitation_health_threshold:
+            return False
+        agent.incapacitated = True
+        agent.incapacitated_tick = world.current_tick
+        world.event_log.append(
+            world.current_tick,
+            "agent_incapacitated",
+            {
+                "agent_id": agent.agent_id,
+                "agent_name": agent.name,
+                "reason": "health_bottomed",
+                "health": round(agent.health, 2),
+                "hunger": round(agent.hunger, 2),
+                "stamina": round(agent.stamina, 2),
+                "death_grace_ticks": tuning.death.death_grace_ticks,
+            },
+        )
+        return True
 
     def _perceive(self, world, agent: AgentState) -> Perception:
         climate = world.state.climate
@@ -371,6 +407,7 @@ class AgentModule:
         hunger_before = agent.hunger
         grain_before = agent.grain
         meat_before = agent.meat
+        fish_before = agent.fish
         debt_before = agent.debt
         fg = world.state.field_growth
         field_growth_before = fg.get(agent.work_node, 0.0)
@@ -475,6 +512,8 @@ class AgentModule:
                 "grain_after": round(agent.grain, 2),
                 "meat_before": round(meat_before, 2),
                 "meat_after": round(agent.meat, 2),
+                "fish_before": round(fish_before, 2),
+                "fish_after": round(agent.fish, 2),
                 "debt_before": round(debt_before, 2),
                 "debt_after": round(agent.debt, 2),
                 "field_growth_before": round(field_growth_before, 2),
@@ -591,11 +630,21 @@ class AgentModule:
         # 清偿完毕（amount==0）的记录移出列表，保持债务列表干净
         agent.debts = [d for d in agent.debts if d.amount > 0]
 
-    # -- 每日结算：债务催收 + 健康回血 ------------------------------------- #
+    # -- 每日结算：死亡判定 + 债务催收 + 健康回血 -------------------------- #
     def _settle(self, world, tuning: AgentTuning) -> None:
-        """tick 末尾统一结算。逐人错误隔离：单人结算失败写 agent_error，不拖垮世界。"""
+        """tick 末尾统一结算。逐人错误隔离：单人结算失败写 agent_error，不拖垮世界。
+
+        顺序（任务10）：先做死亡判定（失能满宽限期 → 死亡并核销债务），死者/失能者不再参与
+        催收（无收入，避免违约刷屏）与回血（无法进食恢复）。
+        """
         for agent in list(world.state.agents.values()):
             try:
+                self._process_death(world, agent, tuning)
+                if not agent.alive:
+                    continue
+                # 失能者无收入、无法进食：不催收（避免对垂死之人重复刷违约），也不回血
+                if agent.incapacitated:
+                    continue
                 self._collect_debts(world, agent, tuning)
                 self._recover_health(world, agent, tuning)
             except Exception as exc:  # noqa: BLE001 — 单人结算失败不拖垮世界
@@ -611,11 +660,68 @@ class AgentModule:
                     },
                 )
 
-    def _collect_debts(self, world, agent: AgentState, tuning: AgentTuning) -> None:
-        """到期债务催收：足额/部分转粮给债主写 debt_collected；无粮可还则违约写 debt_defaulted。
+    def _process_death(self, world, agent: AgentState, tuning: AgentTuning) -> None:
+        """失能满 death_grace_ticks 仍未恢复 → 死亡；写一次 agent_died 并按配置核销债务。
 
-        到期后每 collection_interval_days 天催收一次（last_collected_tick 节流）。
-        部分还款后剩余标 overdue；逾期者后续借粮被 _score 禁止。
+        幂等：已死亡直接返回，事件只写一次。
+        """
+        if not agent.incapacitated or not agent.alive:
+            return
+        if agent.incapacitated_tick is None:
+            return
+        if world.current_tick - agent.incapacitated_tick < tuning.death.death_grace_ticks:
+            return
+        agent.alive = False
+        agent.died_tick = world.current_tick
+        outstanding = round(agent.debt, 2)
+        world.event_log.append(
+            world.current_tick,
+            "agent_died",
+            {
+                "agent_id": agent.agent_id,
+                "agent_name": agent.name,
+                "cause": "health_bottomed",
+                "incapacitated_tick": agent.incapacitated_tick,
+                "died_tick": world.current_tick,
+                "health": round(agent.health, 2),
+                "outstanding_debt": outstanding,
+            },
+        )
+        if tuning.death.forgive_debt_on_death and agent.debts:
+            self._forgive_debts(world, agent, cause="death")
+
+    def _forgive_debts(self, world, agent: AgentState, *, cause: str) -> None:
+        """核销 agent 全部剩余债务：逐笔写 debt_forgiven（可追溯，不静默消失），再清空列表。
+
+        守恒说明：这是账面坏账核销（死者无粮可还，债主承担损失），不涉及粮的凭空产生或消灭；
+        世界总粮不变，世界总债减少并由事件完整记录。
+        """
+        for rec in list(agent.debts):
+            creditor = world.state.agents.get(rec.creditor_id)
+            world.event_log.append(
+                world.current_tick,
+                "debt_forgiven",
+                {
+                    "creditor_id": rec.creditor_id,
+                    "creditor_name": creditor.name if creditor else rec.creditor_id,
+                    "debtor_id": agent.agent_id,
+                    "debtor_name": agent.name,
+                    "amount": round(rec.amount, 2),
+                    "cause": cause,
+                },
+            )
+        agent.debts = []
+
+    def _collect_debts(self, world, agent: AgentState, tuning: AgentTuning) -> None:
+        """到期债务催收，区分「违约状态变更」与「催收尝试」（任务10，降低叙事噪声）。
+
+        - 到期后每 collection_interval_days 天催收一次（last_collected_tick 节流）。
+        - **违约状态变更**（debt_defaulted）：一笔债务首次到期且无力全额偿还时，由未逾期变为
+          逾期，只写一次；此后该笔不再重复写 debt_defaulted。
+        - **催收尝试**（debt_collection_attempt）：已是逾期的债务后续每次零粮催收，写该事件
+          （可重复，但语义明确为「催收失败」而非「新增违约」），人生档案可按类型过滤刷屏。
+        - 有粮则扣粮还债主写 debt_collected；足额清偿 overdue 清零，部分还款剩余仍 overdue。
+          逾期者后续借粮被 _score 禁止。
         """
         tick = world.current_tick
         interval = tuning.debt.collection_interval_days
@@ -630,6 +736,7 @@ class AgentModule:
             if creditor is None:
                 continue
             pay = min(rec.amount, agent.grain)
+            first_due = not rec.overdue  # 本次是否为该笔首次到期催收
             if pay > 0:
                 agent.grain = agent.grain - pay
                 creditor.grain = creditor.grain + pay
@@ -650,7 +757,8 @@ class AgentModule:
                         "creditor_grain_after": round(creditor.grain, 2),
                     },
                 )
-            else:
+            elif first_due:
+                # 首次到期零粮：违约状态变更（只写一次）
                 rec.overdue = True
                 world.event_log.append(
                     tick,
@@ -662,6 +770,21 @@ class AgentModule:
                         "debtor_name": agent.name,
                         "amount": round(rec.amount, 2),
                         "overdue_ticks": tick - rec.due_tick,
+                    },
+                )
+            else:
+                # 已逾期的重复催收失败：写催收尝试（可重复，语义明确），不刷违约
+                world.event_log.append(
+                    tick,
+                    "debt_collection_attempt",
+                    {
+                        "creditor_id": creditor.agent_id,
+                        "creditor_name": creditor.name,
+                        "debtor_id": agent.agent_id,
+                        "debtor_name": agent.name,
+                        "amount": round(rec.amount, 2),
+                        "overdue_ticks": tick - rec.due_tick,
+                        "interval_days": interval,
                     },
                 )
         agent.debts = [d for d in agent.debts if d.amount > 0]

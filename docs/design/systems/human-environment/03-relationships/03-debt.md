@@ -119,8 +119,10 @@
 |---|---|---|
 | `debt_formed` | 借粮成功 | creditor/debtor 的 id+name, debt_type, amount, due_tick, originated_tick, 双方 grain_before/after, debt_before/after |
 | `debt_collected` | 到期催收（足额或部分） | creditor/debtor 的 id+name, amount_paid, remaining, overdue, 双方 grain_after |
-| `debt_defaulted` | 到期零粮 | creditor/debtor 的 id+name, amount, overdue_ticks |
+| `debt_defaulted` | 到期零粮（每笔一次，状态变更） | creditor/debtor 的 id+name, amount, overdue_ticks |
 | `debt_repaid` | 秋收还款 | creditor/debtor 的 id+name, amount, remaining, source, 双方 grain_after |
+| `debt_collection_attempt` | 已逾期债务周期性零粮催收（任务 10） | creditor/debtor 的 id+name, amount, overdue_ticks, interval_days |
+| `debt_forgiven` | 死亡核销（逐笔，任务 10） | creditor/debtor 的 id+name, amount, cause |
 
 > 1 tick = 1 天（`time.tu_per_tick=10`），`due_days` / `collection_interval_days` 直接映射为 tick 差。
 
@@ -129,3 +131,23 @@
 - **问题**：任务 08 取 `due_days=90`，借粮集中在春季（tick 8–99），到期日落在夏季（tick 98–189），而秋收在秋季（tick 181+）才发生——债务在秋收前集中到期→催收→违约，与农业产出周期错位，加剧夏季断粮灭绝。
 - **调整**：`debt.due_days` 由 90 调为 180（[调参]，`agents.yaml`），使借粮到期跨越秋收，借款人有机会在秋收后还款，降低秋收前集中违约。
 - **理由**：纯参数调整，不改规则；仍外置可追溯，等裁决确认。其余债务规则（催收/违约/秋收还款/守恒）不变。
+
+## 10. 任务 10：违约状态变更与催收尝试的语义分离
+
+**问题**：任务 08/09 中「到期零粮」每 30 天重复写 `debt_defaulted`，同一笔债半年刷 6 次「违约」——叙事上像反复新增违约，事件流噪声大，人生档案失真。
+
+**语义分离**（`_collect_debts`，按 `DebtRecord.overdue` 标志区分）：
+- **违约状态变更**（`debt_defaulted`）：一笔债务**首次**到期且零粮催收时，由「未逾期」变为「逾期」的状态变更，**只写一次**（写后 `overdue=True`，后续分支不再命中）。
+- **催收尝试**（`debt_collection_attempt`）：已逾期的债务后续每 `collection_interval_days` 零粮催收一次（`last_collected_tick` 节流），写该事件，**可重复但语义明确为「催收未果」**——人生档案可按类型过滤刷屏，违约计数口径保持「每笔一次」。
+- 有粮则照旧 `debt_collected`（足额清零/部分标逾期不变）；逾期者借粮仍被禁。
+
+**计数口径**：`违约数 = debt_defaulted 事件数（≤ 债务笔数）`；`催收尝试数 = debt_collection_attempt 事件数（可 > 违约数）`。验收对比两者即可判断叙事噪声是否消除。
+
+**due_days=180 复核结论**：保留 180，非临时平衡——180 天使借粮到期落在次年春季，有意跨越秋收窗口（tick 181+），借款人秋收后有粮可还；配合 §10 的违约去重，到期后即使无力偿还也只刷一次违约 + 周期性催收尝试，不再有结构性集中违约刷屏。
+
+## 11. 任务 10：死亡核销（坏账）
+
+- 失能满宽限期死亡的 agent，其剩余债务按 `death.forgive_debt_on_death` 核销：**逐笔写 `debt_forgiven`**（载荷：creditor/debtor 的 id+name、amount、cause="death"），债务列表清空，绝不静默消失。
+- **守恒语义**：核销是**账面坏账**（死者无粮可还，债主承担损失），不移动粮食——世界总粮不变、世界总债减少且每笔减少都有事件，可审计。
+- 事件载荷见 §8.3 表（`debt_forgiven` 行）。观察层渲染：「[债主] 核销 [债务人] 债务 N 石（原因：death）」。
+- 失能（未死）期间不催收、不回血——避免对垂死之人重复刷违约/催收事件（详见 agents/01-physical-state.md §4.5a）。
