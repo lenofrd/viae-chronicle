@@ -160,6 +160,48 @@ def test_legacy_replay_debt_ids_are_households():
     assert seen > 0, "旧事件流应至少包含一笔债务"
 
 
+def test_replay_debt_side_transfer_without_debtor_key_stays_compatible():
+    """G7 回放兼容：旧库债务侧转移（无 debtor_household_id）不报错、金额一致。"""
+    cfg = load_config("brookvale-town-001")
+    events = [
+        {"id": 1, "tick": 0, "event_type": "debt_formed", "payload": {
+            "debtor_id": "lin_yuan", "debtor_household_id": "hh_lin_yuan",
+            "creditor_id": "zhao_cuilan", "creditor_household_id": "hh_zhao_cuilan",
+            "amount": 4.0, "due_tick": 500}},
+        {"id": 2, "tick": 1, "event_type": "debt_transferred", "payload": {
+            "from_id": "lin_yuan", "from_household_id": "hh_lin_yuan",
+            "to_id": "li_quan", "to_household_id": "hh_li_quan",
+            "creditor_id": "zhao_cuilan", "creditor_household_id": "hh_zhao_cuilan",
+            "amount": 2.0, "due_tick": 500}},
+    ]
+    state = rebuild_state(events, cfg).state
+    assert state.households["hh_lin_yuan"].debt == pytest.approx(2.0)
+    assert state.households["hh_li_quan"].debt == pytest.approx(2.0)
+
+
+def test_replay_creditor_side_transfer_uses_debtor_household_id():
+    """G7 回放：债权侧转移按 debtor_household_id 改挂应收债权，不产生错位债务。"""
+    cfg = load_config("brookvale-town-001")
+    events = [
+        {"id": 1, "tick": 0, "event_type": "debt_formed", "payload": {
+            "debtor_id": "lin_yuan", "debtor_household_id": "hh_lin_yuan",
+            "creditor_id": "zhao_cuilan", "creditor_household_id": "hh_zhao_cuilan",
+            "amount": 4.0, "due_tick": 500}},
+        {"id": 2, "tick": 1, "event_type": "debt_transferred", "payload": {
+            "from_id": "zhao_cuilan", "from_household_id": "hh_zhao_cuilan",
+            "to_id": "li_quan", "to_household_id": "hh_li_quan",
+            "creditor_id": "li_quan", "creditor_household_id": "hh_li_quan",
+            "debtor_id": "lin_yuan", "debtor_household_id": "hh_lin_yuan",
+            "amount": 4.0, "due_tick": 500}},
+    ]
+    state = rebuild_state(events, cfg).state
+    debtor_hh = state.households["hh_lin_yuan"]
+    assert debtor_hh.debt == pytest.approx(4.0)
+    assert debtor_hh.debts[0].creditor_household_id == "hh_li_quan"
+    assert state.households["hh_li_quan"].debts == []
+    assert state.households["hh_zhao_cuilan"].debts == []
+
+
 def test_legacy_replay_does_not_rewrite_events():
     cfg = load_config("brookvale-town-001")
     events = _legacy_events()

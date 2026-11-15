@@ -476,6 +476,43 @@ def test_d11_debt_split_between_heir_and_forgiveness(world):
     assert world.event_log.by_type("debt_written_off")[-1]["payload"]["amount"] == pytest.approx(5.0)
 
 
+def test_q5_creditor_dissolution_transfer_carries_each_debtor_household():
+    """G7：债权家庭消亡时，每位债务方的 debt_transferred 都带 debtor_household_id。"""
+    world = _build(0)
+    mod = next(m for m in world.modules if m.name == "agents")
+    mod._ensure_agents(world, world.config.agents)  # noqa: SLF001 — 只验证结算事件
+    tuning = world.config.agents.tuning
+    zhao = world.state.agents["zhao_cuilan"]
+    creditor_hh = hh(world, zhao)
+    debtor_agents = [world.state.agents["lin_yuan"], world.state.agents["zhou_qiaoniang"]]
+    heir = world.state.agents["li_quan"]
+    amounts = [3.0, 1.5]
+
+    for agent, amount in zip(debtor_agents, amounts):
+        dhh = hh(world, agent)
+        dhh.debts = [DebtRecord(debtor_household_id=dhh.household_id,
+                                creditor_household_id=creditor_hh.household_id,
+                                amount=amount, originated_tick=0, due_tick=9999)]
+
+    zhao.spouse_id = zhao.mother_id = zhao.father_id = None
+    zhao.children_ids = [heir.agent_id]
+    heir_hh = mod._execute_inheritance(world, zhao, tuning)  # noqa: SLF001
+    mod._settle_creditor_dissolution(world, creditor_hh, zhao, heir_hh)  # noqa: SLF001
+
+    transfers = world.event_log.by_type("debt_transferred")
+    assert len(transfers) == len(debtor_agents)
+    got = {e["payload"]["debtor_household_id"]: e["payload"]["amount"] for e in transfers}
+    assert got == {
+        hh(world, agent).household_id: amount
+        for agent, amount in zip(debtor_agents, amounts)
+    }
+    for agent, amount in zip(debtor_agents, amounts):
+        assert hh(world, agent).debt == pytest.approx(amount)
+        assert hh(world, agent).debts[0].creditor_household_id == heir_hh.household_id
+    # 守恒：债权改挂不改变债务总额（转移 + 核销 = 原债务，此处无核销）
+    assert sum(hh(world, a).debt for a in debtor_agents) == pytest.approx(sum(amounts))
+
+
 def test_d12_no_heir_assets_escheated_with_event(world):
     mod = _module(world)
     tuning = world.config.agents.tuning

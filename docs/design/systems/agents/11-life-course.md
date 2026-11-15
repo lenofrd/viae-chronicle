@@ -231,8 +231,8 @@ def inv(world, agent): return inventory_of(world, agent)
 ### 10.2 家庭最后成员死亡
 
 - 先写 `agent_died`，再按 D10 在**家庭外**找继承人：配偶 > 子女最长者 > 父母；
-- 有继承人：资产逐项转移至继承人家庭，写 `inheritance_executed`（含 `deceased_household_id` / `heir_household_id`）；债务 `debt_ratio` 转移，余额 `debt_forgiven`；
-- 无继承人：逐物品写 `inheritance_escheated`，债务全额核销（`debt_forgiven(cause="no_heir")`）；
+- 有继承人：资产逐项转移至继承人家庭，写 `inheritance_executed`（含 `deceased_household_id` / `heir_household_id`）；债务 `debt_ratio` 转移，余额 `debt_written_off(reason="inheritance_remainder")`；
+- 无继承人：逐物品写 `inheritance_escheated`，债务全额核销（`debt_written_off(reason="no_heir")`）；
 - 最后写 `household_dissolved`：
 
 ```text
@@ -244,6 +244,7 @@ def inv(world, agent): return inventory_of(world, agent)
 ### 10.3 债权家庭消亡（Q5）
 
 - 债权家庭最后成员死亡时，其**应收债权**（记录在各债务家庭 `debts` 中、`creditor_household_id` 指向它）优先由债权家庭的继承人承接：改写为继承人家庭 id，写 `debt_transferred`；
+- `debt_transferred`（债权侧）追加 `debtor_household_id`（被承接债务的债务方），与 `debt_written_off` 对齐，保证逐笔核对可定位（任务 14 G7）；旧库缺该键时回放按债务侧逻辑处理，不报错；
 - 债权家庭无继承人：逐笔核销，写 **`debt_written_off`**，`reason="creditor_household_dissolved"`；
 - 不记坏账挂账、不向不存在家庭转账。
 
@@ -419,6 +420,7 @@ def rebuild_state(events: list[dict], config) -> WorldState
 | G4 | ~~分家未实现~~ **已在第 3 步落地** | `split.min_members` / `asset_ratio` / `home_node_candidates` 与 `household_split` 事件已实现，含守恒与住所轮转 | — | 已完成 |
 | G5 | 外部监护/其他居所制未实现 | 全户未成年仅取最长成员为户主（Q7），不做亲属间监护转移 | 孤儿户可能由未成年户主支撑 | 后续家庭扩展 |
 | G6 | 生育代价缺数值（阶段二 §3.0 登记） | **设计有框架**（[01-physical-state.md §4.4](01-physical-state.md)：孕期分段、晚期 `max_stamina −50%`、普通分娩 health −10、难产 −40 可能死亡、产后休养 1–2 月），**缺**难产概率 / 孕期时长 / 产后休养数值 | 当前仅落地「普通分娩 health −10」 | 阶段三前补数值即可实现，**不需重新设计** |
+| G7 | **债务链路在盈余经济下休眠** | 2 种子 × 2600 tick 无 `debt_formed`；借粮要求家庭存粮 <2 且有存粮 ≥5 的债主，盈余改善后两者不同时出现；受控 A–F 六场景 6/6 守恒（债权侧转移已补 `debtor_household_id`） | 非缺陷，是盈余经济的副作用：无人断粮是正面效果，但债务/催收/纠纷系统在正常年景无素材 | 任务 15 社会冲突时一并设计「借粮触发条件」或「非断粮型借贷」，本轮不调参 |
 
 > G1–G3 为第 2 步收尾的显式技术债，代码中所有降级测试以 `_tech_debt` 后缀标记，解除条件写在测试 docstring 与本表。
 

@@ -1797,6 +1797,7 @@ class AgentModule:
                             "creditor_id": heir_head.agent_id if heir_head is not None else heir_hh.household_id,
                             "creditor_name": heir_head.name if heir_head is not None else heir_hh.household_id,
                             "creditor_household_id": heir_hh.household_id,
+                            "debtor_household_id": other.household_id,
                             "amount": round(rec.amount, 2),
                             "due_tick": rec.due_tick,
                         },
