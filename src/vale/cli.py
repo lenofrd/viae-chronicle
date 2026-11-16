@@ -61,6 +61,27 @@ def _node_names(spatial) -> dict[str, str]:
     return {n.id: n.name for n in spatial.nodes}
 
 
+# 任务17 裁决 4.2：从事件 payload 收集 agent_id → 姓名，供渲染层显示姓名（如债争 round=1 主语）。
+_AGENT_ID_NAME_PREFIXES = (
+    "agent", "spouse", "observer", "target", "creditor", "debtor",
+    "head", "old_head", "new_head", "mother", "father", "child",
+)
+
+
+def _agent_names(events: list) -> dict[str, str]:
+    names: dict[str, str] = {}
+    for evt in events:
+        payload = evt.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        for prefix in _AGENT_ID_NAME_PREFIXES:
+            agent_id = payload.get(f"{prefix}_id")
+            name = payload.get(f"{prefix}_name")
+            if agent_id and name:
+                names.setdefault(str(agent_id), str(name))
+    return names
+
+
 def _date_str(tick: int, cfg) -> str:
     """把事件 tick 换算成「X年M月D日 节气」字符串（与气候模块同源）。"""
     init = cfg.natural_params.climate_initial
@@ -266,6 +287,8 @@ def _filter_desc(args) -> str:
 
 
 def _print_events(events: list, cfg, names) -> int:
+    # 任务17 裁决 4.2：并入人名映射（id→姓名），地名映射优先保既有键
+    names = {**_agent_names(events), **(names or {})}
     degraded = 0
     for evt in events:
         r = render_event(evt, names)

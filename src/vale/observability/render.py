@@ -499,8 +499,12 @@ def _render_conflict_started(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
-def _render_conflict_negotiation_round(payload: dict) -> tuple[str, bool]:
-    creditor = payload.get("initiator") or "?"
+def _render_conflict_negotiation_round(
+    payload: dict, names: Optional[dict[str, str]] = None,
+) -> tuple[str, bool]:
+    initiator = payload.get("initiator") or "?"
+    # 任务17 补丁二：优先用 payload 自带姓名；旧库无该字段时回退 names 映射，再回退裸 id。
+    creditor = payload.get("initiator_name") or (names or {}).get(initiator, initiator)
     round_no = payload.get("round")
     proposal = payload.get("proposal")
     amount = _num(payload.get("proposal_amount"))
@@ -508,8 +512,19 @@ def _render_conflict_negotiation_round(payload: dict) -> tuple[str, bool]:
         demand = {"full": "全额偿还", "partial": "先还一部分", "deferral": "宽限些时日"}.get(
             proposal, "还债"
         )
-        text = f"[{creditor}] 第 1 轮开口：{demand} {amount} 石" if amount else (
-            f"[{creditor}] 第 1 轮开口：{demand}"
+        # 任务17 裁决 4.1：读只读元数据体现记忆/前科影响；字段缺失或 null 回退现状文案。
+        note = ""
+        adjust = payload.get("social_adjustment")
+        if adjust == "prior_broken→full":
+            note = "（记得上次谈崩，这次张口就是全额）"
+        elif adjust == "prior_repaid→deferral":
+            note = "（念其上次守约，主动给了宽限）"
+        elif payload.get("proposal_basis") == "prior_default":
+            note = "（他有违约前科，一步不让）"
+        elif payload.get("proposal_basis") == "kin":
+            note = "（念在亲缘分上）"
+        text = f"[{creditor}] 第 1 轮开口：{demand} {amount} 石{note}" if amount else (
+            f"[{creditor}] 第 1 轮开口：{demand}{note}"
         )
     else:
         response = payload.get("response")
@@ -700,6 +715,7 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
             reason = "missing_life_field" if degraded else None
         elif event_type == "household_merged":
             text, degraded = _render_household_merged(payload)
+            reason = "missing_household_field" if degraded else None
         elif event_type == "household_split":
             text, degraded = _render_household_split(payload)
             reason = "missing_household_field" if degraded else None
@@ -734,7 +750,7 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
             text, degraded = _render_conflict_started(payload)
             reason = "missing_conflict_field" if degraded else None
         elif event_type == "conflict_negotiation_round":
-            text, degraded = _render_conflict_negotiation_round(payload)
+            text, degraded = _render_conflict_negotiation_round(payload, names)
             reason = "missing_conflict_field" if degraded else None
         elif event_type == "conflict_resolved":
             text, degraded = _render_conflict_resolved(payload)

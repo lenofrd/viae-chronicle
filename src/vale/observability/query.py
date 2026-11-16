@@ -22,6 +22,13 @@ class EventFilter:
     match_participants: bool = False
 
 
+# 任务17 裁决 4.6：成对人字段。acquaintance_changed / conflict_* / debt_* 无 participants，
+# timeline 靠这三组 id/name 对（或 negotiation_round 的裸 initiator/responder）命中双方。
+# 仅 match_participants 开启时生效，events list 旧行为（仅 agent_name）不变。
+_PAIRED_PERSON_PREFIXES = ("observer", "target", "creditor", "debtor")
+_PAIRED_BARE_FIELDS = ("initiator", "responder")
+
+
 def _matches_agent(evt: dict, agent: str, match_participants: bool = False) -> bool:
     """人物筛选：默认 payload.agent_name 命中；开启参与人匹配时再看 participants。
 
@@ -35,13 +42,20 @@ def _matches_agent(evt: dict, agent: str, match_participants: bool = False) -> b
     if not match_participants:
         return False
     participants = payload.get("participants")
-    if not isinstance(participants, list):
-        return False
-    for p in participants:
-        if isinstance(p, dict):
-            if agent in (p.get("name"), p.get("id")):
+    if isinstance(participants, list):
+        for p in participants:
+            if isinstance(p, dict):
+                if agent in (p.get("name"), p.get("id")):
+                    return True
+            elif isinstance(p, str) and p == agent:
                 return True
-        elif isinstance(p, str) and p == agent:
+    # 任务17 裁决 4.6：成对人字段识别（认知/债争事件进 timeline）。
+    for prefix in _PAIRED_PERSON_PREFIXES:
+        if agent in (payload.get(f"{prefix}_id"), payload.get(f"{prefix}_name")):
+            return True
+    for field_name in _PAIRED_BARE_FIELDS:
+        # 任务17 补丁二：谈判轮次同时带裸 id 与 {field}_name，两者都参与命中。
+        if agent in (payload.get(field_name), payload.get(f"{field_name}_name")):
             return True
     return False
 

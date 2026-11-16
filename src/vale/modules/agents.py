@@ -2700,17 +2700,22 @@ class AgentModule:
             proposal = "full"
         else:
             proposal = "partial"
+        # 任务17 裁决 4.1：诉求成因只读元数据（供渲染追溯"为何开这个口"），不改决策。
+        proposal_basis = "kin" if kin else ("prior_default" if prior_default else "plain")
         # 任务16 阶段二：债权人短期记忆调节诉求（防"只记不读"的接入点）。
         # 只读不写事件（裁决 §3.5）；记忆 outcome 与结果写回口径一致。
         view = social.get_social_view(
             world.state, creditor_id, debtor_id, tick, tuning.social.acquaintance_ttl,
         )
         last_outcome = social.last_memory_outcome(view["memories"])
+        social_adjustment = None
         if proposal == "partial":
             if last_outcome == "broken":
                 proposal = "full"       # 上次破裂：部分诉求升全额
+                social_adjustment = "prior_broken→full"
             elif last_outcome in ("repaid", "partial_repaid"):
                 proposal = "deferral"   # 上次守约：部分诉求放宽为延期
+                social_adjustment = "prior_repaid→deferral"
         if proposal == "full":
             proposed_amount = round(rec.amount, 2)
         elif proposal == "partial":
@@ -2747,23 +2752,32 @@ class AgentModule:
         else:
             response = "request_deferral"
 
-        for round_no, actor, proposal_key, amount_key, responder, response_key in (
-            (1, creditor_id, proposal, proposed_amount, debtor_id, None),
-            (2, debtor_id, None, None, creditor_id, response),
+        for (
+            round_no, actor, actor_name, proposal_key, amount_key,
+            responder, responder_name, response_key,
+        ) in (
+            (1, creditor_id, creditor_name, proposal, proposed_amount,
+             debtor_id, debtor_name, None),
+            (2, debtor_id, debtor_name, None, None,
+             creditor_id, creditor_name, response),
         ):
-            world.event_log.append(
-                tick,
-                "conflict_negotiation_round",
-                {
-                    "conflict_id": conflict_id,
-                    "round": round_no,
-                    "initiator": actor,
-                    "responder": responder,
-                    "proposal": proposal_key,
-                    "proposal_amount": amount_key,
-                    "response": response_key,
-                },
-            )
+            payload = {
+                "conflict_id": conflict_id,
+                "round": round_no,
+                "initiator": actor,
+                # 任务17 补丁二：只读姓名字段，供 timeline 按姓名命中与渲染直读；replay 不读。
+                "initiator_name": actor_name,
+                "responder": responder,
+                "responder_name": responder_name,
+                "proposal": proposal_key,
+                "proposal_amount": amount_key,
+                "response": response_key,
+            }
+            if round_no == 1:
+                # 任务17 裁决 4.1：只读元数据（成因随事件落库，replay 不读）。
+                payload["social_adjustment"] = social_adjustment
+                payload["proposal_basis"] = proposal_basis
+            world.event_log.append(tick, "conflict_negotiation_round", payload)
 
         result: dict = {
             "conflict_id": conflict_id,
