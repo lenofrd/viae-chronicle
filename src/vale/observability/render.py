@@ -551,6 +551,26 @@ def _render_debt_deferred(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
+_ACQ_LEVELS = {0: "陌生人", 1: "面熟", 2: "相识"}
+
+
+def _render_acquaintance_changed(payload: dict) -> tuple[str, bool]:
+    """任务16 阶段二：认知变化（交互升级 / 低频遗忘清理）。"""
+    observer = payload.get("observer_name") or payload.get("observer_id") or "?"
+    target = payload.get("target_name") or payload.get("target_id") or "?"
+    old = _ACQ_LEVELS.get(payload.get("old_level"), str(payload.get("old_level")))
+    new = _ACQ_LEVELS.get(payload.get("new_level"), str(payload.get("new_level")))
+    cause = payload.get("cause")
+    if cause == "forgot":
+        text = f"[{observer}] 好些日子没打交道，已记不清 [{target}]（{old} → {new}）"
+    else:
+        text = f"[{observer}] 认下了 [{target}]（{old} → {new}）"
+    degraded = not all(
+        k in payload for k in ("observer_id", "target_id", "old_level", "new_level", "cause")
+    )
+    return text, degraded
+
+
 def _render_trade_executed(payload: dict) -> tuple[str, bool]:
     buyer = payload.get("buyer_name") or payload.get("buyer_id") or "?"
     seller = payload.get("seller_name") or payload.get("seller_id") or "?"
@@ -748,6 +768,9 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "debt_transferred":
             text, degraded = _render_debt_transferred(payload)
             reason = "missing_life_field" if degraded else None
+        elif event_type == "acquaintance_changed":
+            text, degraded = _render_acquaintance_changed(payload)
+            reason = "missing_social_field" if degraded else None
         else:
             # 未知事件类型兜底：展示原始载荷键（截断），不崩
             keys = ", ".join(list(payload.keys())[:8])

@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from enum import IntEnum
 from typing import Optional
 
 from pydantic import BaseModel, Field, computed_field
@@ -98,6 +99,41 @@ class HouseholdState(BaseModel):
         return float(sum(d.amount for d in self.debts))
 
 
+class AcquaintanceLevel(IntEnum):
+    """认知级别（任务 16 阶段二）。两级切片，留五级扩展。
+
+    比较一律用 ``>=``（如 ``level >= AcquaintanceLevel.KNOWN``），未来插入
+    MET_AND_NAMED / CLOSE 等中间级别时，调用方比较逻辑不改。
+    """
+
+    UNKNOWN = 0  # 不知道
+    MET = 1      # 记得样貌，可能不知名（本轮预留，交互即升 KNOWN，暂不产出 MET）
+    KNOWN = 2    # 知道名字且对得上
+
+
+class AcquaintanceEntry(BaseModel):
+    """观察者对单个目标的认知条目（任务 16 阶段二）。
+
+    ``level`` 用 int 存（值取自 AcquaintanceLevel），保证 JSON 序列化/反序列化
+    无歧义；``last_seen_tick`` 供 TTL 遗忘判定。
+    """
+
+    level: int = Field(default=0, ge=0)
+    last_seen_tick: int = Field(default=0, ge=0)
+
+
+class MemoryEntry(BaseModel):
+    """短期交互记忆条目（任务 16 阶段二）。
+
+    容量 N 环形缓冲的元素；纯由现有事件投影，可由事件重建（裁决 §3.4）。
+    """
+
+    tick: int = Field(..., ge=0)
+    target_id: str
+    event_type: str
+    outcome: Optional[str] = None
+
+
 class AgentState(BaseModel):
     """单个人物的状态快照，写入 world.state.agents[agent_id]。
 
@@ -136,6 +172,12 @@ class AgentState(BaseModel):
     last_birth_tick: Optional[int] = Field(default=None, ge=0)
     death_cause: Optional[str] = None  # starvation / aging / injury / illness
     last_injury_tick: Optional[int] = Field(default=None, ge=0)
+
+    # ---- 任务 16 阶段二：社会认知与关系层（快照投影，可由事件重建）----
+    # 认知：观察者侧 dict，key=target_id；同户/亲缘默认 known，交互升级 known，TTL 遗忘。
+    acquaintances: dict[str, AcquaintanceEntry] = Field(default_factory=dict)
+    # 记忆：容量 N 环形缓冲（N 见 SocialTuning.memory_capacity）；满了淘汰最旧，不写衰减事件。
+    recent_interactions: list[MemoryEntry] = Field(default_factory=list)
 
 
 class WorldState(BaseModel):

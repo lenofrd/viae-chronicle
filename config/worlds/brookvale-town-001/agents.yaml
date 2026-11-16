@@ -218,6 +218,11 @@ tuning:
   time:
     tu_per_tick: 10                     # 1 Tick = 1 天 = 10 TU
     farm_tu: 5
+  # 任务16 阶段二：社会认知与关系层（临时初值，待长期方案复核）
+  social:
+    memory_capacity: 5
+    acquaintance_ttl: 360
+    cleanup_interval: 360
 
 agents:
   - id: lin_yuan
