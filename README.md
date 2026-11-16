@@ -59,6 +59,7 @@ python -m pytest -q
 - 任务 15：集市赊账 +「有粮赖账」2 轮私下催收；5 种子 × 3600 验收通过（三种结果、守恒与无负值）。
 - 任务 16：两级认知（unknown → met → known）+ 短期交互记忆（容量环形缓冲）+ TTL 遗忘 + 债争结果写回双方记忆；`acquaintance_changed` 事件与 `events timeline <姓名>` 的参与人匹配可用。
 - 本 PR（任务 17，观察层接线）：债争开口写只读成因（`social_adjustment` / `proposal_basis`）与双方姓名（`initiator_name` / `responder_name`），文案可读出「为何开这个口」；人物时间线识别债争/认知事件的成对字段；viz 识别人名并把认知变化归入关系关注点；修复 `household_merged` 渲染降级。
+- 本 PR（任务 18 P1，印象沉淀层）：新增 `impression_formed` / `impression_changed` 事件与配置 `agents.tuning.social.impression_window`（默认 5，临时值待复核）；从债争记忆窗口合成「观察者对目标的印象」标签（`defaulting` 屡次违约 / `reliable` 向来守约 / `unknown` 尚且说不准），进个人档案但**不接决策**；存储 counts 为最近一次 label 变化时的快照，精确计数需从事件流重算。
 - 已知技术债：G1 家庭口粮承载力（长程个别种子后段人口下滑）；部分还款自然流结构性低频（机制由单测覆盖）；窄条件记忆调节在真实链路不可达（催收要求逾期 ⇒ 债务人几乎必有违约前科），已记录为任务 18 前置信号。
 - 下一阶段方向：任务 18 印象沉淀层（先 P1 进档案、后 P2 决策接入）；阶段三调参后置；货币系统评估、派生系统前置（教育/地位）、G1 承载力提产。
 - 协作者请看 [`docs/collab/PROGRESS.md`](docs/collab/PROGRESS.md)；最新内部状态以维护者提供的 STATUS 为准。
@@ -71,7 +72,7 @@ python -m pytest -q
 - **想改代码或文档**：从 `main` 开分支 → 提 PR → 在网页上回复 Review 评论；不要直接 push `main`。
 - **合并**：至少 1 人审核通过后由维护者合并；PR 作者不能自审。
 - **讨论入口**：Issue / PR 评论 / Review；不另建本地问答文件。
-- 不依赖未合入分支或未稳定事件；`conflict_*` / `debt_deferred` 等事件自任务 15 合入起可用；`acquaintance_changed` 自任务 16 起可用；`conflict_negotiation_round` 的 `social_adjustment` / `proposal_basis`（round=1）与 `initiator_name` / `responder_name`（round=1/2）自任务 17 起可用（只读元数据，旧库事件缺字段时渲染自动回退）。
+- 不依赖未合入分支或未稳定事件；`conflict_*` / `debt_deferred` 等事件自任务 15 合入起可用；`acquaintance_changed` 自任务 16 起可用；`conflict_negotiation_round` 的 `social_adjustment` / `proposal_basis`（round=1）与 `initiator_name` / `responder_name`（round=1/2）自任务 17 起可用（只读元数据，旧库事件缺字段时渲染自动回退）；`impression_formed` / `impression_changed` 自任务 18 P1 起可用（依赖 PR #8 合入链）。
 
 ## 可视化 / 展示层
 

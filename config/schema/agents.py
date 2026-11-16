@@ -492,6 +492,10 @@ class SocialTuning(BaseModel):
     memory_capacity: int = Field(5, ge=1, description="每人短期记忆环形缓冲容量")
     acquaintance_ttl: int = Field(360, ge=1, description="认知遗忘阈值（tick）；now-last_seen_tick 超过则遗忘")
     cleanup_interval: int = Field(360, ge=1, description="低频遗忘清理周期（tick）")
+    # 任务 18 P1：印象合成读取的最近交互窗口（与记忆容量对齐；临时值待复核，本任务不调）
+    impression_window: int = Field(
+        5, ge=1, description="印象合成读取的最近 K 条债争记忆窗口"
+    )
 
 
 class AgentTuning(BaseModel):

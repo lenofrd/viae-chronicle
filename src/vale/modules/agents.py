@@ -2911,6 +2911,10 @@ class AgentModule:
         social.record_interaction(
             world, debtor_id, creditor_id, tick, cap, "debt_dispute", outcome,
         )
+        # 任务 18 P1：记忆写回后合成印象（B 为主 + C 作门槛）；仅 label 变化写事件。
+        window = tuning.social.impression_window
+        social.update_impression(world, creditor_id, debtor_id, window)
+        social.update_impression(world, debtor_id, creditor_id, window)
 
     @staticmethod
     def _head_name(world, household: HouseholdState) -> str:

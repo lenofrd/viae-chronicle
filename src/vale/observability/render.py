@@ -596,6 +596,42 @@ def _render_acquaintance_changed(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
+_IMPRESSION_LABELS = {
+    "defaulting": "屡次违约",
+    "reliable": "向来守约",
+    "unknown": "尚且说不准",
+}
+
+
+def _impression_label_text(label) -> str:
+    return _IMPRESSION_LABELS.get(label, str(label))
+
+
+def _render_impression_formed(payload: dict) -> tuple[str, bool]:
+    """任务18 P1：印象首次形成。"""
+    observer = payload.get("observer_name") or payload.get("observer_id") or "?"
+    target = payload.get("target_name") or payload.get("target_id") or "?"
+    label = _impression_label_text(payload.get("label"))
+    text = f"[{observer}] 对 [{target}] 的印象：{label}"
+    degraded = not all(
+        k in payload for k in ("observer_id", "target_id", "label")
+    )
+    return text, degraded
+
+
+def _render_impression_changed(payload: dict) -> tuple[str, bool]:
+    """任务18 P1：印象翻转。"""
+    observer = payload.get("observer_name") or payload.get("observer_id") or "?"
+    target = payload.get("target_name") or payload.get("target_id") or "?"
+    old = _impression_label_text(payload.get("old_label"))
+    new = _impression_label_text(payload.get("label"))
+    text = f"[{observer}] 对 [{target}] 的印象变了：{old} → {new}"
+    degraded = not all(
+        k in payload for k in ("observer_id", "target_id", "old_label", "label")
+    )
+    return text, degraded
+
+
 def _render_trade_executed(payload: dict) -> tuple[str, bool]:
     buyer = payload.get("buyer_name") or payload.get("buyer_id") or "?"
     seller = payload.get("seller_name") or payload.get("seller_id") or "?"
@@ -796,6 +832,12 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
             reason = "missing_life_field" if degraded else None
         elif event_type == "acquaintance_changed":
             text, degraded = _render_acquaintance_changed(payload)
+            reason = "missing_social_field" if degraded else None
+        elif event_type == "impression_formed":
+            text, degraded = _render_impression_formed(payload)
+            reason = "missing_social_field" if degraded else None
+        elif event_type == "impression_changed":
+            text, degraded = _render_impression_changed(payload)
             reason = "missing_social_field" if degraded else None
         else:
             # 未知事件类型兜底：展示原始载荷键（截断），不崩

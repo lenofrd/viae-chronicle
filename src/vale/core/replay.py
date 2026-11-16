@@ -22,6 +22,7 @@ from vale.core.state import (
     AgentState,
     DebtRecord,
     HouseholdState,
+    ImpressionEntry,
     WorldState,
 )
 from vale.modules.social import apply_kin_defaults, record_memory
@@ -462,6 +463,33 @@ class _Replayer:
             observer.acquaintances[target_id] = AcquaintanceEntry(
                 level=new_level, last_seen_tick=tick,
             )
+
+    # -- 印象沉淀层（任务 18 P1）------------------------------------------- #
+    def _on_impression_formed(self, payload: dict, tick: int) -> None:
+        """任务18 P1：首次形成印象，幂等写回条目（事件载荷即运行时快照）。"""
+        self._replay_impression(payload)
+
+    def _on_impression_changed(self, payload: dict, tick: int) -> None:
+        """任务18 P1：label 翻转，幂等写回条目。"""
+        self._replay_impression(payload)
+
+    def _replay_impression(self, payload: dict) -> None:
+        observer = self.state.agents.get(payload.get("observer_id") or "")
+        target_id = payload.get("target_id")
+        if observer is None or not target_id:
+            return
+        try:
+            entry = ImpressionEntry(
+                label=str(payload.get("label") or ""),
+                contracts=int(payload.get("contracts") or 0),
+                defaults=int(payload.get("defaults") or 0),
+                repays=int(payload.get("repays") or 0),
+                last_outcome=payload.get("last_outcome"),
+                last_tick=int(payload.get("last_tick") or 0),
+            )
+        except (TypeError, ValueError):
+            return
+        observer.impressions[target_id] = entry
 
     # -- 家庭生命周期事件（迁移第2步）------------------------------------- #
     def _on_household_merged(self, payload: dict, tick: int) -> None:
