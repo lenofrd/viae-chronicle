@@ -374,6 +374,59 @@ def test_runtime_replay_consistency_with_dispute(world):
     assert any(m.event_type == "debt_dispute" for m in creditor_rp.recent_interactions)
 
 
+def test_multi_member_household_dispute_memory_on_heads(world):
+    """裁决 16-phase2 §3.2：多成员家庭的债争记忆归属与 replay 一致性。
+
+    口径：`_negotiate_debt` 的 debtor/creditor 恒为 `head_id or household_id`
+    （债争是户主代表的家庭间会话，无非户主参与路径），运行时记忆挂在双方户主
+    个人头上；replay `_replay_remember_dispute` 以同一口径解析，两侧一致。
+    本用例以非户主成员并入债务方家庭构造多成员场景钉住该口径。
+    """
+    module = _module(world)
+    debtor_hh, creditor_hh = _pair(world)
+    # 非户主成员并入债务方家庭：走 household_merged 事件（replay 可重建），
+    # 运行时同构执行状态变更，保证两侧多成员结构一致
+    extra = world.state.agents["zhou_qiaoniang"]
+    extra.household_id = debtor_hh.household_id
+    if extra.agent_id not in debtor_hh.member_ids:
+        debtor_hh.member_ids.append(extra.agent_id)
+    world.event_log.append(world.current_tick, "household_merged", {
+        "target_household_id": debtor_hh.household_id,
+        "source_household_id": "hh_zhou_qiaoniang",
+        "members_after": list(debtor_hh.member_ids),
+        "head_id": debtor_hh.head_id,
+        "home_node": debtor_hh.home_node,
+        "work_node": debtor_hh.work_node,
+    })
+    assert debtor_hh.head_id == "lin_yuan"  # 户主不变，extra 非户主
+
+    rec = _dispute_debt(world, debtor_hh, creditor_hh)
+    debtor_hh.grain = 8.0
+    result = module._negotiate_debt(  # noqa: SLF001
+        world, world.config.agents.tuning, debtor_hh, creditor_hh,
+        rec, defaulted=set(), repaid=set(),
+    )
+    outcome = result["resolution"]
+    # 记忆挂双方户主；非户主成员无债争记忆
+    creditor = world.state.agents["li_quan"]
+    assert social.recall(creditor, "lin_yuan")[-1].outcome == outcome
+    assert social.recall(world.state.agents["lin_yuan"], "li_quan")[-1].outcome == outcome
+    assert social.recall(creditor, "zhou_qiaoniang") == []
+    assert social.recall(extra, "li_quan") == []
+
+    # replay 同口径：债争双方的记忆逐项相等，认知逐项相等
+    events = world.event_log.all()
+    final_tick = max(int(e["tick"]) for e in events)
+    social.apply_kin_defaults(world.state, final_tick)
+    rp = rebuild_state(events, world.config).state
+    for agent_id in ("lin_yuan", "li_quan"):
+        rt = world.state.agents[agent_id]
+        assert rp.agents[agent_id].recent_interactions == rt.recent_interactions
+        assert rp.agents[agent_id].acquaintances == rt.acquaintances, agent_id
+    # replay 侧多成员经 household 字段重建：户主解析同样落在 lin_yuan/li_quan
+    assert rp.households[debtor_hh.household_id].head_id == "lin_yuan"
+
+
 def test_replay_rebuilds_memory_and_forgetting_from_bare_events():
     """不跑世界，直接以最小事件序列验证 replay 重建口径。"""
     cfg = load_config("brookvale-town-001")

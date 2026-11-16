@@ -2884,6 +2884,10 @@ class AgentModule:
         裁决 §3.4 纯净性：写入只用 (tick, target_id, event_type, outcome)，
         不读运行时中间态；replay 侧由 conflict_resolved / conflict_broken
         以相同口径重建（户→户主映射在回放态上等价解析）。
+        语义：repaid 系 / deferred / broken 三种结果都算一次真实交互，均写记忆
+        ——延期是「曾给过宽限」的印象而非违约；诉求调节只认 broken / repaid 系
+        outcome，deferred 不改下一轮诉求档位（见 _negotiate_debt 调节段与
+        test_negotiation_proposal_direction 的 deferred→partial 断言）。
         """
         cap = tuning.social.memory_capacity
         tick = world.current_tick
