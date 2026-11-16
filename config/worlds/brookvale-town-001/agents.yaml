@@ -144,7 +144,8 @@ tuning:
 
   aging:                                # 任务12 新增：年龄分段与衰老
     life_stages:                        # [调参] 年龄分段：体力/健康上限乘数、劳作许可、受伤风险
-      - { name: 幼年, min_age: 0, max_age: 12, stamina_max_mult: 0.40, stamina_recovery_mult: 0.80, health_max_mult: 0.70, work_allowed: false, injury_risk_mult: 0.5 }
+      - { name: 幼年, min_age: 0, max_age: 8, stamina_max_mult: 0.40, stamina_recovery_mult: 0.80, health_max_mult: 0.70, work_allowed: false, injury_risk_mult: 0.5 }
+      - { name: 少年, min_age: 8, max_age: 12, stamina_max_mult: 0.60, stamina_recovery_mult: 0.80, health_max_mult: 0.70, work_allowed: true, allowed_actions: [farm, harvest, weave], injury_risk_mult: 0.5 }  # [调参] 任务23 c1：实质劳动力（成人 50–60% 有效动作），不开 fish/hunt/borrow/collect_water；临时初值，待阶段三复核
       - { name: 青年, min_age: 12, max_age: 30, stamina_max_mult: 1.00, stamina_recovery_mult: 1.00, health_max_mult: 1.00, work_allowed: true, injury_risk_mult: 1.0 }
       - { name: 壮年, min_age: 30, max_age: 50, stamina_max_mult: 0.95, stamina_recovery_mult: 0.85, health_max_mult: 0.95, work_allowed: true, injury_risk_mult: 1.0 }
       - { name: 老年, min_age: 50, max_age: null, stamina_max_mult: 0.60, stamina_recovery_mult: 0.55, health_max_mult: 0.65, work_allowed: true, injury_risk_mult: 1.5 }
@@ -223,6 +224,7 @@ tuning:
     memory_capacity: 5
     acquaintance_ttl: 360
     cleanup_interval: 360
+    impression_in_decision: false       # [调参] 任务25 P2：印象参与债争诉求决策的独立开关；默认关闭，打开后 defaulting 档位触发全额诉求
 
 agents:
   - id: lin_yuan

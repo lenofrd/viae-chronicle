@@ -636,10 +636,13 @@ class AgentModule:
         )
 
     def _candidate_actions_for(self, agent: AgentState, tuning: AgentTuning) -> list[str]:
-        """按年龄分段裁剪候选动作（幼年只能 eat/rest）；默认成年全量，保持旧行为。"""
+        """按年龄分段裁剪候选动作：白名单优先，其次 work_allowed；eat/rest 始终保留。"""
         stage = tuning.aging.stage_by_name(agent.life_stage)
-        if stage is not None and not stage.work_allowed:
-            return ["eat", "rest"]
+        if stage is not None:
+            if stage.allowed_actions is not None:
+                return ["eat", "rest", *stage.allowed_actions]
+            if not stage.work_allowed:
+                return ["eat", "rest"]
         return _candidate_actions(tuning)
 
     def _perceive(self, world, agent: AgentState) -> Perception:
@@ -2673,6 +2676,8 @@ class AgentModule:
 
         第 1 轮：债权人提诉求（全额 / 部分 / 延期）——由既有事实决定：
           亲缘 → 延期；有违约前科 → 全额；否则 → 部分。
+          P2 开关（impression_in_decision）打开且印象档位为 defaulting 时按全额处理；
+          开关默认关闭，关闭时读不到印象、行为与 P1 完全一致。
           任务16 阶段二：社会记忆调节（只读 get_social_view，裁决 §3.5）——
           上次破裂 → 部分升全额；上次守约 → 部分放宽为延期；不动 kin/前科优先级。
         第 2 轮：债务人回应（还款 / 请求延期 / 拒绝）——由库存与 refusal_threshold 决定；
@@ -2694,9 +2699,16 @@ class AgentModule:
         prior_honored = debtor_hh.household_id in repaid
 
         # 第 1 轮：债权人诉求
+        # 任务25 P2：印象参与决策（独立开关、默认关闭）。关闭时不读印象，行为与 P1 完全一致。
+        impression_defaulting = False
+        if tuning.social.impression_in_decision:
+            impression = social.get_impression(world.state, creditor_id, debtor_id)
+            impression_defaulting = (
+                impression is not None and impression.label == social.IMPRESSION_DEFAULTING
+            )
         if kin:
             proposal = "deferral"
-        elif prior_default:
+        elif prior_default or impression_defaulting:
             proposal = "full"
         else:
             proposal = "partial"
