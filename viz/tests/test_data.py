@@ -141,3 +141,47 @@ def test_broken_fixture_payload_is_readable(tmp_path):
     assert loaded[0]["_payload_broken"] is True
     assert event_people(loaded[0]) == []
     assert "{bad" in event_details(loaded[0])
+
+
+def test_conflict_and_debt_deferred_viz_mappings():
+    """任务15 新事件在 viz 增强映射中的归类、高亮与人物提取。"""
+    started = event(1, 10, "conflict_started", creditor_id="c", creditor_name="债主",
+                    debtor_id="d", debtor_name="欠债人", amount=5, overdue_ticks=40)
+    resolved = event(2, 10, "conflict_resolved", resolution="repaid",
+                     amount_paid=5, remaining=0)
+    broken = event(3, 10, "conflict_broken", reason="refused",
+                   amount=5, overdue_ticks=40)
+    deferred = event(4, 10, "debt_deferred", creditor_id="c", creditor_name="债主",
+                     debtor_id="d", debtor_name="欠债人", amount=5,
+                     old_due_tick=10, new_due_tick=40, deferral_days=30)
+    round1 = event(5, 10, "conflict_negotiation_round", round=1,
+                   initiator="c", responder="d", proposal="partial", proposal_amount=3)
+    round2 = event(6, 10, "conflict_negotiation_round", round=2,
+                   initiator="d", responder="c", response="repay")
+    unknown = event(7, 10, "some_future_event", foo="bar")
+
+    # 关键转折：交涉始末 + 延期高亮；negotiation_round 轮次默认不高亮（3.1 决定，避免刷屏）
+    assert turning_point(started) == "债务交涉"
+    assert turning_point(resolved) == "债务议和"
+    assert turning_point(broken) == "交涉破裂"
+    assert turning_point(deferred) == "债务延期"
+    assert turning_point(round1) == ""
+    assert turning_point(round2) == ""
+    assert turning_point(unknown) == ""
+
+    # 关注点分类：4 个 conflict 入 social；debt_deferred 入 economy；未知不入
+    assert focus_category(started) == "social"
+    assert focus_category(resolved) == "social"
+    assert focus_category(broken) == "social"
+    assert focus_category(round1) == "social"  # 轮次仍在关注点 tab 可见
+    assert focus_category(deferred) == "economy"
+    assert focus_category(unknown) == ""
+
+    # initiator/responder 裸 id 提取：参与者列不再为空
+    assert {p.get("id") for p in event_people(round1)} == {"c", "d"}
+    assert {p.get("id") for p in event_people(round2)} == {"c", "d"}
+    # 只有 initiator 时仍只提取发起方，不崩
+    solo = event(8, 10, "conflict_negotiation_round", round=1, initiator="c")
+    assert {p.get("id") for p in event_people(solo)} == {"c"}
+    # 未知事件类型不崩
+    assert event_people(unknown) == []
