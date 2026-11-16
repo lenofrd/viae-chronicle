@@ -499,8 +499,12 @@ def _render_conflict_started(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
-def _render_conflict_negotiation_round(payload: dict) -> tuple[str, bool]:
-    creditor = payload.get("initiator") or "?"
+def _render_conflict_negotiation_round(
+    payload: dict, names: Optional[dict[str, str]] = None,
+) -> tuple[str, bool]:
+    initiator = payload.get("initiator") or "?"
+    # 任务17 补丁二：优先用 payload 自带姓名；旧库无该字段时回退 names 映射，再回退裸 id。
+    creditor = payload.get("initiator_name") or (names or {}).get(initiator, initiator)
     round_no = payload.get("round")
     proposal = payload.get("proposal")
     amount = _num(payload.get("proposal_amount"))
@@ -508,8 +512,19 @@ def _render_conflict_negotiation_round(payload: dict) -> tuple[str, bool]:
         demand = {"full": "全额偿还", "partial": "先还一部分", "deferral": "宽限些时日"}.get(
             proposal, "还债"
         )
-        text = f"[{creditor}] 第 1 轮开口：{demand} {amount} 石" if amount else (
-            f"[{creditor}] 第 1 轮开口：{demand}"
+        # 任务17 裁决 4.1：读只读元数据体现记忆/前科影响；字段缺失或 null 回退现状文案。
+        note = ""
+        adjust = payload.get("social_adjustment")
+        if adjust == "prior_broken→full":
+            note = "（记得上次谈崩，这次张口就是全额）"
+        elif adjust == "prior_repaid→deferral":
+            note = "（念其上次守约，主动给了宽限）"
+        elif payload.get("proposal_basis") == "prior_default":
+            note = "（他有违约前科，一步不让）"
+        elif payload.get("proposal_basis") == "kin":
+            note = "（念在亲缘分上）"
+        text = f"[{creditor}] 第 1 轮开口：{demand} {amount} 石{note}" if amount else (
+            f"[{creditor}] 第 1 轮开口：{demand}{note}"
         )
     else:
         response = payload.get("response")
@@ -577,6 +592,42 @@ def _render_acquaintance_changed(payload: dict) -> tuple[str, bool]:
         text = f"[{observer}] 认下了 [{target}]（{old} → {new}）"
     degraded = not all(
         k in payload for k in ("observer_id", "target_id", "old_level", "new_level", "cause")
+    )
+    return text, degraded
+
+
+_IMPRESSION_LABELS = {
+    "defaulting": "屡次违约",
+    "reliable": "向来守约",
+    "unknown": "尚且说不准",
+}
+
+
+def _impression_label_text(label) -> str:
+    return _IMPRESSION_LABELS.get(label, str(label))
+
+
+def _render_impression_formed(payload: dict) -> tuple[str, bool]:
+    """任务18 P1：印象首次形成。"""
+    observer = payload.get("observer_name") or payload.get("observer_id") or "?"
+    target = payload.get("target_name") or payload.get("target_id") or "?"
+    label = _impression_label_text(payload.get("label"))
+    text = f"[{observer}] 对 [{target}] 的印象：{label}"
+    degraded = not all(
+        k in payload for k in ("observer_id", "target_id", "label")
+    )
+    return text, degraded
+
+
+def _render_impression_changed(payload: dict) -> tuple[str, bool]:
+    """任务18 P1：印象翻转。"""
+    observer = payload.get("observer_name") or payload.get("observer_id") or "?"
+    target = payload.get("target_name") or payload.get("target_id") or "?"
+    old = _impression_label_text(payload.get("old_label"))
+    new = _impression_label_text(payload.get("label"))
+    text = f"[{observer}] 对 [{target}] 的印象变了：{old} → {new}"
+    degraded = not all(
+        k in payload for k in ("observer_id", "target_id", "old_label", "label")
     )
     return text, degraded
 
@@ -700,6 +751,7 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
             reason = "missing_life_field" if degraded else None
         elif event_type == "household_merged":
             text, degraded = _render_household_merged(payload)
+            reason = "missing_household_field" if degraded else None
         elif event_type == "household_split":
             text, degraded = _render_household_split(payload)
             reason = "missing_household_field" if degraded else None
@@ -734,7 +786,7 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
             text, degraded = _render_conflict_started(payload)
             reason = "missing_conflict_field" if degraded else None
         elif event_type == "conflict_negotiation_round":
-            text, degraded = _render_conflict_negotiation_round(payload)
+            text, degraded = _render_conflict_negotiation_round(payload, names)
             reason = "missing_conflict_field" if degraded else None
         elif event_type == "conflict_resolved":
             text, degraded = _render_conflict_resolved(payload)
@@ -780,6 +832,12 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
             reason = "missing_life_field" if degraded else None
         elif event_type == "acquaintance_changed":
             text, degraded = _render_acquaintance_changed(payload)
+            reason = "missing_social_field" if degraded else None
+        elif event_type == "impression_formed":
+            text, degraded = _render_impression_formed(payload)
+            reason = "missing_social_field" if degraded else None
+        elif event_type == "impression_changed":
+            text, degraded = _render_impression_changed(payload)
             reason = "missing_social_field" if degraded else None
         else:
             # 未知事件类型兜底：展示原始载荷键（截断），不崩

@@ -134,6 +134,22 @@ class MemoryEntry(BaseModel):
     outcome: Optional[str] = None
 
 
+class ImpressionEntry(BaseModel):
+    """观察者对单个目标的印象条目（任务 18 P1）。
+
+    独立载体，不并入 ``AcquaintanceEntry``（避免被认知 TTL 连带删除）。
+    counts 全部由记忆窗口派生（裁决 §3.5），不是独立累加计数器；
+    ``label`` 由确定性规则从 counts 派生，规则为 ``vale.modules.social`` 内代码常量。
+    """
+
+    label: str = "unknown"
+    contracts: int = Field(default=0, ge=0)
+    defaults: int = Field(default=0, ge=0)
+    repays: int = Field(default=0, ge=0)
+    last_outcome: Optional[str] = None
+    last_tick: int = Field(default=0, ge=0)
+
+
 class AgentState(BaseModel):
     """单个人物的状态快照，写入 world.state.agents[agent_id]。
 
@@ -178,6 +194,9 @@ class AgentState(BaseModel):
     acquaintances: dict[str, AcquaintanceEntry] = Field(default_factory=dict)
     # 记忆：容量 N 环形缓冲（N 见 SocialTuning.memory_capacity）；满了淘汰最旧，不写衰减事件。
     recent_interactions: list[MemoryEntry] = Field(default_factory=list)
+    # 印象（任务 18 P1）：观察者侧 dict，key=target_id；counts 只由记忆窗口派生，
+    # 仅在 label 变化时写 impression_formed / impression_changed 事件。
+    impressions: dict[str, ImpressionEntry] = Field(default_factory=dict)
 
 
 class WorldState(BaseModel):

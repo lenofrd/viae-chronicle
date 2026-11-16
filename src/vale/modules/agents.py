@@ -636,10 +636,13 @@ class AgentModule:
         )
 
     def _candidate_actions_for(self, agent: AgentState, tuning: AgentTuning) -> list[str]:
-        """按年龄分段裁剪候选动作（幼年只能 eat/rest）；默认成年全量，保持旧行为。"""
+        """按年龄分段裁剪候选动作：白名单优先，其次 work_allowed；eat/rest 始终保留。"""
         stage = tuning.aging.stage_by_name(agent.life_stage)
-        if stage is not None and not stage.work_allowed:
-            return ["eat", "rest"]
+        if stage is not None:
+            if stage.allowed_actions is not None:
+                return ["eat", "rest", *stage.allowed_actions]
+            if not stage.work_allowed:
+                return ["eat", "rest"]
         return _candidate_actions(tuning)
 
     def _perceive(self, world, agent: AgentState) -> Perception:
@@ -2673,6 +2676,8 @@ class AgentModule:
 
         第 1 轮：债权人提诉求（全额 / 部分 / 延期）——由既有事实决定：
           亲缘 → 延期；有违约前科 → 全额；否则 → 部分。
+          P2 开关（impression_in_decision）打开且印象档位为 defaulting 时按全额处理；
+          开关默认关闭，关闭时读不到印象、行为与 P1 完全一致。
           任务16 阶段二：社会记忆调节（只读 get_social_view，裁决 §3.5）——
           上次破裂 → 部分升全额；上次守约 → 部分放宽为延期；不动 kin/前科优先级。
         第 2 轮：债务人回应（还款 / 请求延期 / 拒绝）——由库存与 refusal_threshold 决定；
@@ -2694,23 +2699,35 @@ class AgentModule:
         prior_honored = debtor_hh.household_id in repaid
 
         # 第 1 轮：债权人诉求
+        # 任务25 P2：印象参与决策（独立开关、默认关闭）。关闭时不读印象，行为与 P1 完全一致。
+        impression_defaulting = False
+        if tuning.social.impression_in_decision:
+            impression = social.get_impression(world.state, creditor_id, debtor_id)
+            impression_defaulting = (
+                impression is not None and impression.label == social.IMPRESSION_DEFAULTING
+            )
         if kin:
             proposal = "deferral"
-        elif prior_default:
+        elif prior_default or impression_defaulting:
             proposal = "full"
         else:
             proposal = "partial"
+        # 任务17 裁决 4.1：诉求成因只读元数据（供渲染追溯"为何开这个口"），不改决策。
+        proposal_basis = "kin" if kin else ("prior_default" if prior_default else "plain")
         # 任务16 阶段二：债权人短期记忆调节诉求（防"只记不读"的接入点）。
         # 只读不写事件（裁决 §3.5）；记忆 outcome 与结果写回口径一致。
         view = social.get_social_view(
             world.state, creditor_id, debtor_id, tick, tuning.social.acquaintance_ttl,
         )
         last_outcome = social.last_memory_outcome(view["memories"])
+        social_adjustment = None
         if proposal == "partial":
             if last_outcome == "broken":
                 proposal = "full"       # 上次破裂：部分诉求升全额
+                social_adjustment = "prior_broken→full"
             elif last_outcome in ("repaid", "partial_repaid"):
                 proposal = "deferral"   # 上次守约：部分诉求放宽为延期
+                social_adjustment = "prior_repaid→deferral"
         if proposal == "full":
             proposed_amount = round(rec.amount, 2)
         elif proposal == "partial":
@@ -2747,23 +2764,32 @@ class AgentModule:
         else:
             response = "request_deferral"
 
-        for round_no, actor, proposal_key, amount_key, responder, response_key in (
-            (1, creditor_id, proposal, proposed_amount, debtor_id, None),
-            (2, debtor_id, None, None, creditor_id, response),
+        for (
+            round_no, actor, actor_name, proposal_key, amount_key,
+            responder, responder_name, response_key,
+        ) in (
+            (1, creditor_id, creditor_name, proposal, proposed_amount,
+             debtor_id, debtor_name, None),
+            (2, debtor_id, debtor_name, None, None,
+             creditor_id, creditor_name, response),
         ):
-            world.event_log.append(
-                tick,
-                "conflict_negotiation_round",
-                {
-                    "conflict_id": conflict_id,
-                    "round": round_no,
-                    "initiator": actor,
-                    "responder": responder,
-                    "proposal": proposal_key,
-                    "proposal_amount": amount_key,
-                    "response": response_key,
-                },
-            )
+            payload = {
+                "conflict_id": conflict_id,
+                "round": round_no,
+                "initiator": actor,
+                # 任务17 补丁二：只读姓名字段，供 timeline 按姓名命中与渲染直读；replay 不读。
+                "initiator_name": actor_name,
+                "responder": responder,
+                "responder_name": responder_name,
+                "proposal": proposal_key,
+                "proposal_amount": amount_key,
+                "response": response_key,
+            }
+            if round_no == 1:
+                # 任务17 裁决 4.1：只读元数据（成因随事件落库，replay 不读）。
+                payload["social_adjustment"] = social_adjustment
+                payload["proposal_basis"] = proposal_basis
+            world.event_log.append(tick, "conflict_negotiation_round", payload)
 
         result: dict = {
             "conflict_id": conflict_id,
@@ -2897,6 +2923,10 @@ class AgentModule:
         social.record_interaction(
             world, debtor_id, creditor_id, tick, cap, "debt_dispute", outcome,
         )
+        # 任务 18 P1：记忆写回后合成印象（B 为主 + C 作门槛）；仅 label 变化写事件。
+        window = tuning.social.impression_window
+        social.update_impression(world, creditor_id, debtor_id, window)
+        social.update_impression(world, debtor_id, creditor_id, window)
 
     @staticmethod
     def _head_name(world, household: HouseholdState) -> str:

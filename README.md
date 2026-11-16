@@ -53,12 +53,18 @@ python -m pytest -q
 
 模拟运行、事件查询与字段字典见 `docs/design/systems/observability/01-event-viewer-cli.md`。
 
-## 当前进展（2026-11-15）
+## 当前进展（2026-11-17）
 
-- 已合入 `main`：环境基座 → 人物生存 → 时间现实化 → 观察层 → 经济闭环 → 打猎 → 死亡/失能/渔业 → 移动校准/赶集/纺织/蔬菜 → 家庭经济模型（任务 12）→ 盈余经济补丁（任务 13）→ 债务转移窄修（任务 14）→ 社会冲突最小切片（任务 15）→ Tkinter 可视化（PR #2）。
-- 任务 15：集市赊账 +「有粮赖账」2 轮私下催收；5 种子 × 3600 验收通过（人口 5/5、34 次会话、三种结果、守恒与无负值）。
-- 已知技术债：G1 家庭口粮承载力（长程个别种子后段人口下滑）；部分还款自然流结构性低频（机制由单测覆盖）。
-- 下一阶段方向待定：货币系统评估、派生系统前置（教育/地位）、G1 承载力提产。
+- 已合入 `main`：环境基座 → 人物生存 → 时间现实化 → 观察层 → 经济闭环 → 打猎 → 死亡/失能/渔业 → 移动校准/赶集/纺织/蔬菜 → 家庭经济模型（任务 12）→ 盈余经济补丁（任务 13）→ 债务转移窄修（任务 14）→ 社会冲突最小切片（任务 15）→ Tkinter 可视化（PR #2）→ 社会认知与关系层（任务 16，PR #7）。
+- 任务 15：集市赊账 +「有粮赖账」2 轮私下催收；5 种子 × 3600 验收通过（三种结果、守恒与无负值）。
+- 任务 16：两级认知（unknown → met → known）+ 短期交互记忆（容量环形缓冲）+ TTL 遗忘 + 债争结果写回双方记忆；`acquaintance_changed` 事件与 `events timeline <姓名>` 的参与人匹配可用。
+- 任务 17（观察层接线）：债争开口写只读成因（`social_adjustment` / `proposal_basis`）与双方姓名（`initiator_name` / `responder_name`），文案可读出「为何开这个口」；人物时间线识别债争/认知事件的成对字段；viz 识别人名并把认知变化归入关系关注点；修复 `household_merged` 渲染降级。
+- 任务 18 P1（印象沉淀层）：新增 `impression_formed` / `impression_changed` 事件与配置 `agents.tuning.social.impression_window`（默认 5，临时值待复核）；从债争记忆窗口合成「观察者对目标的印象」标签（`defaulting` 屡次违约 / `reliable` 向来守约 / `unknown` 尚且说不准），存储 counts 为最近一次 label 变化时的快照。
+- 本 PR（任务 23 c1，少年劳动力）：年龄分段拆出「少年」8–12 岁（`allowed_actions: [farm, harvest, weave]`，体力上限 0.60×、恢复 0.80×、健康上限 0.70×），旧「幼年」收窄为 0–8 岁；少年可下田/秋收/织布，但不开放 fish/hunt/borrow/collect_water。分段与白名单为**临时初值**，待阶段三复核。
+- 本 PR（任务 24，体力节奏第一层）：`rest_stamina_recovery` 试调 40→60 后按裁决回退 40。实测成人 rest 占比 37.6%→31.8%，但「体力型被迫休息占 rest」28.2%/27.2%，未达 ≤22%；缺口的约 47% 来自田块长势封顶（farm 每年 50 次/田），且布料 +65%。结论：体力节奏第一层**边际有限、机制保留**；体力上限并入 G10，田块封顶登记 G11 候选（不实施），回血门槛登记为独立生存余量杠杆。
+- 本 PR（任务 25 P2，印象接决策）：新增配置 `agents.tuning.social.impression_in_decision`（**默认 false**）。打开后「观察者对债务方的印象为 `defaulting`」可把债争诉求从 partial 升为 full（前科优先、既有记忆调节段不变）；关闭时不读印象、零行为变化。开关打开→关闭可回到基线。
+- 已知问题（未解决）：① G1 家庭口粮承载力——长程个别种子人口下滑（5 种子中 1/2/42 仍只剩 2–3 人，饥饿死 28/5 种子）；② 弥留窗口（plan A 回滚后未修）；③ 田块封顶使成人约 47% 的休息与体力无关（G11，待老板定夺）；④ 「1 动作/日」与体力上限、体力紧缺度除数均为代码硬编码（G10，需单独立项）；⑤ 部分还款自然流结构性低频（机制仅由单测覆盖）；⑥ 印象 P2 已接线但当前 8 种子 × 3600 中**零可观测差异**（defaulting 会话均已因前科走 full），且规则只升不降，不能减轻诉求；⑦ 少年分段与白名单为临时值；⑧ 饮水未建模，`collect_water` 仍是空动作（G9）。
+- 下一阶段方向：阶段五收口（P2 验收与统一 PR）；G1 承载力提产与弥留窗口修复的取舍；G11 田块封顶；货币系统评估、派生系统前置（教育/地位）。
 - 协作者请看 [`docs/collab/PROGRESS.md`](docs/collab/PROGRESS.md)；最新内部状态以维护者提供的 STATUS 为准。
 
 ## 协作方式
@@ -69,7 +75,7 @@ python -m pytest -q
 - **想改代码或文档**：从 `main` 开分支 → 提 PR → 在网页上回复 Review 评论；不要直接 push `main`。
 - **合并**：至少 1 人审核通过后由维护者合并；PR 作者不能自审。
 - **讨论入口**：Issue / PR 评论 / Review；不另建本地问答文件。
-- 不依赖未合入分支或未稳定事件；`conflict_*` / `debt_deferred` 等事件自任务 15 合入起可用。
+- 不依赖未合入分支或未稳定事件；`conflict_*` / `debt_deferred` 等事件自任务 15 合入起可用；`acquaintance_changed` 自任务 16 起可用；`conflict_negotiation_round` 的 `social_adjustment` / `proposal_basis`（round=1）与 `initiator_name` / `responder_name`（round=1/2）自任务 17 起可用（只读元数据，旧库事件缺字段时渲染自动回退）；`impression_formed` / `impression_changed` 自任务 18 P1 起可用（依赖 PR #8 合入链）。
 
 ## 可视化 / 展示层
 
@@ -92,7 +98,7 @@ python -m pytest -q
 ### 数据来源
 
 - 事件真相源：SQLite `events` 表（只读连接）。
-- 稳定接口：`events list` / `events timeline --household <id>` 的 JSON 输出。
+- 稳定接口：`events list` / `events timeline <姓名>` 的 JSON 输出。
 - 字段字典：`docs/design/systems/observability/01-event-viewer-cli.md`。
 - 样本数据：`tests/fixtures/legacy_events.json`、`legacy_events_expected.json`。
 

@@ -135,14 +135,25 @@ class LifeStageTuning(BaseModel):
     stamina_recovery_mult: float = Field(1.0, gt=0)
     health_max_mult: float = Field(1.0, gt=0)
     work_allowed: bool = Field(True, description="是否允许劳作类候选动作")
+    allowed_actions: Optional[list[str]] = Field(
+        None,
+        description=(
+            "劳作动作白名单（任务23）；None=按 work_allowed 放开全部候选动作。"
+            "仅对 work_allowed=true 的分段生效，eat/rest 始终保留"
+        ),
+    )
     injury_risk_mult: float = Field(1.0, ge=0, description="受伤概率乘数")
 
 
 def _default_life_stages() -> list[LifeStageTuning]:
     return [
-        LifeStageTuning(name="幼年", min_age=0, max_age=12, stamina_max_mult=0.4,
+        LifeStageTuning(name="幼年", min_age=0, max_age=8, stamina_max_mult=0.4,
                         stamina_recovery_mult=0.8, health_max_mult=0.7,
                         work_allowed=False, injury_risk_mult=0.5),
+        LifeStageTuning(name="少年", min_age=8, max_age=12, stamina_max_mult=0.6,
+                        stamina_recovery_mult=0.8, health_max_mult=0.7,
+                        work_allowed=True, allowed_actions=["farm", "harvest", "weave"],
+                        injury_risk_mult=0.5),
         LifeStageTuning(name="青年", min_age=12, max_age=30, stamina_max_mult=1.0,
                         stamina_recovery_mult=1.0, health_max_mult=1.0,
                         work_allowed=True, injury_risk_mult=1.0),
@@ -492,6 +503,14 @@ class SocialTuning(BaseModel):
     memory_capacity: int = Field(5, ge=1, description="每人短期记忆环形缓冲容量")
     acquaintance_ttl: int = Field(360, ge=1, description="认知遗忘阈值（tick）；now-last_seen_tick 超过则遗忘")
     cleanup_interval: int = Field(360, ge=1, description="低频遗忘清理周期（tick）")
+    # 任务 18 P1：印象合成读取的最近交互窗口（与记忆容量对齐；临时值待复核，本任务不调）
+    impression_window: int = Field(
+        5, ge=1, description="印象合成读取的最近 K 条债争记忆窗口"
+    )
+    # 任务 25 P2：印象是否参与债争诉求决策（独立开关，默认关闭 = 行为与 P1 完全一致）
+    impression_in_decision: bool = Field(
+        False, description="是否让印象档位参与债争诉求决策（关闭时零行为变化）"
+    )
 
 
 class AgentTuning(BaseModel):

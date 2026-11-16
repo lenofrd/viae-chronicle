@@ -24,6 +24,8 @@ _PERSON_PREFIXES = (
     "agent", "child", "mother", "father", "spouse", "parent", "feeder",
     "debtor", "creditor", "deceased", "heir", "buyer", "seller",
     "from", "to", "head", "old_head", "new_head", "last_member",
+    # 任务17 裁决 4.3：acquaintance_changed 的 observer/target 人名映射（payload 已带 *_name）
+    "observer", "target",
 )
 _MEMBER_FIELDS = ("members", "members_after", "members_before")
 # conflict_negotiation_round 用裸 id（initiator/responder），无 _id/_name 后缀，单独提取；
@@ -36,6 +38,8 @@ _FOCUS_SOCIAL = {
     "household_dissolved", "birth_asset_transfer",
     # 任务15 债务纠纷：人与人的拉扯，归入关系与生命；交涉轮次也入 tab，避免会话完全消失。
     "conflict_started", "conflict_negotiation_round", "conflict_resolved", "conflict_broken",
+    # 任务17 裁决 4.5：认知变化入关系 tab；量可控（每对最多一次 + 低频 forgot 清理）。
+    "acquaintance_changed",
 }
 _FOCUS_ECONOMY = {
     "trade_executed", "market_day_summary", "inheritance_executed",
