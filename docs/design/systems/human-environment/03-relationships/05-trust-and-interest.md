@@ -1,5 +1,12 @@
 # 信任与利益
 
+> **落地状态（任务 16 阶段二，2026-11-16）**：本文件为长期设计，trust/grudge 本阶段
+> **未实现**。已定载体口径：关系边挂载于观察者侧 `AgentState.acquaintances`
+> （任务 16 阶段二落地的认知 dict，key=target_id），未来 trust 字段并入该条目或平行
+> dict，不另建全局关系表（裁决 16 §二.1）。衰减接口已留
+> `vale/modules/social.py::decay_relation(entry, now) -> Optional[float]`（当前返回
+> None）。债争接入明确不读 trust（07-conflicts/03-debt-disputes L108–118 约束保持）。
+
 ## 1. 目的
 定义角色之间信任度（`trust`）与利益权重（`interest_weight`）的维护方式、趋势判断与变化约束。信任和利益权重是关系边的核心取值，决定拉扯中的说服力、请求的接受概率与合作意愿。
 

@@ -17,7 +17,14 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from vale.core.calendar import DAYS_PER_YEAR
-from vale.core.state import AgentState, DebtRecord, HouseholdState, WorldState
+from vale.core.state import (
+    AcquaintanceEntry,
+    AgentState,
+    DebtRecord,
+    HouseholdState,
+    WorldState,
+)
+from vale.modules.social import apply_kin_defaults, record_memory
 
 _ASSET_FIELDS = ("grain", "meat", "fish", "vegetable", "cloth")
 
@@ -158,6 +165,10 @@ class _Replayer:
                 self.ignored[event_type] = self.ignored.get(event_type, 0) + 1
                 continue
             handler(payload, tick)
+        # 任务16 阶段二：kin 默认 known（裁决 §3.1——运行时每 tick 与此处共用同一
+        # 纯函数；kin 不写事件，只能由结构派生。零事件库跳过）
+        if events:
+            apply_kin_defaults(self.state, int(events[-1].get("tick", 0)))
         self._validate()
         return ReplayResult(state=self.state, ignored_events=self.ignored)
 
@@ -404,10 +415,53 @@ class _Replayer:
         return  # 纯叙事事件，不改状态
 
     def _on_conflict_resolved(self, payload: dict, tick: int) -> None:
-        return  # 金额/期限变更已由 debt_repaid / debt_deferred 重建
+        # 金额/期限变更已由 debt_repaid / debt_deferred 重建；
+        # 任务16 阶段二：以 resolution 重建双方短期记忆（裁决 §3.4 纯事件投影）。
+        self._replay_remember_dispute(payload, tick, payload.get("resolution"))
 
     def _on_conflict_broken(self, payload: dict, tick: int) -> None:
-        return  # dispute_started_tick 已由 conflict_started 标记
+        # dispute_started_tick 已由 conflict_started 标记；
+        # 任务16 阶段二：破裂结果同样重建双方短期记忆。
+        self._replay_remember_dispute(payload, tick, "broken")
+
+    def _replay_remember_dispute(self, payload: dict, tick: int, outcome) -> None:
+        """按运行时 _remember_dispute 同口径重建记忆（户→户主映射，裁决 §3.4）。
+
+        运行时在会话当场用 head 写入；回放态在处理到该事件时 household.head_id
+        已由更早事件重建，两者解析结果一致（户主只经死亡/继承事件变更）。
+        """
+        if not outcome:
+            return
+        debtor_hh = self.state.households.get(payload.get("debtor_household_id") or "")
+        creditor_hh = self.state.households.get(payload.get("creditor_household_id") or "")
+        if debtor_hh is None or creditor_hh is None:
+            return
+        cap = self.config.agents.tuning.social.memory_capacity
+        debtor_id = debtor_hh.head_id or debtor_hh.household_id
+        creditor_id = creditor_hh.head_id or creditor_hh.household_id
+        for observer_id, target_id in (
+            (creditor_id, debtor_id), (debtor_id, creditor_id),
+        ):
+            observer = self.state.agents.get(observer_id)
+            if observer is not None:
+                record_memory(observer, target_id, "debt_dispute", outcome, tick, cap)
+
+    def _on_acquaintance_changed(self, payload: dict, tick: int) -> None:
+        """任务16 阶段二：重建认知条目（new_level<=0 视为遗忘删除）。"""
+        observer = self.state.agents.get(payload.get("observer_id") or "")
+        target_id = payload.get("target_id")
+        if observer is None or not target_id:
+            return
+        try:
+            new_level = int(payload.get("new_level") or 0)
+        except (TypeError, ValueError):
+            return
+        if new_level <= 0:
+            observer.acquaintances.pop(target_id, None)
+        else:
+            observer.acquaintances[target_id] = AcquaintanceEntry(
+                level=new_level, last_seen_tick=tick,
+            )
 
     # -- 家庭生命周期事件（迁移第2步）------------------------------------- #
     def _on_household_merged(self, payload: dict, tick: int) -> None:

@@ -483,6 +483,17 @@ class TextileTuning(BaseModel):
     cold_health_loss: float = Field(2.0, ge=0, description="无布御寒时每日健康损失")
 
 
+class SocialTuning(BaseModel):
+    """社会认知与关系层参数（任务 16 阶段二）。
+
+    临时初值，待长期方案复核（裁决 §四）。
+    """
+
+    memory_capacity: int = Field(5, ge=1, description="每人短期记忆环形缓冲容量")
+    acquaintance_ttl: int = Field(360, ge=1, description="认知遗忘阈值（tick）；now-last_seen_tick 超过则遗忘")
+    cleanup_interval: int = Field(360, ge=1, description="低频遗忘清理周期（tick）")
+
+
 class AgentTuning(BaseModel):
     physiology: PhysiologyTuning = Field(default_factory=PhysiologyTuning)
     utility: UtilityTuning = Field(default_factory=UtilityTuning)
@@ -507,6 +518,8 @@ class AgentTuning(BaseModel):
     labor: LaborTuning = Field(default_factory=LaborTuning)
     split: SplitTuning = Field(default_factory=SplitTuning)
     time: TimeTuning = Field(default_factory=TimeTuning)
+    # 任务16 阶段二：社会认知与关系层（临时初值，待长期方案复核）
+    social: SocialTuning = Field(default_factory=SocialTuning)
 
 
 class AgentAssets(BaseModel):

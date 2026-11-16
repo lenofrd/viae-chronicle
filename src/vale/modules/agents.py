@@ -27,6 +27,7 @@ from vale.core.household import (
     work_node_of,
 )
 from vale.core.state import AgentState, DebtRecord, HouseholdState
+from vale.modules import social
 
 # 视为降雨的天气（B9：影响户外劳作）
 RAIN_WEATHERS = {WeatherType.LIGHT_RAIN, WeatherType.MODERATE_RAIN, WeatherType.HEAVY_RAIN}
@@ -254,6 +255,9 @@ class AgentModule:
             self._spatial = SpatialIndex(world.config.spatial)
         self._ensure_agents(world, cfg)
         tuning = cfg.tuning
+        # 任务16 阶段二：同户/亲缘默认 known（纯函数，运行时每 tick 与 replay 末尾共用，
+        # 裁决 §3.1；不写事件避免开局刷屏）
+        social.apply_kin_defaults(world.state, world.current_tick)
         # 阶段二 C：劳作点对账（家庭可分配田块 + 个人偏好失效回收），先于当日决策
         self._reconcile_work_nodes(world, tuning)
         # A1：主循环以 WorldState.agents 为唯一真相源；cfg.agents 只用于开局播种，
@@ -266,6 +270,11 @@ class AgentModule:
                 self._log_agent_error(world, agent, "daily_action", exc)
         # 每日结算（任务 08/12）：死亡+继承 → 催收 → 集市 → 婚配 → 生育 → 回血
         self._settle(world, tuning)
+        # 任务16 阶段二：低频遗忘清理（裁决 §3.5——批量删过期条目并写 forgot 事件；
+        # 决策读取只过滤不写，保持诉求计算只读语义）
+        soc = tuning.social
+        if world.current_tick > 0 and world.current_tick % soc.cleanup_interval == 0:
+            social.cleanup_forgotten(world, world.current_tick, soc.acquaintance_ttl)
 
     def _ensure_agents(self, world, cfg) -> None:
         """仅首次从配置初始化；之后状态快照为唯一真相源（A1）。
@@ -2664,9 +2673,12 @@ class AgentModule:
 
         第 1 轮：债权人提诉求（全额 / 部分 / 延期）——由既有事实决定：
           亲缘 → 延期；有违约前科 → 全额；否则 → 部分。
+          任务16 阶段二：社会记忆调节（只读 get_social_view，裁决 §3.5）——
+          上次破裂 → 部分升全额；上次守约 → 部分放宽为延期；不动 kin/前科优先级。
         第 2 轮：债务人回应（还款 / 请求延期 / 拒绝）——由库存与 refusal_threshold 决定；
           请求延期时，债权人按「亲缘或曾守约」接受，否则坚持 → 破裂。
         四种结果：repaid / partial_repaid / deferred / broken；两轮后必结束，不悬置。
+        结果写回双方短期记忆并互升 KNOWN（裁决 §3.3 交互即互升，阶段二简化点）。
         """
         cfg = tuning.conflict.debt_dispute
         tick = world.current_tick
@@ -2688,6 +2700,17 @@ class AgentModule:
             proposal = "full"
         else:
             proposal = "partial"
+        # 任务16 阶段二：债权人短期记忆调节诉求（防"只记不读"的接入点）。
+        # 只读不写事件（裁决 §3.5）；记忆 outcome 与结果写回口径一致。
+        view = social.get_social_view(
+            world.state, creditor_id, debtor_id, tick, tuning.social.acquaintance_ttl,
+        )
+        last_outcome = social.last_memory_outcome(view["memories"])
+        if proposal == "partial":
+            if last_outcome == "broken":
+                proposal = "full"       # 上次破裂：部分诉求升全额
+            elif last_outcome in ("repaid", "partial_repaid"):
+                proposal = "deferral"   # 上次守约：部分诉求放宽为延期
         if proposal == "full":
             proposed_amount = round(rec.amount, 2)
         elif proposal == "partial":
@@ -2790,6 +2813,7 @@ class AgentModule:
                     "debtor_household_id": debtor_hh.household_id,
                 },
             )
+            self._remember_dispute(world, tuning, creditor_id, debtor_id, resolution)
             return result
 
         accept_deferral = response == "accept_deferral" or (
@@ -2830,6 +2854,7 @@ class AgentModule:
                     "debtor_household_id": debtor_hh.household_id,
                 },
             )
+            self._remember_dispute(world, tuning, creditor_id, debtor_id, "deferred")
             return result
 
         # 拒绝（或债权人坚持不延期）→ 破裂；该笔不再重复发起会话
@@ -2849,7 +2874,29 @@ class AgentModule:
                 "debtor_household_id": debtor_hh.household_id,
             },
         )
+        self._remember_dispute(world, tuning, creditor_id, debtor_id, "broken")
         return result
+
+    def _remember_dispute(self, world, tuning: AgentTuning,
+                          creditor_id: str, debtor_id: str, outcome: str) -> None:
+        """债争结果写回双方记忆 + 交互即互升 KNOWN（任务16 阶段二）。
+
+        裁决 §3.4 纯净性：写入只用 (tick, target_id, event_type, outcome)，
+        不读运行时中间态；replay 侧由 conflict_resolved / conflict_broken
+        以相同口径重建（户→户主映射在回放态上等价解析）。
+        语义：repaid 系 / deferred / broken 三种结果都算一次真实交互，均写记忆
+        ——延期是「曾给过宽限」的印象而非违约；诉求调节只认 broken / repaid 系
+        outcome，deferred 不改下一轮诉求档位（见 _negotiate_debt 调节段与
+        test_negotiation_proposal_direction 的 deferred→partial 断言）。
+        """
+        cap = tuning.social.memory_capacity
+        tick = world.current_tick
+        social.record_interaction(
+            world, creditor_id, debtor_id, tick, cap, "debt_dispute", outcome,
+        )
+        social.record_interaction(
+            world, debtor_id, creditor_id, tick, cap, "debt_dispute", outcome,
+        )
 
     @staticmethod
     def _head_name(world, household: HouseholdState) -> str:
