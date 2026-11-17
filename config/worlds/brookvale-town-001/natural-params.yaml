@@ -23,6 +23,20 @@ hydrology_initial:
   water_level_ratio: 0.60      # 水位降至基准的 60%
   irrigation_gear: low         # 灌溉条件处于"偏少"档位
 
+hydrology_evolution:           # 任务30：单点水位演化（确定性，无随机）
+  recharge_per_mm: 0.002       # [调参] 有效降水补水系数（× 剩余水位空间 × mm）
+  soak_threshold_mm: 5.0       # [调参] 有效降水阈值（低于此值按无雨日计）
+  dry_loss_per_day: 0.004      # [调参] 无有效降水日的水位下降
+  gear_thresholds:             # [调参] 水位比例 → 灌溉档（降序下界；< scarce 即 dry）
+    abundant: 0.80
+    low: 0.55
+    scarce: 0.30
+  moisture_by_gear:            # [调参] 灌溉档 → 产量 moisture 系数（004 §2.7）
+    abundant: 1.0
+    low: 0.85
+    scarce: 0.7
+    dry: 0.5
+
 climate_evolution:
   seasons:
     spring:
@@ -33,6 +47,7 @@ climate_evolution:
       precipitation_intensity_mm: 15.0
       base_wind_level: null
       trend_anchor: null
+      work_window_tu: 10       # 004 裁决：春季每日工作窗（TU，1 TU = 1 工作小时）[调参]
     summer:
       length_ticks: 90        # 里程碑3：1季=90天（3月×30天），全年360天
       base_temperature_c: 30.0
@@ -41,6 +56,7 @@ climate_evolution:
       precipitation_intensity_mm: 40.0
       base_wind_level: null
       trend_anchor: null
+      work_window_tu: 9        # 004 裁决：夏季午热缩窗 [调参]
     autumn:
       length_ticks: 90        # 里程碑3：1季=90天（3月×30天），全年360天
       base_temperature_c: 18.0
@@ -49,6 +65,7 @@ climate_evolution:
       precipitation_intensity_mm: 10.0
       base_wind_level: null
       trend_anchor: null
+      work_window_tu: 10       # 004 裁决：秋季每日工作窗 [调参]
     winter:
       length_ticks: 90        # 里程碑3：1季=90天（3月×30天），全年360天
       base_temperature_c: 5.0
@@ -57,6 +74,7 @@ climate_evolution:
       precipitation_intensity_mm: 5.0
       base_wind_level: null
       trend_anchor: null
+      work_window_tu: 6        # 004 裁决：冬季昼短 [调参]
   drought:
     no_rain_threshold_ticks: 10
     watch_threshold: 10.0

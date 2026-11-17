@@ -25,7 +25,7 @@ class PhysiologyTuning(BaseModel):
     food_fields: list[str] = Field(default_factory=lambda: ["grain"])
     hunger_health_damage_threshold: float = Field(80.0, ge=0, le=100)
     hunger_health_damage: float = Field(8.0, ge=0)
-    rest_stamina_recovery: float = Field(40.0, ge=0)
+    # 004：rest_stamina_recovery（rest +40）已废弃——rest 动作改为 1 TU 回满（见 ActionTuning）。
     initial_health: float = Field(90.0, ge=0, le=100)
     initial_hunger: float = Field(40.0, ge=0, le=100)
     initial_stamina: float = Field(80.0, ge=0, le=100)
@@ -45,14 +45,38 @@ class UtilityTuning(BaseModel):
 
 
 class ActionTuning(BaseModel):
+    """动作的时间与体力成本（004 裁决：动作 = {TU 时长, 体力速率} 二元组）。
+
+    - 重活（heavy_actions）：按 heavy_stamina_per_tu × tu_cost 结算体力，
+      连续纯劳作 4 TU 归零（25/TU）；体力不足移动消耗时不可行，否则可开工、收尾归零。
+    - 轻活（不在 heavy_actions 内）：固定体力 0，只占 TU。
+    - 移动消耗另按 TU 计（utility.move_stamina_per_tu）。
+    - rest：1 TU 回满体力（裁决值，机制常量）；闲时（无可行动作的剩余 TU）同样回满。
+    旧 stamina_cost 平表已废弃（004），本结构为唯一来源，不留双源。
+    """
+
     # action -> {need: fulfill_value}
     fulfill: dict[str, dict[str, float]] = Field(default_factory=dict)
-    # action -> flat stamina cost（move 的消耗按 TU 另行计算）
-    stamina_cost: dict[str, float] = Field(default_factory=dict)
-    # action -> TU 占用
+    # action -> TU 占用（含 eat/borrow/rest 至少 1 TU，防日内零成本动作无限循环）
     tu_cost: dict[str, float] = Field(default_factory=dict)
+    heavy_actions: list[str] = Field(
+        default_factory=lambda: ["farm", "harvest", "hunt"],
+        description="重活名单：体力按速率 × TU 结算",
+    )
+    heavy_stamina_per_tu: float = Field(
+        25.0, ge=0, description="重活体力速率（连续 4 TU 归零 = 100）"
+    )
     # 受天气影响的户外动作名
     outdoor: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _heavy_has_tu(self) -> "ActionTuning":
+        for action in self.heavy_actions:
+            if action not in self.tu_cost:
+                raise ValueError(
+                    f"action.heavy_actions[{action}] 缺少 action.tu_cost 条目（重活必须有 TU 时长）"
+                )
+        return self
 
 
 class AgricultureTuning(BaseModel):
@@ -341,11 +365,6 @@ class ConsumptionTuning(BaseModel):
     )
 
 
-class TimeTuning(BaseModel):
-    tu_per_tick: float = Field(10.0, ge=0)
-    farm_tu: float = Field(5.0, ge=0)
-
-
 class GatheringActionTuning(BaseModel):
     """单个采集类动作（打猎/未来捕鱼）的配置（任务09）。
 
@@ -513,10 +532,33 @@ class SocialTuning(BaseModel):
     )
 
 
+class WaterTuning(BaseModel):
+    """生活用水最小切片（004 §2.7，任务 30）。
+
+    水有两个去处：每日生活消耗（按成员数）与烹饪/佐餐（每次进食）。
+    不建模饮水对健康的影响；产量、日耗、每餐用水均为 [调参]。
+    """
+
+    collect_amount: float = Field(5.0, ge=0, description="每次 collect_water 的产水量")
+    daily_consumption_per_member: float = Field(
+        1.0, ge=0, description="每名存活成员每日耗水（家庭结算时扣减）"
+    )
+    water_per_meal: float = Field(
+        0.5, ge=0, description="每次进食所需用水（烹饪/佐餐）；水不足则该次无法进食"
+    )
+    household_stock_target: float = Field(
+        5.0, ge=0, description="家庭存水目标；低于此值时 collect_water 紧迫度线性上升"
+    )
+    scarcity_weight: float = Field(
+        2.0, ge=0, description="打水紧迫度权重（缺水时加到 collect_water 的毛效用上）"
+    )
+
+
 class AgentTuning(BaseModel):
     physiology: PhysiologyTuning = Field(default_factory=PhysiologyTuning)
     utility: UtilityTuning = Field(default_factory=UtilityTuning)
     action: ActionTuning = Field(default_factory=ActionTuning)
+    water: WaterTuning = Field(default_factory=WaterTuning)
     agriculture: AgricultureTuning = Field(default_factory=AgricultureTuning)
     borrow: BorrowTuning = Field(default_factory=BorrowTuning)
     debt: DebtTuning = Field(default_factory=DebtTuning)
@@ -536,7 +578,8 @@ class AgentTuning(BaseModel):
     household: HouseholdTuning = Field(default_factory=HouseholdTuning)
     labor: LaborTuning = Field(default_factory=LaborTuning)
     split: SplitTuning = Field(default_factory=SplitTuning)
-    time: TimeTuning = Field(default_factory=TimeTuning)
+    # 004：TimeTuning（tu_per_tick/farm_tu 死配置）已删除——工作窗在
+    # natural-params 的 seasons.*.work_window_tu，动作 TU 在 action.tu_cost。
     # 任务16 阶段二：社会认知与关系层（临时初值，待长期方案复核）
     social: SocialTuning = Field(default_factory=SocialTuning)
 

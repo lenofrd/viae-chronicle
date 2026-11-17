@@ -84,6 +84,8 @@ class HouseholdState(BaseModel):
     fish: float = Field(default=0.0, ge=0)
     vegetable: float = Field(default=0.0, ge=0)
     cloth: float = Field(default=0.0, ge=0)
+    # 任务30：生活用水（水缸存量）；collect_water 产水，每日按成员数扣减
+    water: float = Field(default=0.0, ge=0)
     debts: list[DebtRecord] = Field(default_factory=list)
     home_node: str
     work_node: str
@@ -203,6 +205,10 @@ class WorldState(BaseModel):
     """跨模块共享状态。climate 由气候模块写入，其余子系统后续扩展。"""
 
     climate: Optional[ClimateSnapshot] = None
+    # 任务30：水文单点状态（004 §2.7）。水位比例 0–1（1 = 基准）；
+    # 灌溉档取 abundant/low/scarce/dry，由 ClimateModule 按配置阈值派生。
+    water_level_ratio: float = Field(default=0.6, ge=0, le=1)
+    irrigation_gear: str = Field(default="low")
     agents: dict[str, AgentState] = Field(default_factory=dict)
     households: dict[str, HouseholdState] = Field(default_factory=dict)
     # 田地长势：node_id -> 0-100；由 AgentModule 为 FIELD 节点初始化为 0

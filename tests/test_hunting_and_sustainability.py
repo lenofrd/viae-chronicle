@@ -78,26 +78,37 @@ def test_no_hardcoded_hunt_branch_in_candidates():
 # 打猎产出与守恒
 # --------------------------------------------------------------------------- #
 def test_hunt_action_occurs(world):
-    """田封顶 + 饱腹的农闲窗口应出猎（任务10：打猎为远征型经济动作，
-    仅在 farm 不可行（封顶）且 hunger 低（eat 不迫切）时胜出）。"""
-    cap = world.config.agents.tuning.agriculture.max_field_growth
-    for a in world.state.agents.values():
-        world.state.field_growth[work_node_of(world, a)] = cap
-    for _ in range(120):
-        run_tick(world)
-    actions = [e["payload"].get("action") for e in world.event_log.by_type("agent_action_taken")]
-    assert "hunt" in actions
+    """打猎为远征动作（004 起移动扣 TU）：镇内往返 13–16 TU 已超工作窗，
+    故把人物置于浅山（就地）验证「可打猎时农闲窗口会选 hunt」。"""
+    mod = _module(world)
+    tuning = world.config.agents.tuning
+    agent = world.state.agents["lin_yuan"]
+    cap = tuning.agriculture.max_field_growth
+    world.state.field_growth[work_node_of(world, agent)] = cap
+    agent.location = "low_mountain"
+    agent.hunger = 10.0
+    agent.stamina = 100.0
+
+    p = mod._perceive(world, agent)  # noqa: SLF001
+    assert mod._decide(p, tuning, tu_remaining=10.0) == "hunt"  # noqa: SLF001
 
 
 def test_gather_success_produces_meat(world):
-    cap = world.config.agents.tuning.agriculture.max_field_growth
-    for a in world.state.agents.values():
-        world.state.field_growth[work_node_of(world, a)] = cap
-    for _ in range(120):
-        run_tick(world)
+    mod = _module(world)
+    tuning = world.config.agents.tuning
+    agent = world.state.agents["lin_yuan"]
+    agent.location = "low_mountain"
+    agent.stamina = 100.0
+    hunt = tuning.gathering.actions["hunt"]
+    hunt.base_success_rate = 1.0  # 强制成功，专测产出与守恒
+    hunt.injury_risk = 0.0
+    p = mod._perceive(world, agent)  # noqa: SLF001
+
+    mod._execute(world, agent, "hunt", p, tuning)  # noqa: SLF001
+
     succ = [e for e in world.event_log.by_type("gather_success")
             if e["payload"]["action"] == "hunt"]
-    assert succ, "120 天内应至少打猎成功一次"
+    assert succ, "应至少打猎成功一次"
     # 产出守恒：单事件 output_after - output_before == amount
     e = succ[0]["payload"]
     assert round(e["output_after"] - e["output_before"], 4) == round(e["amount"], 4)
@@ -232,10 +243,12 @@ def test_borrow_conserves_grain_over_200_ticks(world):
     formed = sum(e["payload"]["amount"] for e in world.event_log.by_type("debt_formed"))
     repaid = sum(e["payload"].get("amount", 0) for e in world.event_log.by_type("debt_repaid"))
     collected = sum(e["payload"].get("amount_paid", 0) for e in world.event_log.by_type("debt_collected"))
-    # 任务11：第 4 NPC 无田可耕，可能借粮后亡故，债务被核销（debt_forgiven），须计入守恒
+    # 任务11：第 4 NPC 无田可耕，可能借粮后亡故，债务被核销（debt_forgiven）须计入守恒；
+    # 004：死亡继承链路另写 debt_written_off（核销），同样计入
     forgiven = sum(e["payload"].get("amount", 0) for e in world.event_log.by_type("debt_forgiven"))
+    written_off = sum(e["payload"].get("amount", 0) for e in world.event_log.by_type("debt_written_off"))
     outstanding = sum(hh(world, a).debt for a in world.state.agents.values())
-    assert abs(formed - repaid - collected - forgiven - outstanding) < 1e-6
+    assert abs(formed - repaid - collected - forgiven - written_off - outstanding) < 1e-6
 
 
 # --------------------------------------------------------------------------- #

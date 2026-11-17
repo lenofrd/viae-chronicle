@@ -16,7 +16,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from config.schema.natural_params import DroughtState, Season, WeatherType
+from config.schema.natural_params import DroughtState, IrrigationGear, Season, WeatherType
 
 from ..core.calendar import (
     calendar_from_tick,
@@ -109,6 +109,13 @@ class ClimateModule:
             days_no_soaking_rain=int(init.days_no_soaking_rain or 0),
             weather_trend=[w.value for w in init.weather_trend] if init.weather_trend else [],
         )
+
+        # 任务30：水文初始状态（缺省时沿用 WorldState 默认 0.6 / low）
+        hydro_init = cfg.hydrology_initial
+        if hydro_init.water_level_ratio is not None:
+            world.state.water_level_ratio = float(hydro_init.water_level_ratio)
+        if hydro_init.irrigation_gear:
+            world.state.irrigation_gear = hydro_init.irrigation_gear
 
     # ------------------------------------------------------------------
     # 每 Tick 演化
@@ -218,6 +225,54 @@ class ClimateModule:
                     "day": t["day"],
                 },
             )
+
+        # 8. 任务30：水文演化（确定性，随当日降水）
+        self._evolve_hydrology(world, cfg, precip)
+
+    # ------------------------------------------------------------------
+    def _evolve_hydrology(self, world, cfg, precip_mm: float) -> None:
+        """单点水位演化 + 灌溉档派生；仅在数值变化时写事件（004 §2.7）。"""
+        evo = cfg.hydrology_evolution
+        before = float(world.state.water_level_ratio)
+        if precip_mm >= evo.soak_threshold_mm:
+            # 有效降水按「到满水位的剩余空间」补水：避免常年封顶 1.0，使水位随旱涝摆动
+            after = before + evo.recharge_per_mm * precip_mm * (1.0 - before)
+            reason = "rain"
+        else:
+            after = before - evo.dry_loss_per_day
+            reason = "dry"
+        after = round(max(0.0, min(1.0, after)), 6)
+        prev_gear = world.state.irrigation_gear
+        gear = self._classify_irrigation(after, evo.gear_thresholds)
+        world.state.water_level_ratio = after
+        world.state.irrigation_gear = gear
+        if abs(after - before) > 1e-9:
+            world.event_log.append(
+                tick=world.current_tick,
+                event_type="water_level_changed",
+                payload={
+                    "before": before,
+                    "after": after,
+                    "precipitation_mm": precip_mm,
+                    "reason": reason,
+                },
+            )
+        if gear != prev_gear:
+            world.event_log.append(
+                tick=world.current_tick,
+                event_type="irrigation_gear_changed",
+                payload={"from": prev_gear, "to": gear, "water_level_ratio": after},
+            )
+
+    @staticmethod
+    def _classify_irrigation(level: float, thresholds: dict[str, float]) -> str:
+        if level >= thresholds["abundant"]:
+            return IrrigationGear.ABUNDANT.value
+        if level >= thresholds["low"]:
+            return IrrigationGear.LOW.value
+        if level >= thresholds["scarce"]:
+            return IrrigationGear.SCARCE.value
+        return IrrigationGear.DRY.value
 
     # ------------------------------------------------------------------
     @staticmethod

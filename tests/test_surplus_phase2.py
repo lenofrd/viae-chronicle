@@ -53,6 +53,13 @@ def _module(world) -> AgentModule:
     return mod
 
 
+def _moisture(world) -> float:
+    """任务30：当前灌溉档对应的 moisture 系数（初始 low=0.85）。"""
+    return world.config.natural_params.hydrology_evolution.moisture_by_gear[
+        world.state.irrigation_gear
+    ]
+
+
 def _add_agent(world, agent_id: str, *, sex: AgentSex, age: int, household_id: str,
                home: str, health: float = 90.0, hunger: float = 30.0,
                stamina: float = 80.0) -> AgentState:
@@ -212,23 +219,25 @@ def test_c_east_field_is_worked_within_1800_ticks():
 # A：田产公式化（crops.md §4.5）
 # --------------------------------------------------------------------------- #
 def test_a_expected_yield_equals_legacy_values(world):
-    """初始值下公式产出与既有固定产出逐项相等：粮 75、菜 55。"""
+    """初始值下公式产出 = 既有固定产出 × moisture（任务30 起 moisture 由灌溉档派生）。"""
     tuning = world.config.agents.tuning
-    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(75.0)
-    assert expected_yield(world, "east_field", "grain", tuning) == pytest.approx(75.0)
-    assert expected_yield(world, "west_field", "vegetable", tuning) == pytest.approx(55.0)
+    moisture = _moisture(world)
+    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(75.0 * moisture)
+    assert expected_yield(world, "east_field", "grain", tuning) == pytest.approx(75.0 * moisture)
+    assert expected_yield(world, "west_field", "vegetable", tuning) == pytest.approx(55.0 * moisture)
 
 
 def test_a_area_and_fertility_scale_yield(world):
     """area 取自 spatial 节点、fertility 取自 WorldState，均为乘数。"""
     tuning = world.config.agents.tuning
+    moisture = _moisture(world)
     node = next(n for n in world.config.spatial.nodes if n.id == "south_field")
     node.area = 2.0
-    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(150.0)
+    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(150.0 * moisture)
     node.area = 1.0
 
     world.state.field_fertility["south_field"] = 0.5
-    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(37.5)
+    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(37.5 * moisture)
 
 
 def test_a_harvest_uses_formula_and_conserves(world):
@@ -244,7 +253,7 @@ def test_a_harvest_uses_formula_and_conserves(world):
     mod._execute(world, lin, "harvest", mod._perceive(world, lin), tuning)  # noqa: SLF001
 
     gain = expected_yield(world, "west_field", "vegetable", tuning)
-    assert gain == pytest.approx(55.0)
+    assert gain == pytest.approx(55.0 * _moisture(world))
     assert hh(world, lin).vegetable == pytest.approx(vegetable_before + gain)
     assert hh(world, lin).grain == pytest.approx(grain_before)
     payload = world.event_log.by_type("agent_action_taken")[-1]["payload"]
@@ -252,7 +261,8 @@ def test_a_harvest_uses_formula_and_conserves(world):
     assert payload["base_yield"] == pytest.approx(55.0)
     assert payload["field_area"] == pytest.approx(1.0)
     assert payload["field_fertility"] == pytest.approx(1.0)
-    assert payload["expected_yield"] == pytest.approx(55.0)
+    assert payload["moisture"] == pytest.approx(_moisture(world))
+    assert payload["expected_yield"] == pytest.approx(55.0 * _moisture(world))
 
 
 # --------------------------------------------------------------------------- #
@@ -265,10 +275,14 @@ def test_b_birth_skipped_when_household_full(world):
     mother, _father, household = _isolated_couple(world, fillers=6)
     assert len(household.member_ids) == 8
     tuning.birth.chance_per_day = 1.0
+    # 004：日内多动作改变 rng 流，首 tick 可能已有他户生育——按增量断言隔离
+    born_before = len(world.event_log.by_type("agent_born"))
+    skipped_before = len(world.event_log.by_type("birth_skipped"))
 
     mod._settle_birth(world, tuning)  # noqa: SLF001
 
-    assert not world.event_log.by_type("agent_born")
+    assert len(world.event_log.by_type("agent_born")) == born_before
+    assert len(world.event_log.by_type("birth_skipped")) == skipped_before + 1
     event = world.event_log.by_type("birth_skipped")[-1]["payload"]
     assert event["agent_id"] == mother.agent_id
     assert event["household_id"] == "hh_test"
@@ -283,11 +297,13 @@ def test_b_birth_allowed_below_capacity(world):
     tuning = world.config.agents.tuning
     _isolated_couple(world, fillers=5)
     tuning.birth.chance_per_day = 1.0
+    born_before = len(world.event_log.by_type("agent_born"))
+    skipped_before = len(world.event_log.by_type("birth_skipped"))
 
     mod._settle_birth(world, tuning)  # noqa: SLF001
 
-    assert len(world.event_log.by_type("agent_born")) == 1
-    assert not world.event_log.by_type("birth_skipped")
+    assert len(world.event_log.by_type("agent_born")) == born_before + 1
+    assert len(world.event_log.by_type("birth_skipped")) == skipped_before
 
 
 def test_b_capacity_check_can_be_disabled(world):
@@ -297,11 +313,13 @@ def test_b_capacity_check_can_be_disabled(world):
     _isolated_couple(world, fillers=6)
     tuning.birth.chance_per_day = 1.0
     tuning.birth.respect_house_capacity = False
+    born_before = len(world.event_log.by_type("agent_born"))
+    skipped_before = len(world.event_log.by_type("birth_skipped"))
 
     mod._settle_birth(world, tuning)  # noqa: SLF001
 
-    assert len(world.event_log.by_type("agent_born")) == 1
-    assert not world.event_log.by_type("birth_skipped")
+    assert len(world.event_log.by_type("agent_born")) == born_before + 1
+    assert len(world.event_log.by_type("birth_skipped")) == skipped_before
 
 
 def test_birth_applies_mother_health_cost(world):

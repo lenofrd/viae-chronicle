@@ -173,5 +173,7 @@ def test_disabled_youth_labor_reproduces_baseline():
     alive = sum(1 for a in world.state.agents.values() if a.alive)
     starv = sum(1 for e in world.event_log.by_type("agent_died")
                 if e["payload"].get("cause") == "starvation")
-    assert alive == 2
-    assert starv == 8
+    # 004 一次切换后重定基线（旧 1 动作/日 基线作废；移动扣 TU + 任务30 用水后重测）：
+    # seed=1 × 3600 → 存活 10、饿死 5
+    assert alive == 10
+    assert starv == 5
