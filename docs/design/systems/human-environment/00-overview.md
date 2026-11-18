@@ -214,7 +214,7 @@ cause_event_id, effect_scope, reversible, recovery_time
 | `10-state-and-records/` | 人文快照、事件流、查询接口 |
 | `11-livestock/` | 家畜作为活体资产（owner/species/health/utility），繁衍与损耗走 `wealth_changed`，役用状态供 agents 读取 |
 
-地点参数占位统一在 `locations/brookvale-town/human-params.md`，本目录不写具体数值。
+Brookvale（溪谷镇）的地点参数沿用 `docs/design/locations/brookvale-town/` 既有章节：地理与地块见 `01-geography/`，地方治理见 `04-rules/`，初始状态见 `05-setup/`。不得另建 `xigu-town/` 或用虚构的 `human-params.md` 替代现有地点结构；其他地点可在各自既有目录维护参数。
 
 ## 11. 横切机制引用
 
