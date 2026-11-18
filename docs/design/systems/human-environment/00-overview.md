@@ -197,6 +197,9 @@ cause_event_id, effect_scope, reversible, recovery_time
 
 ## 10. 文档地图
 
+土地与建造扩展：地块和建筑空间模型见 `01-social-spaces/05-land-parcels-and-buildings.md`，居民自主建造见 `01-social-spaces/06-autonomous-construction.md`；土地权属见 `02-institutions/07-land-tenure-and-use.md`，村庄治理见 `02-institutions/08-village-governance.md`。具体地点参数必须放入 `docs/design/locations/<location>/`，不得写入通用 systems 文档。
+
+
 | 文件夹 | 内容 |
 |---|---|
 | `01-social-spaces/` | 建筑节点的人文属性、公共/私人空间、场所的社会意义 |
