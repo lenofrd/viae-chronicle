@@ -207,7 +207,7 @@
 
 ### 文档地图
 
-设计文档位于 `docs/design/`，子系统设计文档统一放在 `docs/design/systems/` 下，共 4 个子系统：
+设计文档位于 `docs/design/`。通用机制放在 `systems/`，地点特定的地理、人口、制度参数和初始状态放在 `locations/<location-id>/`；地点文档引用 systems，不复制通用机制。溪谷镇沿用既有 `locations/brookvale-town/`，不得创建平行的 `xigu-town/`。子系统设计文档统一放在 `docs/design/systems/` 下，共 4 个子系统：
 
 - **natural-environment（自然环境）**：`00-overview.md` + 模块 `01-spatial-skeleton`、`02-climate`、`03-hydrology`、`04-terrain`、`05-soil-and-fields`、`06-vegetation`、`07-fauna`、`08-hazards` + 横切层 `09-dynamics/`、`10-state-and-records/`。
 - **human-environment（人文环境）**：`00-overview.md` + 模块 `01-social-spaces`、`02-institutions`、`03-relationships`、`04-information`、`05-education`、`06-stratification`、`07-conflicts`、`08-rituals-beliefs`、`11-livestock`（家畜资产，横切层之后） + 横切层 `09-dynamics/`、`10-state-and-records/`。
