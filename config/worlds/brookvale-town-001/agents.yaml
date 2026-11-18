@@ -12,7 +12,7 @@ tuning:
     food_fields: [grain, vegetable, meat, fish]  # [调参] 任务11：粮>菜>肉>鱼；粮不足依次吃后续字段
     hunger_health_damage_threshold: 80  # A4：饥饿超过此值开始掉健康
     hunger_health_damage: 8             # A4：每天健康损耗
-    rest_stamina_recovery: 40           # A5：休息恢复体力
+    # 004：rest_stamina_recovery（rest +40）废弃——rest 为 1 TU 回满（机制常量）
     initial_health: 90                  # A6：开局健康
     initial_hunger: 40                  # A6：开局饥饿
     initial_stamina: 80                 # A6：开局体力
@@ -23,7 +23,7 @@ tuning:
     economy_urgency_grain_zero: 1.0     # B2：断粮时经济紧缺度
     economy_urgency_grain_positive: 1.0 # [调参] 耕作始终有产出价值，故有粮时经济紧缺度也取 1.0（原 0.2/0.3）
     move_stamina_per_tu: 3              # [调参] 任务11 裁决：5→3。原值下贫民进山单程即耗尽体力；3.0 校准后日常 8–27%、进山 49–60%，阶段三白名单内可再调
-    stamina_score_divisor: 100          # [机制修正] 打分体力惩罚 = raw_cost / 100，与 gross 同量级
+    stamina_score_divisor: 500          # [调参] 004 新量纲重标定：旧平表单动作 8–30 → 分级后重活 100（25×4）会压过 gross，100→500 使"满体力重活"惩罚≈0.2，恢复"先干活后歇息"的量级关系；临时值，待长期方案复核
     distance_penalty_per_tu: 0.15       # [调参] B8：距离惩罚 = 往返 TU × 该值（原 2.0）
     rain_outdoor_score_multiplier: 0.5  # B9：雨天户外动作得分乘数
 
@@ -32,7 +32,7 @@ tuning:
       eat: { survival: 1.0 }
       rest: { survival: 0.5, stamina: 1.0 }  # [调参] 原 0.6；新增 stamina 满足，体力越低越倾向休息
       farm: { economy: 1.8 }            # [调参] 耕作的经济满足值
-      collect_water: { survival: 0.3 }
+      collect_water: { survival: 0.55 }  # [调参] 任务30：水成为可积累资产后，打水是日常家务，空闲时略高于纯歇息（rest survival 0.5），但不压过 eat/farm/fish
       harvest: { economy: 4.0 }         # 秋收：高经济满足，仅秋季且长势达标可行
       borrow_grain: { survival: 0.8 }   # [调参] 任务10：3.0→0.8，必须 < eat(1.0)——有任何食物时吃饭优先，断粮才借粮；否则借粮会压过 eat，导致守着鱼/肉却互借倒手、债务爆炸而饿死
       # 采集类 survival 满足必须 < eat(1.0)：有粮时饥饿应驱动 eat 而非外出采集；
@@ -43,19 +43,29 @@ tuning:
       hunt: { survival: 0.1, economy: 2.4 }   # [调参] 任务10：纯经济远征动作
       fish: { survival: 0.8, economy: 0.7 }   # [调参] 任务10：渔业近镇补充生计。economy 0.7 让饱腹+田地封顶时 fish 有正分（林远/贫民靠捕鱼囤粮维生）；断粮饥饿时靠 survival 0.8 压过 rest 去捕鱼。贫民区→河边近路（单程 1.5 TU）让贫民捕鱼打分转正
       weave: { economy: 1.2 }                 # [调参] 阶段三第1轮：economy 1.6→1.2。理由：挤出诊断（seed 0/7 × 1800）显示 farm 封顶后调用 0 次、零无效投入，挤出主因是 weave 在田块封顶后得分 1.17–1.53 高于 fish 0.54–0.72 / hunt 0.56–0.65，导致 +336 次额外织布、采集产出 1811→943。扫描 1.0/1.1/1.2/1.3/1.4：1.0 时织布近似消失（9–15 次），1.4 时重新压过捕捞并退化（seed7 存活 7）；1.2 时 weave 129–142 次、fish+hunt 1202–1210、east 收割 10、2 种子存活 12。影响：布料 236（远高于御寒阈值 3），织布保留且不压过捕捞
-    stamina_cost:                       # B5：动作固定体力消耗（移动另按 TU 计）
-      eat: 0
-      rest: 0
-      farm: 20                          # [调参] 原 30
-      collect_water: 10
-      harvest: 20
-      borrow_grain: 0
-      hunt: 10                               # [调参] 阶段三第1轮：15→10（-33%）。诊断：15 时打猎往返 65 体力、成功率被体力约束压到近乎为零；10 后 2 种子 × 1800 tick 采集成功数 110+/366、人口存活（3.5 产鱼配合）。临时值，待长期方案复核
-      fish: 15                               # [调参] 任务10：捕鱼体力消耗（近镇，低于打猎）
-      weave: 15                              # [调参] 任务11：织布固定体力消耗（室内劳作）
-    tu_cost:                            # C3：动作 TU 占用
-      farm: 5
+    # 004 裁决：stamina_cost 平表废弃——重活按 heavy_stamina_per_tu × tu_cost 结算
+    # （连续 4 TU 归零）；轻活固定 0；移动另按 utility.move_stamina_per_tu 计。
+    # rest = 1 TU 回满（机制常量）。
+    tu_cost:                            # 004：动作 TU 占用（1 TU = 1 工作小时）[调参] 草案，待 M5 验收复核
+      eat: 1                            # 做饭吃饭；≥1 防日内零成本动作循环
+      rest: 1                           # 就地歇息 1 TU 回满
+      farm: 4                           # 裁决：重活纯劳作 4 TU
+      harvest: 4                        # [调参] 秋收同档重活
+      hunt: 4                           # [调参] 远征打猎
+      fish: 3                           # [调参] 捕鱼（近镇）
+      weave: 2                          # [调参] 织布（室内轻活）
+      collect_water: 1                  # [调参] 打水（轻活；任务30 已接产水）
+      borrow_grain: 1                   # [调参] 借粮交涉
+    heavy_actions: [farm, harvest, hunt]        # 004：重活名单（体力按速率结算）
+    heavy_stamina_per_tu: 25            # 004 裁决：重活 4 TU 归零（25 × 4 = 100）
     outdoor: [farm, collect_water, harvest, hunt, fish]  # 任务10：捕鱼为户外，受雨天影响
+
+  water:                                # 任务30：生活用水（004 §2.7；老板裁决：给水一个用途）
+    collect_amount: 5                   # [调参] 每次 collect_water 产水
+    daily_consumption_per_member: 1     # [调参] 每名存活成员每日耗水（结算时扣减，不足计 0）
+    water_per_meal: 0.5                 # [调参] 每次进食耗水（烹饪/佐餐）；水不足则本次无法进食
+    household_stock_target: 5           # [调参] 家庭存水目标；低于此值时打水紧迫度上升
+    scarcity_weight: 2.0                # [调参] 打水紧迫度权重（水 0 时 +2.0，压过耕作/捕鱼）
 
   agriculture:                          # 04-03 新增：农田生长周期
     field_growth_per_farm: 2.0          # [调参] 里程碑3：360天历年，降增速避免初夏长势爆表（旧 5）
@@ -90,7 +100,7 @@ tuning:
         output_field: meat              # 产出写入 AgentState.meat
         base_success_rate: 0.55         # [调参] 任务10：0.5→0.55，保证季节打猎不绝迹
         output_amount: 5                # [调参] 任务10：4→5，打猎产出回升为季节补充（秋季尤佳）
-        injury_risk: 0.07               # [调参] 每次打猎受伤概率；任务09：0.1→0.07 减少非战斗减员
+        injury_risk: 0.035              # [调参] 004 新量纲重标定：旧 1 动作/日，日内 10 TU 可连续 2 次远征使受伤暴露翻倍；0.07→0.035 使「每日暴露」与旧基线相当。临时值，待长期方案复核
         injury_health_loss: 15          # [调参] 受伤健康损失
         season_modifier: {spring: 1.0, summer: 0.95, autumn: 1.3, winter: 1.1}  # [调参] 任务09：夏 0.8→0.95 缓解夏季断粮
         bad_weather_success_mult: 0.5   # [调参] 坏天气成功率乘数
@@ -100,7 +110,7 @@ tuning:
         output_field: fish              # 产出写入 AgentState.fish
         base_success_rate: 0.45         # [调参] 任务10：0.55→0.45，渔业降为补充，避免过剩反超农业
         output_amount: 3.5              # [调参] 阶段三第1轮：2→3.5（+75%）。诊断：口粮缺口约 25%，鱼类是唯一随人口增长的人均产出项；2 时人口 500–800 tick 归零，3.5 时 2 种子 × 1800 tick 均存活。临时值，待长期方案复核
-        injury_risk: 0.02               # [调参] 捕鱼受伤概率（近镇缓流，低于打猎）
+        injury_risk: 0.01               # [调参] 004 新量纲重标定：捕鱼 3 TU，日内可 3 次；0.02→0.01 保持每日暴露与旧基线相当。临时值，待长期方案复核
         injury_health_loss: 10          # [调参] 受伤健康损失
         season_modifier: {spring: 1.0, summer: 1.2, autumn: 1.1, winter: 0.7}  # [调参] 夏季鱼肥，冬季枯水减产
         bad_weather_success_mult: 0.4   # [调参] 坏天气成功率乘数（雨天河中难捕）
@@ -216,9 +226,6 @@ tuning:
     asset_ratio: 0.5                    # [调参] 新户带走的资产/债务比例，余额留原户
     home_node_candidates: []            # 新户住所候选；空则同节点分户（稳定轮转）
 
-  time:
-    tu_per_tick: 10                     # 1 Tick = 1 天 = 10 TU
-    farm_tu: 5
   # 任务16 阶段二：社会认知与关系层（临时初值，待长期方案复核）
   social:
     memory_capacity: 5

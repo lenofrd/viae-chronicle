@@ -94,8 +94,15 @@
 > - `base_yield`：配置键 `agriculture.base_yield`（原 `crop_gain` 更名，数值 75/55 不变）。
 > - `area`：`spatial-units.yaml` 节点 `area`，默认 1.0。
 > - `fertility_factor`：`WorldState.field_fertility`，阶段二恒 1.0；连作衰减/休耕恢复**未启用**（阶段三）。
-> - `moisture_factor` / `growth_health` / `disaster_damage`：阶段二取中性占位 1/1/0，未接气候与病虫害。
+> - `moisture_factor` / `growth_health` / `disaster_damage`：**moisture 已于任务30 接线**——取 `WorldState.irrigation_gear` 对应系数（充足 1.0 / 偏少 0.85 / 缺水 0.7 / 断水 0.5，`natural-params.hydrology_evolution.moisture_by_gear`）；`growth_health` / `disaster_damage` 仍取中性占位 1/0。
 > - 偏差：§4.6 的 `harvest_timing_factor` 未实现（阶段二保持实际收成 = expected_yield）；`growth_stage` 仍由长势阈值与季节近似。
+
+> **004 裁决（2026-11-17，待实现）——劳动定额与完成度**：
+> - `field_growth` 标量长势与「长势 ≥ 阈值才能收割」的全有全无闸**废弃**，由**每田每季 TU 劳动定额**取代：按田记、家庭成员共享投入；收割仍限秋季农时窗口。
+> - 公式改为 `产量 = base_yield × area × min(1, 投入 TU ÷ 定额 TU) × fertility × moisture × sunlight × (1 − disaster_damage)`。
+> - 定额可提前做完（耗尽后 farm 不可选，剩余农时流向其他生计）；跨季重置、不结转。
+> - 定额数值为**地点参数**（溪谷镇标准田标定 ≈ 450 TU/季，见该地点 natural-params 配置）；机制说明另见 [decisions/004](../../../decisions/004-intraday-time-and-production-base.md) §2.6。
+> - **004 §2.9 补充裁决**：M3 **启用演化**——fertility 连作衰减/休耕恢复启用（规则见 [fertility.md](fertility.md)）、moisture 随水模型真实生效、`sunlight` 为派生量独立乘数（方案 A，见 [weather.md](../../02-climate/weather.md)）；`growth_health` 虫害项与 `disaster_damage` 因 08-hazards 未建模暂保持中性。各速率与系数为实现轮 `[调参]` 提案。
 
 ### 4.6 收割
 ```

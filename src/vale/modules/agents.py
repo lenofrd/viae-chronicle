@@ -118,8 +118,9 @@ class Perception:
     lender_node: str
     # 可选债权家庭（存粮 ≥ 借出量的最富其他家庭）；None 表示无人可借 → borrow 不可行
     creditor_household_id: Optional[str] = None
-    # 家 → 各候选目标的单程 TU；打分时往返 = 2 × 单程（C1）
-    distance_from_home: dict[str, float] = field(default_factory=dict)
+    # 004：当前位置 → 各候选目标的单程 TU（日内 location 真实化，计距基点由家改为当前位置）；
+    # 打分/执行时往返 = 2 × 单程（C1 往返语义保留）。
+    distance_from_location: dict[str, float] = field(default_factory=dict)
     # 自己的 work_node 是否为田地：非田地节点（如集市）不允许 farm/harvest，避免"在广场种粮"
     work_node_is_field: bool = True
     # 能否进食（任务12 D9）：家庭有任一可食食物
@@ -130,6 +131,8 @@ class Perception:
     home_node: str = ""
     work_node: str = ""
     household_grain: float = 0.0
+    # 任务30：家庭水缸存量（烹饪需水；不足以做饭时先去打水）
+    household_water: float = 0.0
     has_overdue_debt: bool = False
 
 
@@ -159,10 +162,13 @@ def _lender_node(world, agent: AgentState) -> str:
 
 
 def _target_node(action: str, agent: AgentState, world) -> str:
-    """动作 → 目标节点（内容映射）。eat/rest 在家；farm/harvest/weave 在个人劳作点；
-    collect_water 在水井；borrow 去债主家。"""
-    if action in ("eat", "rest"):
+    """动作 → 目标节点（内容映射）。eat 在家；rest 就地（人物当前位置）；
+    farm/harvest/weave 在个人劳作点；collect_water 在水井；borrow 去债主家。"""
+    if action == "eat":
         return home_node_of(world, agent)
+    if action == "rest":
+        # 004：「rest = 1 TU 就地回满」——休息不需要先走回家，否则力竭者在家外无法恢复
+        return agent.location or home_node_of(world, agent)
     if action in ("farm", "harvest", "weave"):
         return work_node_of(world, agent)
     if action == "collect_water":
@@ -183,8 +189,8 @@ def _node_crop_type(world, node_id: str) -> str:
     return "grain"
 
 
-# crops.md §4.5 产量公式的中性因子：阶段二只做公式化，不接入气候/病虫害/灾害，取值等价既有产出。
-YIELD_MOISTURE_FACTOR = 1.0
+# crops.md §4.5 产量公式的中性因子：病虫害/灾害尚未接入，取值等价既有产出。
+# moisture 已由灌溉档派生（任务30，见 _moisture_factor）。
 YIELD_GROWTH_HEALTH = 1.0
 YIELD_DISASTER_DAMAGE = 0.0
 DEFAULT_FIELD_FERTILITY = 1.0
@@ -198,19 +204,30 @@ def _field_area(world, node_id: str) -> float:
     return 1.0
 
 
+def _moisture_factor(world) -> float:
+    """灌溉档 → moisture 系数（任务30；004 §2.7）。
+
+    档位由 ClimateModule 按水位派生；未知/旧库档位按 1.0 降级（不改变旧行为）。
+    """
+    gear = getattr(world.state, "irrigation_gear", None)
+    if not gear:
+        return 1.0
+    table = world.config.natural_params.hydrology_evolution.moisture_by_gear
+    return float(table.get(gear, 1.0))
+
+
 def expected_yield(world, node_id: str, crop: str, tuning: AgentTuning) -> float:
     """预期收成（crops.md §4.5）：
 
     base_yield × area × fertility × moisture × growth_health × (1 − disaster_damage)。
 
-    阶段二初始值（base_yield={grain:75, vegetable:55}、area=1、fertility=1、moisture=1、
-    growth_health=1、disaster_damage=0）下与既有固定产出逐项相等。
+    阶段二：moisture 由灌溉档派生（任务30），其余因子取中性值。
     """
     return (
         tuning.agriculture.base_yield.get(crop, 0.0)
         * _field_area(world, node_id)
         * world.state.field_fertility.get(node_id, DEFAULT_FIELD_FERTILITY)
-        * YIELD_MOISTURE_FACTOR
+        * _moisture_factor(world)
         * YIELD_GROWTH_HEALTH
         * (1.0 - YIELD_DISASTER_DAMAGE)
     )
@@ -270,6 +287,10 @@ class AgentModule:
                 self._log_agent_error(world, agent, "daily_action", exc)
         # 每日结算（任务 08/12）：死亡+继承 → 催收 → 集市 → 婚配 → 生育 → 回血
         self._settle(world, tuning)
+        # 004 C1：日末回家——日内 location 已真实化（停在最后动作目标），结算后统一归位，
+        # 使次日从家出发。集市结算先于归位，故仍能识别「当日是否在场 market」。
+        for agent in living_agents(world.state.agents):
+            agent.location = home_node_of(world, agent)
         # 任务16 阶段二：低频遗忘清理（裁决 §3.5——批量删过期条目并写 forgot 事件；
         # 决策读取只过滤不写，保持诉求计算只读语义）
         soc = tuning.social
@@ -434,6 +455,59 @@ class AgentModule:
         stage = tuning.aging.stage_by_name(agent.life_stage) or tuning.aging.stage_for(0)
         return 100.0 * stage.stamina_max_mult
 
+    # -- 004 M5：日内 TU 预算与体力分级 ------------------------------------ #
+    def _work_window_tu(self, world) -> float:
+        """当日工作窗（TU），随季节取值（natural-params.seasons.*.work_window_tu）。"""
+        climate = world.state.climate
+        season = climate.season if climate is not None else Season.SPRING
+        sparams = world.config.natural_params.climate_evolution.seasons.get(season.value)
+        if sparams is None:
+            return 10.0
+        return float(sparams.work_window_tu)
+
+    def _tu_cost_of(self, action: str, act) -> float:
+        """动作 TU 占用；缺省或小于 1 时按 1 计（防止零成本动作导致日内死循环）。"""
+        return max(1.0, float(act.tu_cost.get(action, 1.0)))
+
+    def _labor_stamina(self, action: str, act) -> float:
+        """动作劳动体力消耗：重活 = heavy_stamina_per_tu × tu_cost；轻活 = 0。
+
+        移动体力另按往返 TU × utility.move_stamina_per_tu 计（见 _score / _execute）。
+        """
+        if action in act.heavy_actions:
+            return act.heavy_stamina_per_tu * self._tu_cost_of(action, act)
+        return 0.0
+
+    def _perceived_target(self, action: str, p: Perception, tuning: AgentTuning) -> str:
+        """动作目标节点的纯感知版（与 ``_target_node`` 同口径，但不读 world）。
+
+        004：rest 就地（当前位置）；eat 回家；其余到劳作点/水井/债主家/采集点。
+        """
+        if action == "eat":
+            return p.home_node
+        if action == "rest":
+            return p.agent.location or p.home_node
+        if action in ("farm", "harvest", "weave"):
+            return p.work_node
+        if action == "collect_water":
+            return "well"
+        if action == "borrow_grain":
+            return p.lender_node
+        gathering = tuning.gathering.actions
+        if action in gathering:
+            return gathering[action].target_node
+        return p.home_node
+
+    def _tu_total(self, action: str, p: Perception, tuning: AgentTuning) -> float:
+        """该动作当日总 TU 消耗 = 动作 TU + 往返移动 TU。
+
+        004 §3.6（2026-11-17 老板裁决）：移动与动作均从工作窗扣除；
+        往返超过剩余预算的动作不可行（如远途打猎），距离因此成为时间约束而不只是体力约束。
+        """
+        target = self._perceived_target(action, p, tuning)
+        one_way = p.distance_from_location.get(target, 0.0)
+        return self._tu_cost_of(action, tuning.action) + 2.0 * one_way
+
     def _apply_aging(self, world, agent: AgentState, tuning: AgentTuning) -> None:
         """生日结算（D2）：重算分段与上限、按上限截断，分段跨越或上限下降时写一次 agent_aged。
 
@@ -570,14 +644,44 @@ class AgentModule:
         if agent.incapacitated:
             return  # 已失能，持续不行动
 
-        # 3. 感知（隔离层）
-        perception = self._perceive(world, agent)
+        # 3–5. 日内 TU 循环（004 M5）：逐动作贪心重规划，直到预算耗尽或无可行动作；
+        # 剩余 TU 自动转恢复（闲时 1 TU 回满）。日末回家在 step 结算后统一执行（C1）。
+        self._run_intraday(world, agent, tuning)
 
-        # 4. 效用打分 → 选动作
-        action = self._decide(perception, tuning)
+    def _run_intraday(self, world, agent: AgentState, tuning: AgentTuning) -> None:
+        """日内循环：感知 → 打分 → 选动作 → 执行（扣 TU + 体力）→ 逐动作重规划。
 
-        # 5. 执行：更新快照 + 写事件
-        self._execute(world, agent, action, perception, tuning)
+        终止条件：TU 预算耗尽（< 1）或无可行动作（后者转闲时恢复）。
+        生存门控（hunger 逼近伤害阈值必须 eat）在每次动作选择前检查。
+        """
+        tu_remaining = self._work_window_tu(world)
+        slot = 0
+        # 安全上限：预算 + 缓冲，防止浮点/配置异常导致死循环（正常远低于此）
+        max_slots = int(tu_remaining) + 8
+        while tu_remaining >= 1.0 - 1e-9 and slot < max_slots:
+            p = self._perceive(world, agent)
+            action = self._decide(p, tuning, tu_remaining=tu_remaining)
+            # 闲时（体力已满仍无更优动作，或无可行动作）：剩余 TU 一次性转休整，
+            # 不逐 TU 刷事件（004：闲时同样 1 TU 回满，消耗该 TU）
+            if action is None or (
+                action == "rest"
+                and agent.stamina >= self._stamina_cap(agent, tuning) - 1e-9
+            ):
+                self._execute(
+                    world, agent, "rest", p, tuning,
+                    slot=slot + 1, tu_spent=tu_remaining,
+                    tu_remaining=0.0, idle=True,
+                )
+                break
+            # 004：单次动作占用 = 动作 TU + 往返移动 TU（老板裁决：移动扣工作窗）
+            tu_cost = self._tu_total(action, p, tuning)
+            self._execute(
+                world, agent, action, p, tuning,
+                slot=slot + 1, tu_spent=tu_cost,
+                tu_remaining=round(tu_remaining - tu_cost, 3),
+            )
+            slot += 1
+            tu_remaining -= tu_cost
 
     def _incapacitate_if_needed(self, world, agent: AgentState, tuning: AgentTuning) -> bool:
         """health 触底且尚未失能 → 标记失能、写一次 agent_incapacitated。返回是否本 tick 刚失能。
@@ -653,11 +757,13 @@ class AgentModule:
         season = climate.season if climate is not None else Season.SPRING
         household = household_of(world, agent)
         work_node = work_node_of(world, agent)
+        # 004：日内计距基点 = 人物当前位置（location 真实化），不再固定从家起算
+        origin = agent.location
         dist: dict[str, float] = {}
         for act in self._candidate_actions_for(agent, tuning):
             target = _target_node(act, agent, world)
             dist[target] = (
-                self._spatial.travel_tu(household.home_node, target) if self._spatial else 0.0
+                self._spatial.travel_tu(origin, target) if self._spatial else 0.0
             )
         bor = tuning.borrow
         creditor = select_creditor(world, agent.household_id, bor.borrow_grain_amount)
@@ -671,18 +777,21 @@ class AgentModule:
             work_field_growth=world.state.field_growth.get(work_node, 0.0),
             lender_node=_lender_node(world, agent),
             creditor_household_id=creditor.household_id if creditor else None,
-            distance_from_home=dist,
+            distance_from_location=dist,
             work_node_is_field=_is_field_node(world, work_node),
             can_eat=self._has_food(world, agent),
             feeder_id=guardian.agent_id if guardian else None,
             home_node=household.home_node,
             work_node=work_node,
             household_grain=household.grain,
+            household_water=household.water,
             has_overdue_debt=any(d.overdue for d in household.debts),
         )
 
     # -- 决策（只依赖 Perception + tuning）--------------------------------- #
-    def _decide(self, p: Perception, tuning: AgentTuning) -> str:
+    def _decide(
+        self, p: Perception, tuning: AgentTuning, tu_remaining: Optional[float] = None
+    ) -> Optional[str]:
         # 生存硬门控（任务11 修复）：若今天不进食，饥饿将在下一 tick 跨过伤害阈值，
         # 且自己有食物（或依赖者可由监护人供养），则必须进食。否则体力/做工的效用竞争会让
         # "抱着粮食饿伤"成为稳定循环——这正是移动体力校准后旧回归中全员饿死的根因。
@@ -691,9 +800,40 @@ class AgentModule:
             p.agent.hunger + phys.hunger_gain_per_tick >= phys.hunger_health_damage_threshold
             and p.can_eat
         ):
-            return "eat"
+            need_water = (
+                tuning.water.water_per_meal > 0
+                and p.household_water + 1e-9 < tuning.water.water_per_meal
+            )
+            if need_water:
+                # 任务30：有粮无水 → 先去打水（水是做饭前置）；打水不可行时退回常规打分
+                if (
+                    self.score_action("collect_water", p, tuning) != IMPOSSIBLE
+                    and (
+                        tu_remaining is None
+                        or self._tu_total("collect_water", p, tuning) <= tu_remaining + 1e-9
+                    )
+                ):
+                    return "collect_water"
+            elif (
+                tu_remaining is None
+                or self._tu_total("eat", p, tuning) <= tu_remaining + 1e-9
+            ):
+                return "eat"  # eat 动作 1 TU + 回家往返 TU，须装得进当日剩余预算
+        # 004 M5：逐动作贪心——过滤掉不可行（IMPOSSIBLE）与 TU 装不下的动作，取最高分
         candidates = self._candidate_actions_for(p.agent, tuning)
-        scored = [(self.score_action(act, p, tuning), act) for act in candidates]
+        scored: list[tuple[float, str]] = []
+        for cand in candidates:
+            s = self.score_action(cand, p, tuning)
+            if s == IMPOSSIBLE:
+                continue
+            if (
+                tu_remaining is not None
+                and self._tu_total(cand, p, tuning) > tu_remaining + 1e-9
+            ):
+                continue
+            scored.append((s, cand))
+        if not scored:
+            return None  # 无可行且装得下的动作 → 上层转闲时恢复
         # 最高分胜出；同分按候选顺序稳定取第一个（B10：本阶段不实现纠局）
         scored.sort(key=lambda x: x[0], reverse=True)
         return scored[0][1]
@@ -732,24 +872,20 @@ class AgentModule:
         bor = tuning.borrow
 
         # 目标节点（决策只依赖 Perception，故用 p.lender_node 而非 world）
-        if action in ("eat", "rest"):
-            target = p.home_node
-        elif action in ("farm", "harvest", "weave"):
-            target = p.work_node
-        elif action == "collect_water":
-            target = "well"
-        elif action == "borrow_grain":
-            target = p.lender_node
-        elif action in tuning.gathering.actions:
-            target = tuning.gathering.actions[action].target_node
-        else:
-            target = p.home_node
+        target = self._perceived_target(action, p, tuning)
 
         # 可行性前置过滤（不可行 → -inf，不会被选中）
         stage = tuning.aging.stage_by_name(agent.life_stage)
         if stage is not None and not stage.work_allowed and action not in ("eat", "rest"):
             return IMPOSSIBLE  # 幼年不劳作（D3 work_allowed）
         if action == "eat" and not p.can_eat:
+            return IMPOSSIBLE
+        # 任务30：烹饪/佐餐需水——水缸不足一餐用量时无法进食（先去 collect_water）
+        if (
+            action == "eat"
+            and tuning.water.water_per_meal > 0
+            and p.household_water + 1e-9 < tuning.water.water_per_meal
+        ):
             return IMPOSSIBLE
         if action == "borrow_grain" and p.household_grain >= bor.borrow_grain_threshold:
             return IMPOSSIBLE
@@ -770,14 +906,20 @@ class AgentModule:
             if p.has_overdue_debt:
                 return IMPOSSIBLE
 
-        one_way = p.distance_from_home.get(target, 0.0)
-        round_trip = one_way * 2.0  # C1：每天 move 往返
+        one_way = p.distance_from_location.get(target, 0.0)
+        round_trip = one_way * 2.0  # C1：往返
 
         move_stamina = round_trip * util.move_stamina_per_tu
-        flat_stamina = act.stamina_cost.get(action, 0.0)
-        total_stamina_cost = move_stamina + flat_stamina
-        if agent.stamina < total_stamina_cost:
-            return IMPOSSIBLE  # 体力不足以完成移动+动作
+        # 004 M5：体力分级——重活按速率 × TU 结算劳动体力，轻活为 0
+        labor_stamina = self._labor_stamina(action, act)
+        total_stamina_cost = move_stamina + labor_stamina
+        # 可行性闸（004「TU 够 + 体力够」双门槛）：移动体力须付得起；
+        # 重活还需尚有余力（一次重活≈满格 100，结算后归零，必须 rest 回满才能再干——
+        # 这正是「体力是小时级节奏器、防止连续重活」的实现口径；轻活 labor=0 不受此限）。
+        if agent.stamina < move_stamina:
+            return IMPOSSIBLE
+        if labor_stamina > 0 and agent.stamina <= 0:
+            return IMPOSSIBLE
 
         # 效用 = Σ weight(need) * 紧缺度(need) * fulfill(action, need)
         # [机制修正] 原 (1 + 紧缺度) 会给每个需求留 +1 地板，导致 rest 等即使不紧缺也有正分、
@@ -788,6 +930,12 @@ class AgentModule:
             if w == 0:
                 continue
             gross += w * urgency(need) * fulfill.get(need, 0.0)
+
+        # 任务30：家庭存水低于目标 → 打水紧迫度上升（避免依赖者无水可炊）
+        wcfg = tuning.water
+        if action == "collect_water" and wcfg.household_stock_target > 0:
+            shortage = max(0.0, 1.0 - p.household_water / wcfg.household_stock_target)
+            gross += wcfg.scarcity_weight * shortage
 
         # 减去体力惩罚（归一化到与 gross 同量级）与距离惩罚
         stamina_penalty = total_stamina_cost / util.stamina_score_divisor
@@ -807,6 +955,11 @@ class AgentModule:
         action: str,
         p: Perception,
         tuning: AgentTuning,
+        *,
+        slot: int = 1,
+        tu_spent: Optional[float] = None,
+        tu_remaining: Optional[float] = None,
+        idle: bool = False,
     ) -> None:
         phys = tuning.physiology
         util = tuning.utility
@@ -814,15 +967,22 @@ class AgentModule:
         agr = tuning.agriculture
         bor = tuning.borrow
 
+        # 004：直接调用（单测/外部）时补默认日内字段；日内循环会显式传入
         target = _target_node(action, agent, world)
         household = household_of(world, agent)
         work_node = work_node_of(world, agent)
         crop = _node_crop_type(world, work_node) if action == "harvest" else None
-        one_way = p.distance_from_home.get(target, 0.0)
+        one_way = p.distance_from_location.get(target, 0.0)
         round_trip = one_way * 2.0
+        if tu_spent is None:
+            # 总占用 = 动作 TU + 往返移动 TU（004 §3.6 老板裁决：移动扣工作窗）
+            tu_spent = self._tu_cost_of(action, act) + round_trip
+        if tu_remaining is None:
+            tu_remaining = max(0.0, self._work_window_tu(world) - tu_spent)
 
         move_stamina = round_trip * util.move_stamina_per_tu
-        flat_stamina = act.stamina_cost.get(action, 0.0)
+        # 004 M5：体力分级——重活按速率 × TU，轻活为 0（不再读已废弃的 stamina_cost 平表）
+        labor_stamina = self._labor_stamina(action, act)
 
         hunger_before = agent.hunger
         household_inv_before = inventory_of(world, agent, list(tuning.market.trade_values))
@@ -831,13 +991,14 @@ class AgentModule:
         fish_before = household.fish
         vegetable_before = household.vegetable
         cloth_before = household.cloth
+        water_before = household.water
         debt_before = household.debt
         fg = world.state.field_growth
         field_growth_before = fg.get(work_node, 0.0)
         harvest_detail: dict = {}
 
-        # 扣体力（移动 + 动作）
-        agent.stamina = max(0.0, agent.stamina - move_stamina - flat_stamina)
+        # 扣体力（移动 + 分级劳动体力）
+        agent.stamina = max(0.0, agent.stamina - move_stamina - labor_stamina)
 
         # 动作效果
         fed_by = "self"
@@ -866,13 +1027,13 @@ class AgentModule:
             guardian = self._guardian(world, agent, tuning)
             if guardian is not None:
                 fed_by = guardian.name  # 仅叙事：实际照料者
+            # 任务30：烹饪/佐餐用水（可行性已保证够一餐，扣后不为负）
+            per_meal = tuning.water.water_per_meal
+            if per_meal > 0:
+                household.water = round(max(0.0, household.water - per_meal), 2)
         elif action == "rest":
-            stage = tuning.aging.stage_by_name(agent.life_stage)
-            rec_mult = stage.stamina_recovery_mult if stage is not None else 1.0
-            agent.stamina = min(
-                self._stamina_cap(agent, tuning),
-                agent.stamina + phys.rest_stamina_recovery * rec_mult,
-            )
+            # 004：rest 与闲时均 1 TU 回满（旧 rest_stamina_recovery 线性回复已废弃，劳逸比 4:1）
+            agent.stamina = self._stamina_cap(agent, tuning)
         elif action == "farm":
             # 只提升长势，绝不直接产粮（农业周期：farm → 累积 → harvest）
             fg[work_node] = min(
@@ -890,6 +1051,8 @@ class AgentModule:
                 "field_fertility": world.state.field_fertility.get(
                     work_node, DEFAULT_FIELD_FERTILITY
                 ),
+                # 任务30：moisture 由灌溉档派生（旧库缺失时观察层按 1.0 降级）
+                "moisture": _moisture_factor(world),
                 "expected_yield": round(gain, 2),
             }
             setattr(household, crop, round(getattr(household, crop, 0.0) + gain, 2))
@@ -944,12 +1107,14 @@ class AgentModule:
             self._execute_weave(world, agent, p, tuning)
         elif action in tuning.gathering.actions:
             self._execute_gather(world, agent, action, p, tuning)
-        # collect_water：本阶段仅消耗体力（饮水资产暂不建模）
+        elif action == "collect_water":
+            # 任务30：生活用水最小切片——每次打水按配置产水（无上限，日耗在结算扣减）
+            household.water = round(household.water + tuning.water.collect_amount, 2)
 
         field_growth_after = fg.get(work_node, 0.0)
 
-        # 每天结束回家（C1）
-        agent.location = household.home_node
+        # 004：日内位置真实化——动作结束停在目标节点；日末回家由 step 统一归位（C1）
+        agent.location = target
 
         # 快照投影：最近动作（事件溯源的镜像，便于 CLI 查询）
         agent.last_action = action
@@ -968,8 +1133,14 @@ class AgentModule:
                 "action": action,
                 "work_node": work_node,
                 "target_node": target,
+                # 004 日内字段：序号 1 起；旧库缺字段时观察层按默认 slot=1 降级
+                "slot": slot,
+                "tu_spent": round(tu_spent, 3),
+                "tu_remaining": round(max(0.0, tu_remaining), 3),
                 "round_trip_tu": round(round_trip, 3),
-                "stamina_cost": round(move_stamina + flat_stamina, 3),
+                "move_stamina": round(move_stamina, 3),
+                "labor_stamina": round(labor_stamina, 3),
+                "idle": idle,
                 "hunger_before": round(hunger_before, 2),
                 "hunger_after": round(agent.hunger, 2),
                 "grain_before": round(grain_before, 2),
@@ -982,6 +1153,9 @@ class AgentModule:
                 "vegetable_after": round(household.vegetable, 2),
                 "cloth_before": round(cloth_before, 2),
                 "cloth_after": round(household.cloth, 2),
+                # 任务30：产水/日耗可追溯（collect_water 产水时差值 = collect_amount）
+                "water_before": round(water_before, 2),
+                "water_after": round(household.water, 2),
                 "household_inv_before": household_inv_before,
                 "household_inv_after": inventory_of(world, agent, list(tuning.market.trade_values)),
                 **harvest_detail,
@@ -1226,6 +1400,21 @@ class AgentModule:
                 )
 
         try:
+            self._settle_water(world, tuning)
+        except Exception as exc:  # noqa: BLE001 — 用水结算失败不拖垮婚配/生育/回血
+            world.event_log.append(
+                world.current_tick,
+                "agent_error",
+                {
+                    "agent_id": "_water",
+                    "agent_name": "生活用水",
+                    "phase": "water_settlement",
+                    "error": repr(exc),
+                    "traceback": traceback.format_exc(limit=2),
+                },
+            )
+
+        try:
             self._settle_marriage(world, tuning)
         except Exception as exc:  # noqa: BLE001
             world.event_log.append(
@@ -1317,6 +1506,36 @@ class AgentModule:
                 return member, ""
         return None, "too_weak"
 
+    def _settle_water(self, world, tuning: AgentTuning) -> None:
+        """每日生活用水结算（任务30）：按存活成员数扣减家庭水缸，不足计 0。"""
+        per_member = tuning.water.daily_consumption_per_member
+        if per_member <= 0:
+            return
+        for household in world.state.households.values():
+            members = [
+                m for m in household.member_ids
+                if m in world.state.agents and world.state.agents[m].alive
+            ]
+            if not members or household.water <= 0:
+                continue
+            need = round(per_member * len(members), 2)
+            before = household.water
+            after = max(0.0, round(before - need, 2))
+            household.water = after
+            if after < before:
+                world.event_log.append(
+                    world.current_tick,
+                    "water_consumed",
+                    {
+                        "household_id": household.household_id,
+                        "member_count": len(members),
+                        "need": need,
+                        "amount": round(before - after, 2),
+                        "before": before,
+                        "after": after,
+                    },
+                )
+
     def _settle_market(self, world, tuning: AgentTuning) -> None:
         """集市日结算（Q3）：每户每日最多一次行程，户主优先，体力记执行者。
 
@@ -1341,6 +1560,9 @@ class AgentModule:
             if executor is None:
                 skipped[reason] += 1
                 continue
+            # 004 §3.2-6：当日已在集市（日内动作目标为 market）→ 免往返体力
+            if executor.location == mkt.market_node:
+                cost = 0.0
             executor.stamina = max(0.0, executor.stamina - cost)
             travel[executor.agent_id] = round(cost, 2)
             participants.append((household, executor))
@@ -1621,8 +1843,14 @@ class AgentModule:
 
     # -- 继承（任务12 D10-D12 / A3；家庭模型第 1 步适配）-------------------- #
     def _inheritance_items(self, tuning: AgentTuning) -> list[str]:
-        """可继承物品集合 = 集市物品键 ∩ HouseholdState 现有字段（内容驱动，不写死）。"""
-        return [i for i in tuning.market.trade_values if i in HouseholdState.model_fields]
+        """可继承物品集合 = 集市物品键 ∩ HouseholdState 现有字段（内容驱动，不写死）。
+
+        任务30：生活用水不参与集市交易，但也要随继承/分家转移，否则家庭消亡时水凭空消失。
+        """
+        items = [i for i in tuning.market.trade_values if i in HouseholdState.model_fields]
+        if "water" not in items and "water" in HouseholdState.model_fields:
+            items.append("water")
+        return items
 
     def _select_heir(self, world, deceased: AgentState, tuning: AgentTuning) -> Optional[AgentState]:
         """单继承人（D10）：按配置顺位取第一个仍存活的候选人。"""

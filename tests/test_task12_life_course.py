@@ -51,7 +51,13 @@ def _build(seed: int = 0) -> World:
 @pytest.fixture
 def world():
     w = _build(0)
+    # 004：日内多动作改变 rng 流，首 tick 可能自发生育，干扰「child_1 = 本用例新生儿」的断言；
+    # 初始化 tick 关闭生育，随后恢复配置
+    b = w.config.agents.tuning.birth
+    saved = b.chance_per_day
+    b.chance_per_day = 0.0
     run_tick(w)  # 初始化 agents / climate
+    b.chance_per_day = saved
     return w
 
 
@@ -247,19 +253,20 @@ def test_a5_birth_stops_at_population_cap(world):
     mother.spouse_id, father.spouse_id = father.agent_id, mother.agent_id
     mother.health = father.health = 90.0
     tuning.birth.max_population = len(world.state.agents)  # 已达上限
+    born_before = len(world.event_log.by_type("agent_born"))  # 004：首 tick 可能已有他户生育
     mod._settle_birth(world, tuning)  # noqa: SLF001
-    assert not world.event_log.by_type("agent_born")
+    assert len(world.event_log.by_type("agent_born")) == born_before
 
 
 def test_a5_low_population_boost(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
     agents = world.state.agents
-    # 4 个存活成年：不提升
-    assert mod._fertility_boost(world, tuning) == pytest.approx(1.0)  # noqa: SLF001
-    agents["li_quan"].alive = False
-    agents["zhou_qiaoniang"].alive = False
-    # 只剩 2 个成年且无未成年：提升
+    # 004：首 tick 可能已有新生儿——只留这对夫妇，隔离「有未成年子女不提升」的干扰
+    for aid in list(agents):
+        if aid not in ("lin_yuan", "zhao_cuilan"):
+            agents[aid].alive = False
+    # 只有 2 个成年且无未成年：提升
     assert mod._fertility_boost(world, tuning) == pytest.approx(
         tuning.birth.low_population_fertility_boost
     )
@@ -356,8 +363,9 @@ def test_d6_birth_interval_and_probability(world):
     mother.last_birth_tick = world.current_tick - interval
     assert mod._birth_eligible(world, mother, father, tuning) is True  # noqa: SLF001
     tuning.birth.chance_per_day = 1.0
+    born_before = len(world.event_log.by_type("agent_born"))  # 004：首 tick 可能已有他户生育
     mod._settle_birth(world, tuning)  # noqa: SLF001
-    assert len(world.event_log.by_type("agent_born")) == 1
+    assert len(world.event_log.by_type("agent_born")) == born_before + 1
 
 
 def test_d7_newborn_attributes_use_parent_average_and_minimum(world):
@@ -411,6 +419,9 @@ def test_d9_dependent_consumes_household_stock(world):
     child = _add_child(world, health=90.0, hunger=80.0)
     mother = world.state.agents["zhao_cuilan"]
     father = world.state.agents["lin_yuan"]
+    # 004：日内动作改变婚配配对，父方可能已并入母户——显式分户，隔离跨户断言
+    if father.household_id == mother.household_id:
+        _move_out(world, father)
     hh(world, mother).grain = 100.0
     hh(world, father).grain = 10.0
     # 阶段三第2轮：未成年口粮按 consumption.minor_food_share 扣减（成年不变）
@@ -520,13 +531,15 @@ def test_d12_no_heir_assets_escheated_with_event(world):
     lin.spouse_id = lin.mother_id = lin.father_id = None
     lin.children_ids = []
     hh(world, lin).grain, hh(world, lin).cloth = 20.0, 1.0
+    hh(world, lin).water = 2.0  # 任务30：水也随继承/归公，保持守恒
     for f in _food_fields(world):
         if f != "grain":
             setattr(hh(world, lin), f, 0.0)
     mod._execute_inheritance(world, lin, tuning)  # noqa: SLF001
     assert hh(world, lin).grain == 0 and hh(world, lin).cloth == 0
+    assert hh(world, lin).water == 0
     escheated = world.event_log.by_type("inheritance_escheated")
-    assert {e["payload"]["item"] for e in escheated} == {"grain", "cloth"}
+    assert {e["payload"]["item"] for e in escheated} == {"grain", "cloth", "water"}
     assert not world.event_log.by_type("inheritance_executed")
 
 

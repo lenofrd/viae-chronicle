@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Season(str, Enum):
@@ -53,6 +53,9 @@ class SeasonParams(BaseModel):
     precipitation_intensity_mm: Optional[float] = Field(None, ge=0)
     base_wind_level: Optional[float] = None
     trend_anchor: Optional[str] = None  # dry / wet / stable
+    # 004 裁决：每日工作窗 TU 随季节（1 TU = 1 工作小时；夜间睡眠不占 TU）。
+    # 溪谷镇：春 10 / 夏 9（午热）/ 秋 10 / 冬 6。[调参]
+    work_window_tu: float = Field(10.0, ge=1, description="该季节每日工作窗（TU）")
 
 
 class DroughtParams(BaseModel):
@@ -117,7 +120,61 @@ class HydrologyInitialState(BaseModel):
     irrigation_gear: Optional[str] = None
 
 
+class IrrigationGear(str, Enum):
+    """灌溉条件四档（004 §2.7）：充足 / 偏少 / 缺水 / 断水。"""
+    ABUNDANT = "abundant"
+    LOW = "low"
+    SCARCE = "scarce"
+    DRY = "dry"
+
+
+class HydrologyEvolutionParams(BaseModel):
+    """单点水位演化与灌溉档派生（确定性、无随机）。
+
+    机制：有效降水日按 ``recharge_per_mm × precipitation_mm × (1 − 水位)`` 抬升（到满水位的
+    剩余空间越少补水越慢，避免常年封顶 1.0），无有效降水日按 ``dry_loss_per_day`` 下降，
+    夹紧 0–1；灌溉档由水位按 ``gear_thresholds``（降序下界）派生。所有数值为地点 [调参]。
+    """
+
+    recharge_per_mm: float = Field(
+        0.002, ge=0, description="有效降水补水系数（按剩余水位空间 × mm 折算）"
+    )
+    soak_threshold_mm: float = Field(5.0, ge=0, description="有效降水阈值（mm）；低于此值按无雨日计")
+    dry_loss_per_day: float = Field(0.004, ge=0, description="无有效降水日的水位下降")
+    gear_thresholds: dict[str, float] = Field(
+        default_factory=lambda: {"abundant": 0.80, "low": 0.55, "scarce": 0.30},
+        description="水位比例 → 灌溉档下界（abundant/low/scarce 降序；低于 scarce 即 dry）",
+    )
+    moisture_by_gear: dict[str, float] = Field(
+        default_factory=lambda: {"abundant": 1.0, "low": 0.85, "scarce": 0.7, "dry": 0.5},
+        description="灌溉档 → 产量公式 moisture 系数",
+    )
+
+    @model_validator(mode="after")
+    def _check_gear_tables(self) -> "HydrologyEvolutionParams":
+        gears = {g.value for g in IrrigationGear}
+        if set(self.gear_thresholds) != {"abundant", "low", "scarce"}:
+            raise ValueError(
+                "hydrology_evolution.gear_thresholds 必须恰好声明 abundant/low/scarce "
+                "（dry 为兜底档，不设下界）"
+            )
+        a, lo, sc = (self.gear_thresholds[k] for k in ("abundant", "low", "scarce"))
+        if not (1.0 >= a > lo > sc > 0.0):
+            raise ValueError(
+                "hydrology_evolution.gear_thresholds 必须满足 1 ≥ abundant > low > scarce > 0"
+            )
+        if set(self.moisture_by_gear) != gears:
+            raise ValueError(
+                "hydrology_evolution.moisture_by_gear 必须覆盖 abundant/low/scarce/dry 四档"
+            )
+        for gear, factor in self.moisture_by_gear.items():
+            if not (0.0 < factor <= 1.0):
+                raise ValueError(f"hydrology_evolution.moisture_by_gear[{gear}] 必须落在 (0, 1]")
+        return self
+
+
 class NaturalConfig(BaseModel):
     climate_initial: ClimateInitialState
     hydrology_initial: HydrologyInitialState = Field(default_factory=HydrologyInitialState)
+    hydrology_evolution: HydrologyEvolutionParams = Field(default_factory=HydrologyEvolutionParams)
     climate_evolution: ClimateEvolutionParams = Field(default_factory=ClimateEvolutionParams)

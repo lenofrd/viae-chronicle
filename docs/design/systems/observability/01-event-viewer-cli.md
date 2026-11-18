@@ -62,7 +62,7 @@ python src/vale/cli.py events --db data/worlds/brookvale-town-001/events.db list
 |---|---|
 | `weather_changed` | `year, month, day, solar_term, season, weather, temperature_c, precipitation_mm, humidity_pct, drought_accumulation, drought_state` |
 | `season_changed` | `from, to, year, month, day` |
-| `agent_action_taken` | `agent_id, agent_name, action, target_node, hunger_before/after, grain_before/after, meat_before/after, debt_before/after, field_growth_before/after, stamina_after, weather` |
+| `agent_action_taken` | `agent_id, agent_name, action, work_node, target_node, slot, tu_spent, tu_remaining, round_trip_tu, move_stamina, labor_stamina, idle, hunger_before/after, grain_before/after, meat_before/after, debt_before/after, field_growth_before/after, stamina_after, weather`（004 M5 新增 `slot/tu_spent/tu_remaining/move_stamina/labor_stamina/idle`，`stamina_cost` 废弃；`tu_spent` = 动作 TU + 往返移动 TU，`round_trip_tu` 为其中移动部分） |
 | `agent_error` | `agent_id, agent_name, error, traceback`（结算阶段含 `phase`） |
 | `debt_formed`（任务08） | `creditor_id, creditor_name, debtor_id, debtor_name, debt_type, amount, due_tick, originated_tick, debtor_grain_before/after, creditor_grain_before/after, debt_before/after` |
 | `debt_collected`（任务08） | `creditor_id, creditor_name, debtor_id, debtor_name, amount_paid, remaining, overdue, debtor_grain_after, creditor_grain_after` |
@@ -73,6 +73,8 @@ python src/vale/cli.py events --db data/worlds/brookvale-town-001/events.db list
 | `gather_fail`（任务09） | `agent_id, agent_name, action, resource_node, reason, success_rate` |
 | `gather_injury`（任务09） | `agent_id, agent_name, action, resource_node, health_before/after, loss` |
 | `module_error`（调度器写入，未在要求覆盖列表） | `module, error, traceback` → 走未知类型兜底 |
+
+> **004 裁决（2026-11-17，**M5 已落地**）——事件 schema 变更**：`agent_action_taken` 已新增**日内序号 / TU 区间 / 体力消耗明细**字段（每人每日约 2–5 条，冬少夏多；见上表）；旧库回放缺新字段按默认值处理（`pytest -k replay` 保持绿）。事件聚合（日汇总）暂不做，先观察量级。
 
 ## 7. 渲染与兜底
 

@@ -27,7 +27,7 @@ from vale.core.state import (
 )
 from vale.modules.social import apply_kin_defaults, record_memory
 
-_ASSET_FIELDS = ("grain", "meat", "fish", "vegetable", "cloth")
+_ASSET_FIELDS = ("grain", "meat", "fish", "vegetable", "cloth", "water")
 
 # 事件里可能出现的、以 <field>_after 形式给出的家庭库存快照
 _INV_AFTER_KEYS = {
@@ -36,6 +36,8 @@ _INV_AFTER_KEYS = {
     "fish_after": "fish",
     "vegetable_after": "vegetable",
     "cloth_after": "cloth",
+    # 任务30：生活用水（collect_water 产水；旧库无此键自动跳过）
+    "water_after": "water",
 }
 
 
@@ -199,6 +201,21 @@ class _Replayer:
             self._hh_for(agent_id, payload).cloth = max(
                 0.0, round(float(payload["cloth_after"]), 2)
             )
+
+    # -- 任务30：水文与生活用水 ---------------------------------------------- #
+    def _on_water_level_changed(self, payload: dict, tick: int) -> None:
+        if payload.get("after") is not None:
+            self.state.water_level_ratio = max(0.0, min(1.0, float(payload["after"])))
+
+    def _on_irrigation_gear_changed(self, payload: dict, tick: int) -> None:
+        if payload.get("to"):
+            self.state.irrigation_gear = str(payload["to"])
+
+    def _on_water_consumed(self, payload: dict, tick: int) -> None:
+        household_id = payload.get("household_id")
+        household = self.state.households.get(household_id) if household_id else None
+        if household is not None and payload.get("after") is not None:
+            household.water = max(0.0, round(float(payload["after"]), 2))
 
     def _on_trade_executed(self, payload: dict, tick: int) -> None:
         for agent_key, inv_key in (

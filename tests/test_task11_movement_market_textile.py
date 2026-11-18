@@ -419,7 +419,13 @@ def test_west_field_yields_vegetable_not_grain(world):
     world.state.field_growth["west_field"] = 90.0
     p = mod._perceive(world, lin)  # noqa: SLF001
     mod._execute(world, lin, "harvest", p, tuning)  # noqa: SLF001
-    assert hh(world, lin).vegetable == pytest.approx(tuning.agriculture.base_yield["vegetable"])
+    # 任务30：产量含 moisture（当前灌溉档 low=0.85）
+    moisture = world.config.natural_params.hydrology_evolution.moisture_by_gear[
+        world.state.irrigation_gear
+    ]
+    assert hh(world, lin).vegetable == pytest.approx(
+        tuning.agriculture.base_yield["vegetable"] * moisture
+    )
     assert hh(world, lin).grain == pytest.approx(10.0)  # 菜田不产粮
     ev = world.event_log.by_type("agent_action_taken")[-1]["payload"]
     assert ev["crop"] == "vegetable"
@@ -451,7 +457,12 @@ def test_crop_type_is_configurable_without_core_change(world):
     world.state.field_growth["east_field"] = 90.0
     p = mod._perceive(world, zhao)  # noqa: SLF001
     mod._execute(world, zhao, "harvest", p, tuning)  # noqa: SLF001
-    assert hh(world, zhao).vegetable == pytest.approx(tuning.agriculture.base_yield["vegetable"])
+    moisture = world.config.natural_params.hydrology_evolution.moisture_by_gear[
+        world.state.irrigation_gear
+    ]
+    assert hh(world, zhao).vegetable == pytest.approx(
+        tuning.agriculture.base_yield["vegetable"] * moisture
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -545,6 +556,7 @@ def test_survival_gate_forces_eat_when_hunger_would_cross_threshold(world):
     phys = tuning.physiology
     lin = world.state.agents["lin_yuan"]
     _set_inventory(world, lin, grain=3.0)
+    hh(world, lin).water = 1.0  # 任务30：水够一餐，门控直接给 eat
     lin.hunger = phys.hunger_health_damage_threshold - 1.0  # +hunger_gain 必跨阈值
     lin.stamina = 10.0  # 若按打分，rest 会赢
     events_before = len(world.event_log.by_type("agent_action_taken"))

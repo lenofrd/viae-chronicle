@@ -121,12 +121,15 @@ def _render_action(payload: dict, names: Optional[dict[str, str]]) -> tuple[str,
         else:
             body = f"吃了些存粮（存粮剩 {_num(payload.get('grain_after'))} 石）"
     elif action == "rest":
-        body = f"在家歇息（体力 {_num(payload.get('stamina_after'))}）"
+        # 004：rest 就地回满，不再固定「在家」；闲时整段折算为一条休整事件
+        mood = "闲时休整" if payload.get("idle") else "就地歇息"
+        body = f"{mood}（体力 {_num(payload.get('stamina_after'))}）"
     elif action == "farm":
         growth = payload.get("field_growth_after")
         body = f"在{tname or '?'}劳作（长势 {_num(growth)}）"
     elif action == "collect_water":
-        body = f"去{tname or '?'}打了水"
+        gain = _safe_diff(payload.get("water_after"), payload.get("water_before"))
+        body = f"去{tname or '?'}打了水（缸中 {_num(payload.get('water_after'))}，+{gain}）"
     elif action == "harvest":
         crop = payload.get("crop") or "grain"
         unit, label = ITEM_DESC.get(crop, ("石", f"{crop}存"))
@@ -152,13 +155,43 @@ def _render_action(payload: dict, names: Optional[dict[str, str]]) -> tuple[str,
 
     if "agent_name" not in payload:
         degraded = True
-    return f"[{name}] {body}", degraded
+    # 004：日内序号（旧库缺 slot 字段则不加前缀，按默认第 1 件降级显示）
+    slot = payload.get("slot")
+    prefix = f"当日第 {slot} 件：" if isinstance(slot, int) and slot >= 1 else ""
+    return f"[{name}] {prefix}{body}", degraded
 
 
 def _render_agent_error(payload: dict) -> tuple[str, bool]:
     name = payload.get("agent_name", payload.get("agent_id", "?"))
     err = payload.get("error", "?")
     return f"[{name}] 处理出错：{err}", "error" not in payload
+
+
+def _render_water_level(payload: dict) -> tuple[str, bool]:
+    before = payload.get("before")
+    after = payload.get("after")
+    if before is None or after is None:
+        return "水位变化（数据缺失）", True
+    trend = "上升" if float(after) >= float(before) else "下降"
+    return f"水位{trend}：{float(before) * 100:.1f}% → {float(after) * 100:.1f}%", False
+
+
+_GEAR_NAMES = {"abundant": "充足", "low": "偏少", "scarce": "缺水", "dry": "断水"}
+
+
+def _render_irrigation_gear(payload: dict) -> tuple[str, bool]:
+    gear = payload.get("to")
+    if not gear:
+        return "灌溉条件变化（数据缺失）", True
+    return f"灌溉条件转为「{_GEAR_NAMES.get(str(gear), gear)}」", False
+
+
+def _render_water_consumed(payload: dict) -> tuple[str, bool]:
+    amount = payload.get("amount")
+    after = payload.get("after")
+    if amount is None or after is None:
+        return "家庭用水消耗（数据缺失）", True
+    return f"家庭用水 {float(amount):g}（余 {float(after):g}）", False
 
 
 def _safe_diff(after: Any, before: Any) -> str:
@@ -713,6 +746,15 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "season_changed":
             text, degraded = _render_season(payload)
             reason = "missing_season_field" if degraded else None
+        elif event_type == "water_level_changed":
+            text, degraded = _render_water_level(payload)
+            reason = "missing_water_field" if degraded else None
+        elif event_type == "irrigation_gear_changed":
+            text, degraded = _render_irrigation_gear(payload)
+            reason = "missing_water_field" if degraded else None
+        elif event_type == "water_consumed":
+            text, degraded = _render_water_consumed(payload)
+            reason = "missing_water_field" if degraded else None
         elif event_type == "agent_action_taken":
             text, degraded = _render_action(payload, names)
             reason = "unknown_action_or_field" if degraded else None

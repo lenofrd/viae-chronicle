@@ -83,22 +83,23 @@ def test_hungry_agent_eats_and_state_updates(world):
     # 任务12：关闭生育，避免出生资产转移扰动本条「进食消耗」断言
     world.config.agents.tuning.birth.chance_per_day = 0.0
 
+    executed_tick = world.current_tick
     run_tick(world)
 
-    assert lin.last_action == "eat"
+    # 004：日内多动作——eat 发生在当天某一 slot，末动作可能是休整/闲时
     # 先 +15（A1，封顶 100）→ 100，再 eat −60（A2）→ 40
-    assert lin.hunger == pytest.approx(40.0)
-    # A3：每次进食消耗 1 石
-    assert hh(world, lin).grain == pytest.approx(4.0)
-
-    # 取林远最近一次动作事件（第二个 tick；by_type 按 id 升序，最后一条即最近）
     lin_events = [
         e for e in world.event_log.by_type("agent_action_taken")
-        if e["payload"]["agent_name"] == "林远"
+        if e["tick"] == executed_tick
+        and e["payload"]["agent_name"] == "林远" and e["payload"]["action"] == "eat"
     ]
-    ev = lin_events[-1]
+    assert lin_events, "当日必须至少进食一次"
+    # 雨天户外劳作打折时可能再吃一口（40→0），按进食次数对账
+    assert hh(world, lin).grain == pytest.approx(5.0 - len(lin_events))
+    assert lin.hunger == pytest.approx(40.0 if len(lin_events) == 1 else 0.0)
+
+    ev = lin_events[0]
     assert ev["payload"]["agent_name"] == "林远"
-    assert ev["payload"]["action"] == "eat"
     assert ev["payload"]["hunger_before"] == pytest.approx(100.0)
     assert ev["payload"]["hunger_after"] == pytest.approx(40.0)
     assert ev["payload"]["grain_before"] == pytest.approx(5.0)
@@ -109,18 +110,21 @@ def test_hungry_agent_eats_and_state_updates(world):
 # 效用决策：饱腹 + 低体力 → rest（stamina 需求驱动，farm 体力不足被过滤）
 # --------------------------------------------------------------------------- #
 def test_satiated_low_stamina_agent_rests(world):
-    """饱腹（eat 不迫切）+ 体力不足以 farm / collect_water + 存粮充足（不借粮）→ rest，体力回升。"""
+    """饱腹 + 体力低于任何通勤成本 → 劳作全不可行，选 rest；rest 1 TU 回满（004）。"""
     run_tick(world)
+    module = _agent_module(world)
+    tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
     hh(world, lin).grain = 5.0      # ≥ 借粮阈值 2，不会触发 borrow
     lin.hunger = 5.0     # 饱腹，eat 效用低
-    lin.stamina = 10.0   # < farm 的 ~50，也 < collect_water 的 15
+    lin.stamina = 1.0    # 低于农场/水井往返体力 → 移动闸不可行
 
-    run_tick(world)
+    p = module._perceive(world, lin)  # noqa: SLF001
+    assert module._decide(p, tuning, tu_remaining=10.0) == "rest"  # noqa: SLF001
 
-    assert lin.last_action == "rest"
-    # A5：rest 恢复 40 体力（封顶 100）
-    assert lin.stamina == pytest.approx(50.0)
+    # rest = 1 TU 回满（004 分级模型：不再线性 +40）
+    module._execute(world, lin, "rest", p, tuning)  # noqa: SLF001
+    assert lin.stamina == pytest.approx(module._stamina_cap(lin, tuning))  # noqa: SLF001
 
 
 # --------------------------------------------------------------------------- #
@@ -157,11 +161,16 @@ def test_action_event_payload_has_expected_fields(world):
     """agent_action_taken 事件应携带完整载荷，便于 CLI 叙事与后续分析。"""
     run_tick(world)
     events = world.event_log.by_type("agent_action_taken")
-    assert len(events) == 4  # 4 个人物各一条
+    # 004：日内多动作——每人当日至少一条，4 个人物均参与
+    assert {e["payload"]["agent_id"] for e in events} == set(world.state.agents.keys())
+    for agent_id in world.state.agents:
+        slots = [e["payload"]["slot"] for e in events if e["payload"]["agent_id"] == agent_id]
+        assert slots == list(range(1, len(slots) + 1))  # 日内序号 1 起连续
 
     expected_keys = {
         "agent_id", "agent_name", "action", "target_node",
-        "round_trip_tu", "stamina_cost",
+        "slot", "tu_spent", "tu_remaining",
+        "round_trip_tu", "move_stamina", "labor_stamina",
         "hunger_before", "hunger_after",
         "grain_before", "grain_after",
         "debt_before", "debt_after",
@@ -220,7 +229,14 @@ def test_harvest_autumn_grains_growth_and_redeems_debt(world):
 
     module._execute(world, zhao, "harvest", p, tuning)
 
-    gain = tuning.agriculture.base_yield["grain"]  # 阶段二：粮田产出走 crops.md §4.5 公式（初始值等价 75）
+    # 阶段二：粮田产出走 crops.md §4.5 公式；任务30 起 moisture 由灌溉档派生（初始 low=0.85）
+    ev = world.event_log.by_type("agent_action_taken")[-1]["payload"]
+    gain = ev["expected_yield"]
+    assert ev["moisture"] == pytest.approx(
+        world.config.natural_params.hydrology_evolution.moisture_by_gear[
+            world.state.irrigation_gear
+        ]
+    )
     assert hh(world, zhao).grain == pytest.approx(10.0 + gain - 10.0)  # 10 + 秋收gain - 10(还债给李全)
     assert hh(world, zhao).debt == pytest.approx(10.0)    # 20 - 10（派生聚合）
     assert hh(world, li_quan).grain == pytest.approx(lq_grain_before + 10.0)  # 债主收粮，总粮守恒
@@ -268,12 +284,18 @@ def test_borrow_grain_triggers_when_low_grain(world):
     lin.stamina = 100.0  # 体力满：消除 rest 的体力紧缺项，借粮(1.8) > rest(1.5)
     lin.hunger = 95.0
 
+    executed_tick = world.current_tick
     run_tick(world)
 
+    # 004：日内多动作——借粮发生于当日某 slot，随后可能进食/劳作
     lin_events = [e for e in world.event_log.by_type("agent_action_taken")
-                  if e["payload"]["agent_name"] == "林远"]
-    assert lin_events[-1]["payload"]["action"] == "borrow_grain"
-    assert hh(world, lin).grain == pytest.approx(5.0)  # 0 + 5
+                  if e["tick"] == executed_tick and e["payload"]["agent_name"] == "林远"]
+    assert any(e["payload"]["action"] == "borrow_grain" for e in lin_events)
+    # 借 5 石后饥饿触发生存门控进食；雨天「户外劳作打折」时可能再吃一口（饥饿 40→0），
+    # 因此按当日 eat 次数对账（每次 1 石），而非钉死余量
+    eats = sum(1 for e in lin_events if e["payload"]["action"] == "eat")
+    assert eats >= 1
+    assert hh(world, lin).grain == pytest.approx(5.0 - eats)
     assert hh(world, lin).debt == pytest.approx(5.0)   # 等额计入债务（派生聚合）
 
     # 借粮闭合：债主扣粮、借粮者加粮，总粮不变；事件载荷足以重建债务记录
@@ -307,10 +329,10 @@ def test_single_agent_failure_isolated(world, monkeypatch):
 
     original = AgentModule._execute
 
-    def patched(self, w, agent, action, p, tuning):
+    def patched(self, w, agent, action, p, tuning, **kwargs):
         if agent.agent_id == "zhao_cuilan":
             raise RuntimeError("synthetic boom")
-        return original(self, w, agent, action, p, tuning)
+        return original(self, w, agent, action, p, tuning, **kwargs)
 
     monkeypatch.setattr(AgentModule, "_execute", patched)
 

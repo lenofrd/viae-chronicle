@@ -322,6 +322,12 @@ def test_food_and_debt_non_negative_over_300_ticks(world):
     assert not world.event_log.by_type("agent_error")
 
 
+def _world_debt(world) -> float:
+    """世界总债（按家庭去重；同户多存活成员只计一次）。"""
+    households = {hh(world, a).household_id: hh(world, a) for a in world.state.agents.values()}
+    return sum(h.debt for h in households.values())
+
+
 def test_death_reduces_world_debt_with_events(world):
     """死亡使世界总债按继承比例减少：D11 = 0.5 转移给继承人、0.5 核销，两笔均有事件。"""
     tuning = world.config.agents.tuning
@@ -331,14 +337,15 @@ def test_death_reduces_world_debt_with_events(world):
     lin.spouse_id, zhao.spouse_id = zhao.agent_id, lin.agent_id
     _move_out(world, lin)  # 家庭模型：死者须为家庭最后成员，继承才发生
     _move_out(world, zhao)  # 继承人独立成户，避免与债权家庭重合
+    hh(world, zhao).grain = 50.0  # 004：继承人新户补给存粮，隔离"日内多动作下借粮新增债务"的噪声
     hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=5.0,
                             originated_tick=0, due_tick=9999)]
-    debt_before = sum(hh(world, a).debt for a in world.state.agents.values())
+    debt_before = _world_debt(world)
     lin.health = 0.0
     grace = tuning.death.death_grace_ticks
     for _ in range(grace + 1):
         run_tick(world)
-    debt_after = sum(hh(world, a).debt for a in world.state.agents.values())
+    debt_after = _world_debt(world)
     transferred = 5.0 * tuning.inheritance.debt_ratio
     assert debt_after == pytest.approx(debt_before - transferred)
     assert len(world.event_log.by_type("debt_transferred")) == 1
