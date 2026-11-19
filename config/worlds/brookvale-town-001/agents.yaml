@@ -181,7 +181,7 @@ tuning:
       max_per_household: 30             # [调参] 单户未清偿赊账上限（约家庭年需求 1/10，防雪球）
       due_days: 60                      # [调参] 一季，秋后还
       min_surplus: 10                   # [调参] 卖方至少余 10 才赊
-      min_shortage: 30                   # [调参] 买方存粮 < 5 才赊入（须 < min_surplus）
+      min_shortage: 5                    # [调参] 买方存粮 < 5 才赊入（须 < min_surplus）
 
   conflict:                             # 任务15 阶段二新增：债务纠纷（只做机制，不调参）
     debt_dispute:                       # 「有粮赖账」时的 2 轮私下催收；断粮走强制扣粮
