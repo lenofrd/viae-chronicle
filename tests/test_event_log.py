@@ -44,3 +44,51 @@ def test_payload_default_empty_dict(log: EventLog) -> None:
     """不提供 payload 时应存为空对象，读取仍是 dict。"""
     eid = log.append(tick=1, event_type="heartbeat")
     assert log.get(eid)["payload"] == {}
+
+
+def test_tick_window_queries_are_exact_and_ordered(log: EventLog) -> None:
+    log.append(1, "agent_action_taken", {"agent_id": "a"})
+    log.append(2, "agent_action_taken", {"agent_id": "b"})
+    log.append(2, "weather_changed", {"rain": True})
+    log.append(3, "agent_action_taken", {"agent_id": "c"})
+    assert [e["payload"]["agent_id"] for e in log.by_type_at_tick("agent_action_taken", 2)] == ["b"]
+    assert [e["payload"]["agent_id"] for e in log.by_type_between_ticks("agent_action_taken", 1, 3)] == ["b", "c"]
+    assert [e["tick"] for e in log.between_ticks(1, 2)] == [2, 2]
+
+
+
+def test_marriage_events_have_readable_rendering() -> None:
+    from vale.observability.render import render_event
+
+    moved = render_event({
+        "event_type": "household_member_transferred",
+        "payload": {
+            "agent_id": "wife", "agent_name": "林娘子",
+            "source_household_id": "hh_wife", "target_household_id": "hh_husband",
+        },
+    })
+    assert not moved.degraded
+    assert "迁入家庭" in moved.text and "林娘子" in moved.text
+
+    bride_price = render_event({
+        "event_type": "marriage_assets_transferred",
+        "payload": {
+            "transfer_type": "bride_price",
+            "from_household_id": "hh_husband",
+            "to_household_id": "hh_wife",
+            "resources": {"grain": 2.5, "coin": 10},
+        },
+    })
+    assert not bride_price.degraded
+    assert "彩礼" in bride_price.text and "粮" in bride_price.text and "铜钱" in bride_price.text
+
+    dowry = render_event({
+        "event_type": "marriage_assets_transferred",
+        "payload": {
+            "transfer_type": "dowry",
+            "from_household_id": "hh_wife",
+            "to_household_id": "hh_husband",
+            "resources": {"cloth": 1},
+        },
+    })
+    assert not dowry.degraded and "陪嫁" in dowry.text

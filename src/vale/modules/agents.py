@@ -28,6 +28,14 @@ from vale.core.household import (
 )
 from vale.core.state import AgentState, DebtRecord, HouseholdState
 from vale.modules import social
+from vale.modules.environment import (
+    environmental_injury_multiplier,
+    fatigue_efficiency,
+    production_efficiency_at_node,
+    service_capacity_available,
+    settle_building_maintenance,
+    update_building_needs,
+)
 
 # 视为降雨的天气（B9：影响户外劳作）
 RAIN_WEATHERS = {WeatherType.LIGHT_RAIN, WeatherType.MODERATE_RAIN, WeatherType.HEAVY_RAIN}
@@ -35,7 +43,7 @@ RAIN_WEATHERS = {WeatherType.LIGHT_RAIN, WeatherType.MODERATE_RAIN, WeatherType.
 IMPOSSIBLE = float("-inf")
 
 # 候选动作集合（内容外置：动作→目标节点的映射在 _target_node）
-CANDIDATE_ACTIONS = ["eat", "rest", "farm", "collect_water", "harvest", "borrow_grain", "weave"]
+CANDIDATE_ACTIONS = ["eat", "rest", "farm", "collect_water", "harvest", "borrow_grain", "borrow_food", "weave", "construct"]
 
 
 def age_years(birth_tick: int, tick: int) -> int:
@@ -115,9 +123,13 @@ class Perception:
     is_raining: bool
     season: Season
     work_field_growth: float
-    lender_node: str
+    work_field_season_labor_remaining: Optional[float] = None
+    lender_node: str = ""
     # 可选债权家庭（存粮 ≥ 借出量的最富其他家庭）；None 表示无人可借 → borrow 不可行
     creditor_household_id: Optional[str] = None
+    food_creditor_household_id: Optional[str] = None
+    food_creditor_resource: Optional[str] = None
+    food_lender_node: str = ""
     # 004：当前位置 → 各候选目标的单程 TU（日内 location 真实化，计距基点由家改为当前位置）；
     # 打分/执行时往返 = 2 × 单程（C1 往返语义保留）。
     distance_from_location: dict[str, float] = field(default_factory=dict)
@@ -131,16 +143,34 @@ class Perception:
     home_node: str = ""
     work_node: str = ""
     household_grain: float = 0.0
+    household_food_days: float = float("inf")
     # 任务30：家庭水缸存量（烹饪需水；不足以做饭时先去打水）
     household_water: float = 0.0
+    household_daily_water_need: float = 0.0
+    well_distance_from_home: float = float("inf")
+    season_progress: float = 0.0
     has_overdue_debt: bool = False
+    construction_project_id: Optional[str] = None
+    construction_progress: float = 0.0
+    construction_target_node: str = ""
+    production_efficiency: float = 1.0
+    fatigue_efficiency: float = 1.0
+    water_service_available: bool = True
+    weave_available: bool = False
 
 
-def select_creditor(world, debtor_household_id: str, amount: float) -> Optional[HouseholdState]:
-    """选存粮 >= amount 的存活家庭（排除自身家庭），按存粮降序取最富者（并列按 id 稳定）。
+def select_creditor(
+    world,
+    debtor_household_id: str,
+    amount: float,
+    *,
+    spatial=None,
+    debtor_home_node: Optional[str] = None,
+) -> Optional[HouseholdState]:
+    """选择可借出足额粮食的存活家庭。
 
-    纯函数，可独立单测；被 _perceive（可行性判定）与 _execute（实际扣粮）共用，保证一致。
-    A2 扩展：以「仍有存活成员的家庭」为经济池。
+    有空间索引时优先选最近的可达债主，同距离再选存粮较多者；不提供空间索引
+    时保留旧的「最富者优先」纯函数语义，兼容离线调用。
     """
     candidates = [
         h for h in living_households(world)
@@ -148,20 +178,77 @@ def select_creditor(world, debtor_household_id: str, amount: float) -> Optional[
     ]
     if not candidates:
         return None
+    if spatial is not None and debtor_home_node:
+        reachable = [
+            (spatial.travel_tu(debtor_home_node, h.home_node), h)
+            for h in candidates
+        ]
+        reachable = [(distance, h) for distance, h in reachable if math.isfinite(distance)]
+        if not reachable:
+            return None
+        return min(reachable, key=lambda item: (item[0], -item[1].grain, item[1].household_id))[1]
     return max(candidates, key=lambda h: (h.grain, h.household_id))
 
 
-def _lender_node(world, agent: AgentState) -> str:
-    """借粮目标：当前存粮最多的其他存活家庭住所（ emergently 指向富户，不写死姓名）。"""
-    own = agent.household_id
-    others = [h for h in living_households(world) if h.household_id != own]
-    if not others:
-        return home_node_of(world, agent)
-    richest = max(others, key=lambda h: h.grain)
-    return richest.home_node
+def select_food_creditor(
+    world,
+    debtor_household_id: str,
+    amount: float,
+    surplus_threshold: float,
+    resources: list[str],
+    *,
+    spatial=None,
+    debtor_home_node: Optional[str] = None,
+) -> Optional[tuple[HouseholdState, str]]:
+    """选择最近且能在保留自家余粮后借出指定食物的家庭。"""
+    candidates = []
+    for household in living_households(world):
+        if household.household_id == debtor_household_id:
+            continue
+        for order, resource in enumerate(resources):
+            stock = float(getattr(household, resource, 0.0))
+            lendable = stock - surplus_threshold
+            if lendable + 1e-9 < amount:
+                continue
+            distance = (
+                spatial.travel_tu(debtor_home_node, household.home_node)
+                if spatial is not None and debtor_home_node
+                else 0.0
+            )
+            if not math.isfinite(distance):
+                continue
+            candidates.append((distance, order, -lendable, household.household_id, household, resource))
+    if not candidates:
+        return None
+    chosen = min(candidates, key=lambda item: item[:4])
+    return chosen[4], chosen[5]
 
 
-def _target_node(action: str, agent: AgentState, world) -> str:
+def _food_lender_node(world, agent: AgentState, spatial=None) -> str:
+    tuning = world.config.agents.tuning.borrow
+    household = world.state.households.get(agent.household_id)
+    debtor_home = household.home_node if household is not None else home_node_of(world, agent)
+    creditor = select_food_creditor(
+        world, agent.household_id, tuning.borrow_food_amount,
+        tuning.food_lending_surplus_threshold, tuning.food_resources,
+        spatial=spatial, debtor_home_node=debtor_home,
+    )
+    return creditor[0].home_node if creditor else debtor_home
+
+
+def _lender_node(world, agent: AgentState, spatial=None) -> str:
+    """借粮目标与可行性选择共用同一个最近足额债主。"""
+    amount = world.config.agents.tuning.borrow.borrow_grain_amount
+    household = world.state.households.get(agent.household_id)
+    debtor_home = household.home_node if household is not None else home_node_of(world, agent)
+    creditor = select_creditor(
+        world, agent.household_id, amount,
+        spatial=spatial, debtor_home_node=debtor_home,
+    )
+    return creditor.home_node if creditor is not None else debtor_home
+
+
+def _target_node(action: str, agent: AgentState, world, spatial=None) -> str:
     """动作 → 目标节点（内容映射）。eat 在家；rest 就地（人物当前位置）；
     farm/harvest/weave 在个人劳作点；collect_water 在水井；borrow 去债主家。"""
     if action == "eat":
@@ -174,7 +261,23 @@ def _target_node(action: str, agent: AgentState, world) -> str:
     if action == "collect_water":
         return "well"
     if action == "borrow_grain":
-        return _lender_node(world, agent)
+        return _lender_node(world, agent, spatial)
+    if action == "borrow_food":
+        return _food_lender_node(world, agent, spatial)
+    if action == "construct":
+        project = next((
+            item for item in world.state.construction_projects.values()
+            if item.household_id == agent.household_id
+            and item.status == "under_construction"
+        ), None)
+        if project is None:
+            return ""
+        parcel = world.state.land_parcels.get(project.parcel_id)
+        if parcel is None:
+            return ""
+        node_id = parcel.spatial_node_id
+        valid_nodes = {node.id for node in world.config.spatial.nodes}
+        return node_id if node_id in valid_nodes else ""
     gathering = world.config.agents.tuning.gathering.actions
     if action in gathering:
         return gathering[action].target_node
@@ -237,7 +340,7 @@ def _is_field_node(world, node_id: str) -> bool:
     """该节点是否为田地（只有田地能 farm/harvest）。"""
     for n in world.config.spatial.nodes:
         if n.id == node_id:
-            return getattr(n.type, "value", n.type) == "field"
+            return getattr(n.type, "value", n.type) == "field" and not n.attributes.get("abstract_zone")
     return False
 
 
@@ -258,12 +361,13 @@ def _inventory(household: HouseholdState, items: list[str]) -> dict[str, float]:
 # --------------------------------------------------------------------------- #
 class AgentModule:
     name = "agents"
-    depends_on = ["climate"]
+    depends_on = ["climate", "ecology"]
 
     def __init__(self, rng=None) -> None:
         self._spatial: Optional[SpatialIndex] = None
         # 打猎成功率/受伤的随机源：默认独立 Random（故事流非确定），测试传 seeded 实例保证可复现
         self.rng = rng if rng is not None else random.Random()
+        self._daily_task_assignments: dict[str, str] = {}
 
     # -- 生命周期 ----------------------------------------------------------- #
     def step(self, world) -> None:
@@ -277,6 +381,8 @@ class AgentModule:
         social.apply_kin_defaults(world.state, world.current_tick)
         # 阶段二 C：劳作点对账（家庭可分配田块 + 个人偏好失效回收），先于当日决策
         self._reconcile_work_nodes(world, tuning)
+        # 家庭先协商当日分工，再由成员分别执行；生存动作仍可覆盖分工。
+        self._daily_task_assignments = self._plan_household_work(world, tuning)
         # A1：主循环以 WorldState.agents 为唯一真相源；cfg.agents 只用于开局播种，
         # 运行时新增的新生儿下一 tick 即参与决策/结算/查询。
         for agent_id in list(world.state.agents.keys()):
@@ -285,17 +391,67 @@ class AgentModule:
                 self._process_one(world, agent, tuning)
             except Exception as exc:  # noqa: BLE001 — 模块隔离：单个人物失败不拖垮世界
                 self._log_agent_error(world, agent, "daily_action", exc)
+        # 共同居住/工作地点形成日常接触；双方各自记录认知，不写入短期互动记忆。
+        self._record_shared_location_interactions(world, tuning)
         # 每日结算（任务 08/12）：死亡+继承 → 催收 → 集市 → 婚配 → 生育 → 回血
         self._settle(world, tuning)
         # 004 C1：日末回家——日内 location 已真实化（停在最后动作目标），结算后统一归位，
         # 使次日从家出发。集市结算先于归位，故仍能识别「当日是否在场 market」。
         for agent in living_agents(world.state.agents):
             agent.location = home_node_of(world, agent)
+        self._settle_fatigue(world, tuning)
+        settle_building_maintenance(world, tuning.environment)
+        update_building_needs(world, tuning.environment)
         # 任务16 阶段二：低频遗忘清理（裁决 §3.5——批量删过期条目并写 forgot 事件；
         # 决策读取只过滤不写，保持诉求计算只读语义）
         soc = tuning.social
         if world.current_tick > 0 and world.current_tick % soc.cleanup_interval == 0:
             social.cleanup_forgotten(world, world.current_tick, soc.acquaintance_ttl)
+
+    def _record_shared_location_interactions(self, world, tuning: AgentTuning) -> None:
+        """共同居住或工作节点视为有日常接触；只更新双向认知，不污染短期互动记忆。"""
+        groups: dict[str, list[AgentState]] = {}
+        for agent in living_agents(world.state.agents):
+            meeting_nodes = {
+                node for node in (work_node_of(world, agent), home_node_of(world, agent))
+                if node
+            }
+            for node in meeting_nodes:
+                groups.setdefault(node, []).append(agent)
+
+        seen_pairs: set[tuple[str, str]] = set()
+        for node in sorted(groups):
+            members = sorted(groups[node], key=lambda item: item.agent_id)
+            if len(members) < 2:
+                continue
+            # 轮转配对：每 tick 只生成 O(n) 次接触，跨日轮换覆盖同一地点的人群。
+            offset = 1 + ((world.current_tick - 1) % (len(members) - 1))
+            for index, observer in enumerate(members):
+                target = members[(index + offset) % len(members)]
+                if observer.household_id == target.household_id:
+                    continue
+                pair = tuple(sorted((observer.agent_id, target.agent_id)))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                view_a = social.get_social_view(
+                    world.state, observer.agent_id, target.agent_id,
+                    world.current_tick, tuning.social.acquaintance_ttl,
+                )
+                view_b = social.get_social_view(
+                    world.state, target.agent_id, observer.agent_id,
+                    world.current_tick, tuning.social.acquaintance_ttl,
+                )
+                if view_a["known"] and view_b["known"]:
+                    continue
+                social.upgrade_acquaintance(
+                    world, observer.agent_id, target.agent_id, world.current_tick,
+                    cause="interaction", location_source=f"shared:{node}",
+                )
+                social.upgrade_acquaintance(
+                    world, target.agent_id, observer.agent_id, world.current_tick,
+                    cause="interaction", location_source=f"shared:{node}",
+                )
 
     def _ensure_agents(self, world, cfg) -> None:
         """仅首次从配置初始化；之后状态快照为唯一真相源（A1）。
@@ -308,30 +464,54 @@ class AgentModule:
         phys = cfg.tuning.physiology
         aging = cfg.tuning.aging
         start_tick = world.current_tick
+        node_ids = {n.id for n in world.config.spatial.nodes}
+        registry_node = "elder_house" if "elder_house" in node_ids else ("village_head_house" if "village_head_house" in node_ids else None)
         for a in cfg.agents:
-            household_id = f"hh_{a.id}"
-            world.state.households[household_id] = HouseholdState(
-                household_id=household_id,
-                member_ids=[a.id],
-                head_id=a.id,
-                grain=a.assets.grain,
-                vegetable=a.assets.vegetable,
-                cloth=a.assets.cloth,
-                home_node=a.home_node,
-                work_node=a.work_node,
-                formed_tick=start_tick,
-            )
+            household_id = a.household_id or f"hh_{a.id}"
+            household = world.state.households.get(household_id)
+            if household is None:
+                household = HouseholdState(
+                    household_id=household_id,
+                    member_ids=[a.id],
+                    head_id=a.id,
+                    grain=a.assets.grain,
+                    coin=a.assets.coin,
+                    vegetable=a.assets.vegetable,
+                    cloth=a.assets.cloth,
+                    home_node=a.home_node,
+                    work_node=a.work_node,
+                    registry_node=registry_node,
+                    registered_tick=start_tick if registry_node else None,
+                    formed_tick=start_tick,
+                )
+                world.state.households[household_id] = household
+                if registry_node:
+                    world.event_log.append(start_tick, "household_registered", {
+                        "household_id": household_id, "head_id": a.id,
+                        "home_node": a.home_node, "work_node": a.work_node,
+                        "registry_node": registry_node, "registered_tick": start_tick,
+                        "assets": {k: getattr(household, k) for k in ("grain", "coin", "vegetable", "cloth")},
+                    })
+            else:
+                if household.home_node != a.home_node:
+                    raise ValueError(f"members of {household_id} must share one home_node")
+                if a.id not in household.member_ids:
+                    household.member_ids.append(a.id)
+                    if registry_node:
+                        world.event_log.append(start_tick, "household_member_registered", {
+                            "household_id": household_id, "agent_id": a.id,
+                            "home_node": household.home_node, "registry_node": registry_node,
+                        })
             world.state.agents[a.id] = AgentState(
                 agent_id=a.id,
                 name=a.name,
                 surname=a.surname or "",
                 sex=a.sex,
-                # D1：年龄唯一真相源；允许负值（开局前出生）
                 birth_tick=start_tick - a.age * DAYS_PER_YEAR,
                 life_stage=aging.stage_for(a.age).name,
                 household_id=household_id,
                 location=a.home_node,
-                work_node=a.work_node,  # Q2：个人劳作点偏好保留，婚后仍可耕自己的田
+                work_node=a.work_node,
                 health=a.initial_health if a.initial_health is not None else phys.initial_health,
                 hunger=a.initial_hunger if a.initial_hunger is not None else phys.initial_hunger,
                 stamina=a.initial_stamina if a.initial_stamina is not None else phys.initial_stamina,
@@ -340,15 +520,18 @@ class AgentModule:
         # 初始化所有 FIELD 节点的长势为 0、地力为中性值（内容来自 spatial 配置，不写死节点 id）
         if not world.state.field_growth:
             for n in world.config.spatial.nodes:
-                if getattr(n.type, "value", n.type) == "field":
+                if getattr(n.type, "value", n.type) == "field" and not n.attributes.get("abstract_zone"):
                     world.state.field_growth[n.id] = 0.0
         if not world.state.field_fertility:
             for n in world.config.spatial.nodes:
-                if getattr(n.type, "value", n.type) == "field":
+                if getattr(n.type, "value", n.type) == "field" and not n.attributes.get("abstract_zone"):
                     world.state.field_fertility[n.id] = DEFAULT_FIELD_FERTILITY
         # 阶段二 C：播种家庭可分配田块（单人户 = [默认田]，与既有 work_node_of 等价；不写事件）
         for household in world.state.households.values():
             household.work_nodes = self._desired_work_nodes(world, household, cfg.tuning)
+        # Land parcels are projected only after households and their deterministic field rights exist.
+        from vale.modules.land import initialize_land
+        initialize_land(world)
 
     # -- 阶段二 C：劳作点对账（家庭可分配田块 + 个人偏好失效回收）------------- #
     def _work_capable_count(self, world, household: HouseholdState,
@@ -374,7 +557,7 @@ class AgentModule:
         """
         field_ids = [
             n.id for n in world.config.spatial.nodes
-            if getattr(n.type, "value", n.type) == "field"
+            if getattr(n.type, "value", n.type) == "field" and not n.attributes.get("abstract_zone")
         ]
         if household.work_node not in field_ids:
             return []
@@ -411,6 +594,10 @@ class AgentModule:
                 {
                     "household_id": household.household_id,
                     "home_node": household.home_node,
+                "well_distance_tu": (
+                    round(self._spatial.travel_tu(household.home_node, "well"), 3)
+                    if self._spatial is not None else None
+                ),
                     "before": before,
                     "after": list(desired),
                     "reason": "reassigned",
@@ -442,6 +629,76 @@ class AgentModule:
                     "reason": "preference_invalid",
                 },
             )
+
+    def _plan_household_work(self, world, tuning: AgentTuning) -> dict[str, str]:
+        """Allocate distinct feasible daily tasks across each household's capable members.
+
+        Assignments are preferences, not locks: urgent eating, water and rest needs
+        still override them. Extra workers reinforce the best remaining task.
+        """
+        assignments: dict[str, str] = {}
+        excluded = {"eat", "rest", "borrow_grain", "borrow_food"}
+        for household in living_households(world):
+            workers = []
+            for member_id in household.member_ids:
+                member = world.state.agents.get(member_id)
+                if member is None or not member.alive or member.incapacitated:
+                    continue
+                stage = tuning.aging.stage_for(age_years(member.birth_tick, world.current_tick))
+                if stage.work_allowed:
+                    workers.append(member)
+            # Single-worker households have no division to coordinate; leave their
+            # existing utility-driven behavior untouched.
+            if len(workers) < 2:
+                continue
+            workers.sort(key=lambda item: item.agent_id)
+            offset = (world.current_tick - 1) % len(workers)
+            rotated = workers[offset:] + workers[:offset]
+            rank = {member.agent_id: index for index, member in enumerate(rotated)}
+            by_action: dict[str, list[tuple[float, int, str]]] = {}
+            by_member: dict[str, list[tuple[float, str]]] = {}
+            for member in workers:
+                perception = self._perceive(world, member)
+                options = []
+                for action in self._candidate_actions_for(member, tuning):
+                    if action in excluded:
+                        continue
+                    score = self.score_action(action, perception, tuning)
+                    if score == IMPOSSIBLE or score <= 0:
+                        continue
+                    options.append((score, action))
+                    by_action.setdefault(action, []).append((score, rank[member.agent_id], member.agent_id))
+                by_member[member.agent_id] = options
+            task_order = sorted(
+                by_action,
+                key=lambda action: (-max(item[0] for item in by_action[action]), action),
+            )
+            assigned_members: set[str] = set()
+            for action in task_order:
+                choices = sorted(by_action[action], key=lambda item: (-item[0], item[1], item[2]))
+                choice = next((item for item in choices if item[2] not in assigned_members), None)
+                if choice is None:
+                    continue
+                assignments[choice[2]] = action
+                assigned_members.add(choice[2])
+            for member in rotated:
+                if member.agent_id in assigned_members:
+                    continue
+                options = sorted(by_member.get(member.agent_id, []), key=lambda item: (-item[0], item[1]))
+                if options:
+                    assignments[member.agent_id] = options[0][1]
+            household_plan = {
+                member_id: action for member_id, action in assignments.items()
+                if member_id in household.member_ids
+            }
+            if household_plan:
+                world.event_log.append(world.current_tick, "household_work_plan_created", {
+                    "household_id": household.household_id,
+                    "assignments": household_plan,
+                    "worker_count": len(workers),
+                    "distinct_task_count": len(set(household_plan.values())),
+                })
+        return assignments
 
     # -- 年龄与衰老（任务12）----------------------------------------------- #
     def _health_cap(self, age: int, tuning: AgentTuning) -> float:
@@ -493,20 +750,33 @@ class AgentModule:
             return "well"
         if action == "borrow_grain":
             return p.lender_node
+        if action == "borrow_food":
+            return p.food_lender_node
+        if action == "construct":
+            return p.construction_target_node
         gathering = tuning.gathering.actions
         if action in gathering:
             return gathering[action].target_node
         return p.home_node
 
     def _tu_total(self, action: str, p: Perception, tuning: AgentTuning) -> float:
-        """该动作当日总 TU 消耗 = 动作 TU + 往返移动 TU。
+        """总 TU = 疲劳调整后的实际劳动时间 + 往返移动时间。
 
-        004 §3.6（2026-11-17 老板裁决）：移动与动作均从工作窗扣除；
-        往返超过剩余预算的动作不可行（如远途打猎），距离因此成为时间约束而不只是体力约束。
+        疲劳不降低单次工作的产出；达到连续高疲劳宽限期后，同一工作
+        需要更多 TU，因而挤占当日可完成的其他工作。
         """
         target = self._perceived_target(action, p, tuning)
-        one_way = p.distance_from_location.get(target, 0.0)
-        return self._tu_cost_of(action, tuning.action) + 2.0 * one_way
+        if action == "construct":
+            one_way = p.distance_from_location.get(target, float("inf")) if target else float("inf")
+            if not math.isfinite(one_way):
+                return float("inf")
+        else:
+            one_way = p.distance_from_location.get(target, 0.0)
+        base_labor_tu = self._tu_cost_of(action, tuning.action)
+        if action in tuning.environment.fatigue_affected_actions:
+            efficiency = max(1e-6, fatigue_efficiency(p.agent, tuning.environment))
+            base_labor_tu /= efficiency
+        return base_labor_tu + 2.0 * one_way
 
     def _apply_aging(self, world, agent: AgentState, tuning: AgentTuning) -> None:
         """生日结算（D2）：重算分段与上限、按上限截断，分段跨越或上限下降时写一次 agent_aged。
@@ -660,7 +930,10 @@ class AgentModule:
         max_slots = int(tu_remaining) + 8
         while tu_remaining >= 1.0 - 1e-9 and slot < max_slots:
             p = self._perceive(world, agent)
-            action = self._decide(p, tuning, tu_remaining=tu_remaining)
+            action = self._decide(
+                p, tuning, tu_remaining=tu_remaining,
+                preferred_action=self._daily_task_assignments.get(agent.agent_id),
+            )
             # 闲时（体力已满仍无更优动作，或无可行动作）：剩余 TU 一次性转休整，
             # 不逐 TU 刷事件（004：闲时同样 1 TU 回满，消耗该 TU）
             if action is None or (
@@ -695,6 +968,11 @@ class AgentModule:
         agent.incapacitated = True
         agent.incapacitated_tick = world.current_tick
         agent.death_cause = self._determine_death_cause(agent, tuning)
+        household = household_of(world, agent)
+        food_inventory = {
+            field_name: round(float(getattr(household, field_name, 0.0)), 2)
+            for field_name in tuning.physiology.food_fields
+        }
         world.event_log.append(
             world.current_tick,
             "agent_incapacitated",
@@ -702,11 +980,17 @@ class AgentModule:
                 "agent_id": agent.agent_id,
                 "agent_name": agent.name,
                 "reason": "health_bottomed",
+                "household_id": household.household_id,
                 "cause": agent.death_cause,
                 "health": round(agent.health, 2),
                 "hunger": round(agent.hunger, 2),
                 "stamina": round(agent.stamina, 2),
                 "death_grace_ticks": tuning.death.death_grace_ticks,
+                "household_food_inventory": food_inventory,
+                "household_food_stock": round(sum(food_inventory.values()), 2),
+                "household_water": round(float(household.water), 2),
+                "household_member_count": len(household.member_ids),
+                "home_node": household.home_node,
             },
         )
         return True
@@ -722,8 +1006,41 @@ class AgentModule:
         household = household_of(world, agent)
         if household.cloth >= tex.warmth_cloth_threshold:
             return
+        # A sound dwelling is meaningful winter shelter, not merely a place to
+        # recover fatigue. Clothing remains the strongest protection, while a
+        # damaged/absent house exposes residents to progressively more cold.
+        home_node = home_node_of(world, agent)
+        dwelling = None
+        has_home_dwelling = False
+        for building in world.state.buildings.values():
+            if building.building_type != "dwelling":
+                continue
+            parcel = world.state.land_parcels.get(building.parcel_id)
+            if parcel is None or parcel.spatial_node_id != home_node:
+                continue
+            has_home_dwelling = True
+            if building.status not in {"active", "occupied", "vacant"} or building.condition <= 0:
+                continue
+            if dwelling is None or building.condition > dwelling.condition:
+                dwelling = building
+        shelter_condition = float(dwelling.condition) if dwelling is not None else 0.0
+        shelter_id = dwelling.building_id if dwelling is not None else None
+        protection = (
+            tuning.environment.dwelling_cold_protection * shelter_condition / 100.0
+            if dwelling is not None else 0.0
+        )
+        # Legacy abstract home nodes remain sheltered even when the same world
+        # contains non-residential buildings such as a market or shrine.
+        if not has_home_dwelling:
+            shelter_condition = 100.0
+            shelter_id = "legacy_unmodeled_dwelling"
+            protection = tuning.environment.dwelling_cold_protection
+        base_loss = float(tex.cold_health_loss)
+        actual_loss = base_loss * (1.0 - protection)
+        if actual_loss <= 1e-9:
+            return
         before = agent.health
-        agent.health = max(0.0, before - tex.cold_health_loss)
+        agent.health = max(0.0, before - actual_loss)
         world.event_log.append(
             world.current_tick,
             "cold_exposure",
@@ -733,6 +1050,10 @@ class AgentModule:
                 "household_id": household.household_id,
                 "cloth": round(household.cloth, 2),
                 "warmth_cloth_threshold": tex.warmth_cloth_threshold,
+                "dwelling_id": shelter_id,
+                "dwelling_condition": round(shelter_condition, 2),
+                "dwelling_cold_protection": round(protection, 3),
+                "base_loss": round(base_loss, 2),
                 "health_before": round(before, 2),
                 "health_after": round(agent.health, 2),
                 "loss": round(before - agent.health, 2),
@@ -750,6 +1071,11 @@ class AgentModule:
         return _candidate_actions(tuning)
 
     def _perceive(self, world, agent: AgentState) -> Perception:
+        # _perceive is also a public testing/replay seam; do not require callers
+        # to have entered the daily step() lifecycle first. Distance perception
+        # must always use the same road-network TU index as production ticks.
+        if self._spatial is None:
+            self._spatial = SpatialIndex(world.config.spatial)
         tuning = world.config.agents.tuning
         climate = world.state.climate
         weather = climate.current_weather if climate is not None else WeatherType.SUNNY
@@ -761,13 +1087,83 @@ class AgentModule:
         origin = agent.location
         dist: dict[str, float] = {}
         for act in self._candidate_actions_for(agent, tuning):
-            target = _target_node(act, agent, world)
-            dist[target] = (
-                self._spatial.travel_tu(origin, target) if self._spatial else 0.0
-            )
+            target = _target_node(act, agent, world, self._spatial)
+            if not target:
+                continue
+            dist[target] = self._spatial.travel_tu(origin, target)
         bor = tuning.borrow
-        creditor = select_creditor(world, agent.household_id, bor.borrow_grain_amount)
+        creditor = select_creditor(world, agent.household_id, bor.borrow_grain_amount, spatial=self._spatial, debtor_home_node=household.home_node)
+        food_creditor = select_food_creditor(
+            world, agent.household_id, bor.borrow_food_amount,
+            bor.food_lending_surplus_threshold, bor.food_resources,
+            spatial=self._spatial, debtor_home_node=household.home_node,
+        )
         guardian = self._guardian(world, agent, tuning)
+        construction_project = next(
+            (
+                p for p in world.state.construction_projects.values()
+                if p.household_id == agent.household_id
+                and p.status == "under_construction"
+            ),
+            None,
+        )
+        if construction_project is not None:
+            parcel = world.state.land_parcels.get(construction_project.parcel_id)
+            valid_nodes = {node.id for node in world.config.spatial.nodes}
+            construction_target = (
+                parcel.spatial_node_id
+                if parcel is not None and parcel.spatial_node_id in valid_nodes
+                else ""
+            )
+            if construction_target:
+                dist[construction_target] = self._spatial.travel_tu(origin, construction_target)
+        else:
+            construction_target = ""
+        # Food security is measured in household food-days, not grain alone.
+        food_stock = sum(max(0.0, float(getattr(household, field_name, 0.0)))
+                         for field_name in tuning.physiology.food_fields)
+        daily_food_need = 0.0
+        daily_water_need = 0.0
+        for member_id in household.member_ids:
+            member = world.state.agents.get(member_id)
+            if member is None or not member.alive:
+                continue
+            member_age = age_years(member.birth_tick, world.current_tick)
+            share = (tuning.consumption.minor_food_share
+                     if member_age < tuning.dependency.max_age else 1.0)
+            daily_food_need += (
+                tuning.physiology.eat_grain_cost
+                * tuning.physiology.daily_meals_per_member
+                * share
+            )
+            daily_water_need += (
+                tuning.water.daily_consumption_per_member
+                + tuning.water.water_per_meal
+                * tuning.physiology.daily_meals_per_member
+                * share
+            )
+        household_food_days = food_stock / daily_food_need if daily_food_need > 0 else float("inf")
+        weave_available = work_node in tuning.textile.workshop_nodes or any(
+            building.building_type == "workshop"
+            and building.status in {"active", "occupied"}
+            and building.condition > 0
+            and (parcel := world.state.land_parcels.get(building.parcel_id)) is not None
+            and parcel.spatial_node_id == work_node
+            for building in world.state.buildings.values()
+        )
+        season_key = season.value if hasattr(season, "value") else str(season)
+        season_labor_required = tuning.agriculture.field_labor_required_by_season.get(season_key)
+        season_year = climate.year if climate is not None else 1
+        labor_record = world.state.field_season_labor.get(work_node, {})
+        labor_completed = (
+            float(labor_record.get("labor_completed", 0.0))
+            if labor_record.get("year") == season_year and labor_record.get("season") == season_key
+            else 0.0
+        )
+        season_labor_remaining = (
+            max(0.0, float(season_labor_required) - labor_completed)
+            if season_labor_required is not None else None
+        )
         return Perception(
             agent=agent,
             weather=weather,
@@ -775,8 +1171,12 @@ class AgentModule:
             is_raining=weather in RAIN_WEATHERS,
             season=season,
             work_field_growth=world.state.field_growth.get(work_node, 0.0),
-            lender_node=_lender_node(world, agent),
+            work_field_season_labor_remaining=season_labor_remaining,
+            lender_node=_lender_node(world, agent, self._spatial),
             creditor_household_id=creditor.household_id if creditor else None,
+            food_creditor_household_id=food_creditor[0].household_id if food_creditor else None,
+            food_creditor_resource=food_creditor[1] if food_creditor else None,
+            food_lender_node=food_creditor[0].home_node if food_creditor else household.home_node,
             distance_from_location=dist,
             work_node_is_field=_is_field_node(world, work_node),
             can_eat=self._has_food(world, agent),
@@ -784,18 +1184,91 @@ class AgentModule:
             home_node=household.home_node,
             work_node=work_node,
             household_grain=household.grain,
+            household_food_days=household_food_days,
             household_water=household.water,
+            household_daily_water_need=daily_water_need,
+            well_distance_from_home=self._spatial.travel_tu(household.home_node, "well"),
+            season_progress=(max(0, world.current_tick - 1) % (DAYS_PER_YEAR // 4)) / (DAYS_PER_YEAR // 4),
             has_overdue_debt=any(d.overdue for d in household.debts),
+            construction_project_id=construction_project.project_id if construction_project else None,
+            construction_progress=(construction_project.labor_completed / construction_project.labor_required) if construction_project else 0.0,
+            construction_target_node=construction_target,
+            production_efficiency=production_efficiency_at_node(world, work_node, "weave", tuning.environment),
+            fatigue_efficiency=fatigue_efficiency(agent, tuning.environment),
+            water_service_available=service_capacity_available(world, "well", "collect_water", tuning.environment),
+            weave_available=weave_available,
         )
 
     # -- 决策（只依赖 Perception + tuning）--------------------------------- #
+    def _water_reserve_target(self, p: Perception, tuning: AgentTuning) -> float:
+        """按季节可达性决定家庭应提前储备的水量。"""
+        water = tuning.water
+        daily_need = max(0.0, float(p.household_daily_water_need))
+        season = p.season.value if hasattr(p.season, "value") else str(p.season)
+        distance = float(p.well_distance_from_home)
+        next_season = {"spring": "summer", "autumn": "winter"}.get(season)
+        next_access_limit = water.seasonal_access_distance_tu.get(next_season)
+        reserve_days = float(water.seasonal_reserve_days.get(season, 0.0))
+        if (
+            next_access_limit is not None
+            and distance > float(next_access_limit)
+            and reserve_days > 0
+        ):
+            # 目标随当前季节推进而增长，避免季初一次性强制囤满而挤占吃饭/生产。
+            progress = min(1.0, max(0.0, float(p.season_progress)))
+            return max(water.household_stock_target, daily_need * reserve_days * progress)
+        return daily_need
+
     def _decide(
-        self, p: Perception, tuning: AgentTuning, tu_remaining: Optional[float] = None
+        self, p: Perception, tuning: AgentTuning, tu_remaining: Optional[float] = None,
+        preferred_action: Optional[str] = None,
     ) -> Optional[str]:
         # 生存硬门控（任务11 修复）：若今天不进食，饥饿将在下一 tick 跨过伤害阈值，
         # 且自己有食物（或依赖者可由监护人供养），则必须进食。否则体力/做工的效用竞争会让
         # "抱着粮食饿伤"成为稳定循环——这正是移动体力校准后旧回归中全员饿死的根因。
         phys = tuning.physiology
+        # Water is a prerequisite for eating and a daily survival requirement.
+        # Do not let productive work indefinitely outrank a household water deficit:
+        # otherwise a resident can retain food, farm repeatedly, and die dehydrated/
+        # starved because the meal action remains unavailable.
+        # Trigger only below one household-day of actual drinking + meal water.
+        # Using the larger storage target here caused repeated collection after
+        # every meal, consuming the whole work window and starving other actions.
+        water_target = self._water_reserve_target(p, tuning)
+        if water_target > 0 and p.household_water + 1e-9 < water_target:
+            if (
+                self.score_action("collect_water", p, tuning) != IMPOSSIBLE
+                and (
+                    tu_remaining is None
+                    or self._tu_total("collect_water", p, tuning) <= tu_remaining + 1e-9
+                )
+            ):
+                return "collect_water"
+        # If the household has no edible stock, explicitly borrow from a
+        # solvent creditor before ordinary production preferences can starve it.
+        if (
+            not p.can_eat
+            and p.household_grain < tuning.borrow.borrow_grain_threshold
+            and p.creditor_household_id is not None
+            and not p.has_overdue_debt
+            and self.score_action("borrow_grain", p, tuning) != IMPOSSIBLE
+            and (
+                tu_remaining is None
+                or self._tu_total("borrow_grain", p, tuning) <= tu_remaining + 1e-9
+            )
+        ):
+            return "borrow_grain"
+        if (
+            not p.can_eat
+            and p.food_creditor_household_id is not None
+            and not p.has_overdue_debt
+            and self.score_action("borrow_food", p, tuning) != IMPOSSIBLE
+            and (
+                tu_remaining is None
+                or self._tu_total("borrow_food", p, tuning) <= tu_remaining + 1e-9
+            )
+        ):
+            return "borrow_food"
         if (
             p.agent.hunger + phys.hunger_gain_per_tick >= phys.hunger_health_damage_threshold
             and p.can_eat
@@ -831,6 +1304,8 @@ class AgentModule:
                 and self._tu_total(cand, p, tuning) > tu_remaining + 1e-9
             ):
                 continue
+            if cand == preferred_action:
+                s += tuning.utility.household_task_priority_bonus
             scored.append((s, cand))
         if not scored:
             return None  # 无可行且装得下的动作 → 上层转闲时恢复
@@ -853,6 +1328,9 @@ class AgentModule:
                     if p.household_grain <= 0
                     else tuning.utility.economy_urgency_grain_positive
                 )
+            if need == "food_security":
+                target_days = tuning.utility.food_security_target_days
+                return max(0.0, min(1.0, 1.0 - p.household_food_days / target_days))
             return 0.0
 
         return self._score(action, p, tuning, weights, urgency)
@@ -880,6 +1358,19 @@ class AgentModule:
             return IMPOSSIBLE  # 幼年不劳作（D3 work_allowed）
         if action == "eat" and not p.can_eat:
             return IMPOSSIBLE
+        # Eating is a discrete survival action, not a free utility sink. Only
+        # allow it when skipping the meal would cross the next-tick hunger
+        # damage threshold; _decide() then gives it hard priority.
+        if (
+            action == "eat"
+            and agent.hunger + tuning.physiology.hunger_gain_per_tick
+            < tuning.physiology.hunger_health_damage_threshold
+        ):
+            return IMPOSSIBLE
+        if action == "weave" and not p.weave_available:
+            return IMPOSSIBLE
+        if action == "collect_water" and not p.water_service_available:
+            return IMPOSSIBLE
         # 任务30：烹饪/佐餐需水——水缸不足一餐用量时无法进食（先去 collect_water）
         if (
             action == "eat"
@@ -888,6 +1379,12 @@ class AgentModule:
         ):
             return IMPOSSIBLE
         if action == "borrow_grain" and p.household_grain >= bor.borrow_grain_threshold:
+            return IMPOSSIBLE
+        if action == "construct" and (
+            p.construction_project_id is None or not p.construction_target_node
+        ):
+            return IMPOSSIBLE
+        if action == "construct" and p.construction_progress >= 1.0:
             return IMPOSSIBLE
         # 只有田地能 farm/harvest：work_node 是集市等非田地节点时禁止，避免"在广场种粮"
         if action in ("farm", "harvest") and not p.work_node_is_field:
@@ -899,19 +1396,26 @@ class AgentModule:
         # farm 封顶：长势达上限后不可再选 farm，避免无效劳作与体力消耗（任务 08）
         if action == "farm" and p.work_field_growth >= agr.max_field_growth:
             return IMPOSSIBLE
+        if action == "farm" and p.work_field_season_labor_remaining is not None and p.work_field_season_labor_remaining <= 1e-9:
+            return IMPOSSIBLE
         # borrow 可行性：存粮 < 阈值（上已判） + 有存粮足够的债主 + 无逾期债务
         if action == "borrow_grain":
-            if p.creditor_household_id is None:
+            if p.creditor_household_id is None or p.has_overdue_debt:
                 return IMPOSSIBLE
-            if p.has_overdue_debt:
+        if action == "borrow_food":
+            if p.food_creditor_household_id is None or p.has_overdue_debt or p.can_eat:
                 return IMPOSSIBLE
 
         one_way = p.distance_from_location.get(target, 0.0)
+        if action == "construct" and (not target or not math.isfinite(one_way)):
+            return IMPOSSIBLE
         round_trip = one_way * 2.0  # C1：往返
 
         move_stamina = round_trip * util.move_stamina_per_tu
         # 004 M5：体力分级——重活按速率 × TU 结算劳动体力，轻活为 0
         labor_stamina = self._labor_stamina(action, act)
+        if action == "construct":
+            labor_stamina = 5.0
         total_stamina_cost = move_stamina + labor_stamina
         # 可行性闸（004「TU 够 + 体力够」双门槛）：移动体力须付得起；
         # 重活还需尚有余力（一次重活≈满格 100，结算后归零，必须 rest 回满才能再干——
@@ -931,11 +1435,20 @@ class AgentModule:
                 continue
             gross += w * urgency(need) * fulfill.get(need, 0.0)
 
+        if action == "construct":
+            construction_urgency = max(0.0, 1.0 - p.construction_progress)
+            gross += weights.get("economy", 1.0) * urgency("economy") * 2.0 * construction_urgency
+            season_key = p.season.value if hasattr(p.season, "value") else str(p.season)
+            gross *= tuning.environment.construction_season_multiplier.get(season_key, 1.0)
+
         # 任务30：家庭存水低于目标 → 打水紧迫度上升（避免依赖者无水可炊）
         wcfg = tuning.water
         if action == "collect_water" and wcfg.household_stock_target > 0:
             shortage = max(0.0, 1.0 - p.household_water / wcfg.household_stock_target)
             gross += wcfg.scarcity_weight * shortage
+
+        if action == "weave":
+            gross *= p.production_efficiency
 
         # 减去体力惩罚（归一化到与 gross 同量级）与距离惩罚
         stamina_penalty = total_stamina_cost / util.stamina_score_divisor
@@ -968,15 +1481,22 @@ class AgentModule:
         bor = tuning.borrow
 
         # 004：直接调用（单测/外部）时补默认日内字段；日内循环会显式传入
-        target = _target_node(action, agent, world)
+        target = _target_node(action, agent, world, self._spatial)
         household = household_of(world, agent)
         work_node = work_node_of(world, agent)
         crop = _node_crop_type(world, work_node) if action == "harvest" else None
         one_way = p.distance_from_location.get(target, 0.0)
+        if action == "construct":
+            expected_target = p.construction_target_node
+            if not expected_target or target != expected_target or not math.isfinite(one_way):
+                raise ValueError("construction parcel must resolve to a reachable spatial node")
         round_trip = one_way * 2.0
         if tu_spent is None:
-            # 总占用 = 动作 TU + 往返移动 TU（004 §3.6 老板裁决：移动扣工作窗）
-            tu_spent = self._tu_cost_of(action, act) + round_trip
+            # 直接调用与日内调度保持同一口径：疲劳延长劳动时间，不减少单次工作产出。
+            labor_tu = self._tu_cost_of(action, act)
+            if action in tuning.environment.fatigue_affected_actions:
+                labor_tu /= max(1e-6, fatigue_efficiency(agent, tuning.environment))
+            tu_spent = labor_tu + round_trip
         if tu_remaining is None:
             tu_remaining = max(0.0, self._work_window_tu(world) - tu_spent)
 
@@ -987,6 +1507,7 @@ class AgentModule:
         hunger_before = agent.hunger
         household_inv_before = inventory_of(world, agent, list(tuning.market.trade_values))
         grain_before = household.grain
+        coin_before = household.coin
         meat_before = household.meat
         fish_before = household.fish
         vegetable_before = household.vegetable
@@ -1035,6 +1556,29 @@ class AgentModule:
             # 004：rest 与闲时均 1 TU 回满（旧 rest_stamina_recovery 线性回复已废弃，劳逸比 4:1）
             agent.stamina = self._stamina_cap(agent, tuning)
         elif action == "farm":
+            # 每季每块田有显式劳动预算；效率低的人仍完成相同工作单元，但占用更多 TU。
+            climate = world.state.climate
+            season_key = p.season.value if hasattr(p.season, "value") else str(p.season)
+            season_year = climate.year if climate is not None else 1
+            required_labor = agr.field_labor_required_by_season.get(season_key)
+            if required_labor is not None:
+                previous = world.state.field_season_labor.get(work_node, {})
+                completed = (
+                    float(previous.get("labor_completed", 0.0))
+                    if previous.get("year") == season_year and previous.get("season") == season_key
+                    else 0.0
+                )
+                after_labor = min(float(required_labor), completed + agr.field_labor_per_farm)
+                world.state.field_season_labor[work_node] = {
+                    "year": season_year, "season": season_key,
+                    "labor_completed": round(after_labor, 3),
+                }
+                world.event_log.append(world.current_tick, "field_labor_progressed", {
+                    "field_node": work_node, "year": season_year, "season": season_key,
+                    "labor_before": round(completed, 3), "labor_after": round(after_labor, 3),
+                    "labor_required": float(required_labor), "agent_id": agent.agent_id,
+                    "household_id": household.household_id,
+                })
             # 只提升长势，绝不直接产粮（农业周期：farm → 累积 → harvest）
             fg[work_node] = min(
                 agr.max_field_growth, field_growth_before + agr.field_growth_per_farm
@@ -1043,7 +1587,8 @@ class AgentModule:
             # 秋季且长势达标：长势清零，按 crops.md §4.5 公式产出对应作物（grain / vegetable）；
             # 再按债务记录还给对应债主。产出进家庭库存。
             fg[work_node] = 0.0
-            gain = expected_yield(world, work_node, crop, tuning)
+            base_gain = expected_yield(world, work_node, crop, tuning)
+            gain = base_gain
             harvest_detail = {
                 "crop": crop,
                 "base_yield": tuning.agriculture.base_yield.get(crop, 0.0),
@@ -1053,6 +1598,7 @@ class AgentModule:
                 ),
                 # 任务30：moisture 由灌溉档派生（旧库缺失时观察层按 1.0 降级）
                 "moisture": _moisture_factor(world),
+                "base_expected_yield": round(base_gain, 2),
                 "expected_yield": round(gain, 2),
             }
             setattr(household, crop, round(getattr(household, crop, 0.0) + gain, 2))
@@ -1062,7 +1608,7 @@ class AgentModule:
         elif action == "borrow_grain":
             # 借粮闭合：从债权家庭扣粮、债务家庭加粮、创建家庭债务记录；无债主/不足则不借
             amount = bor.borrow_grain_amount
-            creditor_hh = select_creditor(world, household.household_id, amount)
+            creditor_hh = select_creditor(world, household.household_id, amount, spatial=self._spatial, debtor_home_node=household.home_node)
             if creditor_hh is not None and creditor_hh.grain >= amount:
                 creditor_grain_before = creditor_hh.grain
                 creditor_hh.grain = round(creditor_hh.grain - amount, 2)
@@ -1103,10 +1649,68 @@ class AgentModule:
                     },
                 )
             # 若 creditor 为 None 或存粮不足（理论上 _score 已过滤），不产粮不欠债，仅消耗往返体力
+        elif action == "borrow_food":
+            pair = select_food_creditor(
+                world, household.household_id, bor.borrow_food_amount,
+                bor.food_lending_surplus_threshold, bor.food_resources,
+                spatial=self._spatial, debtor_home_node=household.home_node,
+            )
+            if pair is not None:
+                creditor_hh, resource = pair
+                creditor_before = float(getattr(creditor_hh, resource))
+                debtor_before = float(getattr(household, resource))
+                amount = min(bor.borrow_food_amount, max(0.0, creditor_before - bor.food_lending_surplus_threshold))
+                if amount > 0:
+                    setattr(creditor_hh, resource, round(creditor_before - amount, 2))
+                    setattr(household, resource, round(debtor_before + amount, 2))
+                    due_tick = world.current_tick + tuning.debt.due_days
+                    household.debts.append(
+                        DebtRecord(
+                            debtor_household_id=household.household_id,
+                            creditor_household_id=creditor_hh.household_id,
+                            amount=amount,
+                            originated_tick=world.current_tick,
+                            due_tick=due_tick,
+                            origin="food_loan",
+                            resource=resource,
+                        )
+                    )
+                    creditor_head = world.state.agents.get(creditor_hh.head_id or "")
+                    world.event_log.append(
+                        world.current_tick,
+                        "debt_formed",
+                        {
+                            "creditor_id": creditor_head.agent_id if creditor_head else creditor_hh.household_id,
+                            "creditor_name": creditor_head.name if creditor_head else creditor_hh.household_id,
+                            "debtor_id": agent.agent_id,
+                            "debtor_name": agent.name,
+                            "creditor_household_id": creditor_hh.household_id,
+                            "debtor_household_id": household.household_id,
+                            "household_id": household.household_id,
+                            "debt_type": resource,
+                            "resource": resource,
+                            "origin": "food_loan",
+                            "amount": round(amount, 2),
+                            "due_tick": due_tick,
+                            "originated_tick": world.current_tick,
+                            f"debtor_{resource}_before": round(debtor_before, 2),
+                            f"debtor_{resource}_after": round(getattr(household, resource), 2),
+                            f"creditor_{resource}_before": round(creditor_before, 2),
+                            f"creditor_{resource}_after": round(getattr(creditor_hh, resource), 2),
+                            "debt_before": round(debt_before, 2),
+                            "debt_after": round(household.debt, 2),
+                        },
+                    )
         elif action == "weave":
             self._execute_weave(world, agent, p, tuning)
         elif action in tuning.gathering.actions:
             self._execute_gather(world, agent, action, p, tuning)
+        elif action == "construct":
+            from vale.modules.construction import advance_construction
+            project_id = p.construction_project_id
+            if project_id is None:
+                raise ValueError("construction action selected without an active household project")
+            advance_construction(world, project_id, worker_id=agent.agent_id)
         elif action == "collect_water":
             # 任务30：生活用水最小切片——每次打水按配置产水（无上限，日耗在结算扣减）
             household.water = round(household.water + tuning.water.collect_amount, 2)
@@ -1114,7 +1718,8 @@ class AgentModule:
         field_growth_after = fg.get(work_node, 0.0)
 
         # 004：日内位置真实化——动作结束停在目标节点；日末回家由 step 统一归位（C1）
-        agent.location = target
+        # 取水动作代表到井取水并把水带回家；往返 TU 已计入动作成本。
+        agent.location = home_node_of(world, agent) if action == "collect_water" else target
 
         # 快照投影：最近动作（事件溯源的镜像，便于 CLI 查询）
         agent.last_action = action
@@ -1131,6 +1736,7 @@ class AgentModule:
                 "agent_name": agent.name,
                 "household_id": household.household_id,
                 "action": action,
+                "household_role": self._daily_task_assignments.get(agent.agent_id),
                 "work_node": work_node,
                 "target_node": target,
                 # 004 日内字段：序号 1 起；旧库缺字段时观察层按默认 slot=1 降级
@@ -1145,6 +1751,8 @@ class AgentModule:
                 "hunger_after": round(agent.hunger, 2),
                 "grain_before": round(grain_before, 2),
                 "grain_after": round(household.grain, 2),
+                "coin_before": round(coin_before, 2),
+                "coin_after": round(household.coin, 2),
                 "meat_before": round(meat_before, 2),
                 "meat_after": round(household.meat, 2),
                 "fish_before": round(fish_before, 2),
@@ -1183,9 +1791,31 @@ class AgentModule:
         weather_mult = cfg.bad_weather_success_mult if p.is_raining else 1.0
         success_rate = min(1.0, cfg.base_success_rate * season_mult * weather_mult)
         success = self.rng.random() < success_rate
+        amount = cfg.output_amount
+        pool = world.state.ecological_resources.get(cfg.target_node)
+        if success and pool is not None:
+            used_this_tick = (float(pool.get("harvested_this_tick", 0.0))
+                              if pool.get("harvest_tick") == world.current_tick else 0.0)
+            remaining_cap = max(0.0, float(pool.get("extraction_limit_per_tick", 0.0)) - used_this_tick)
+            amount = min(amount, remaining_cap, max(0.0, float(pool.get("current_stock", 0.0))))
+            if amount <= 0:
+                success = False
+            else:
+                stock_before = float(pool["current_stock"])
+                pool["current_stock"] = round(stock_before - amount, 6)
+                pool["harvest_tick"] = world.current_tick
+                pool["harvested_this_tick"] = round(used_this_tick + amount, 6)
+                world.event_log.append(world.current_tick, "resource_harvested", {
+                    "resource_node": cfg.target_node, "amount": round(amount, 3),
+                    "stock_before": round(stock_before, 3),
+                    "stock_after": pool["current_stock"],
+                    "harvested_this_tick": pool["harvested_this_tick"],
+                    "harvest_tick": world.current_tick,
+                    "agent_id": agent.agent_id, "household_id": household.household_id,
+                })
 
         if success:
-            setattr(household, out_field, round(out_before + cfg.output_amount, 2))
+            setattr(household, out_field, round(out_before + amount, 2))
             world.event_log.append(
                 world.current_tick,
                 "gather_success",
@@ -1198,7 +1828,7 @@ class AgentModule:
                     "output_field": out_field,
                     "output_before": round(out_before, 2),
                     "output_after": round(getattr(household, out_field), 2),
-                    "amount": round(cfg.output_amount, 2),
+                    "amount": round(amount, 2),
                     "success_rate": round(success_rate, 3),
                 },
             )
@@ -1212,7 +1842,7 @@ class AgentModule:
                     "household_id": household.household_id,
                     "action": action,
                     "resource_node": cfg.target_node,
-                    "reason": "未获猎物",
+                    "reason": "resource_depleted" if pool is not None else "未获猎物",
                     "success_rate": round(success_rate, 3),
                 },
             )
@@ -1221,7 +1851,9 @@ class AgentModule:
         stage = tuning.aging.stage_by_name(agent.life_stage)
         stage_mult = stage.injury_risk_mult if stage is not None else 1.0
         injury_mult = cfg.bad_weather_injury_mult if p.is_raining else 1.0
-        injury_prob = min(1.0, cfg.injury_risk * injury_mult * stage_mult)
+        site_mult = environmental_injury_multiplier(world, cfg.target_node, p.is_raining, tuning.environment)
+        fatigue_mult = 1.0 + (1.0 - p.fatigue_efficiency)
+        injury_prob = min(1.0, cfg.injury_risk * injury_mult * stage_mult * site_mult * fatigue_mult)
         if self.rng.random() < injury_prob:
             agent.health = max(0.0, health_before - cfg.injury_health_loss)
             agent.last_injury_tick = world.current_tick
@@ -1236,6 +1868,7 @@ class AgentModule:
                     "resource_node": cfg.target_node,
                     "health_before": round(health_before, 2),
                     "health_after": round(agent.health, 2),
+                    "site_risk_multiplier": round(site_mult, 3),
                     "loss": round(cfg.injury_health_loss, 2),
                 },
             )
@@ -1253,7 +1886,8 @@ class AgentModule:
         cloth_before = household.cloth
         work_node = work_node_of(world, agent)
         if self.rng.random() < success_rate:
-            household.cloth = round(cloth_before + tex.cloth_per_weave, 2)
+            produced = tex.cloth_per_weave * p.production_efficiency
+            household.cloth = round(cloth_before + produced, 2)
             world.event_log.append(
                 world.current_tick,
                 "weave_success",
@@ -1264,7 +1898,10 @@ class AgentModule:
                     "target_node": work_node,
                     "cloth_before": round(cloth_before, 2),
                     "cloth_after": round(household.cloth, 2),
-                    "amount": round(tex.cloth_per_weave, 2),
+                    "amount": round(produced, 2),
+                    "base_amount": round(tex.cloth_per_weave, 2),
+                    "production_efficiency": round(p.production_efficiency, 3),
+                    "fatigue_efficiency": round(p.fatigue_efficiency, 3),
                     "success_rate": round(success_rate, 3),
                 },
             )
@@ -1298,14 +1935,17 @@ class AgentModule:
         for rec in ordered:
             if budget <= 0:
                 break
-            pay = min(rec.amount, budget, household.grain)  # 不得扣成负粮
+            resource = getattr(rec, "resource", "grain") or "grain"
+            debtor_stock = float(getattr(household, resource, 0.0))
+            pay = min(rec.amount, budget, debtor_stock)
             if pay <= 0:
                 continue
             creditor_hh = world.state.households.get(rec.creditor_household_id)
             if creditor_hh is None:
                 continue
-            household.grain = round(household.grain - pay, 2)
-            creditor_hh.grain = round(creditor_hh.grain + pay, 2)
+            creditor_stock = float(getattr(creditor_hh, resource, 0.0))
+            setattr(household, resource, round(debtor_stock - pay, 2))
+            setattr(creditor_hh, resource, round(creditor_stock + pay, 2))
             rec.amount = round(rec.amount - pay, 2)
             budget = budget - pay
             creditor_head = world.state.agents.get(creditor_hh.head_id or "")
@@ -1323,12 +1963,106 @@ class AgentModule:
                     "amount": round(pay, 2),
                     "remaining": round(rec.amount, 2),
                     "source": source,
+                    "resource": resource,
+                    f"debtor_{resource}_after": round(getattr(household, resource), 2),
+                    f"creditor_{resource}_after": round(getattr(creditor_hh, resource), 2),
                     "debtor_grain_after": round(household.grain, 2),
                     "creditor_grain_after": round(creditor_hh.grain, 2),
                 },
             )
         # 清偿完毕（amount==0）的记录移出列表，保持债务列表干净
         household.debts = [d for d in household.debts if d.amount > 0]
+
+    def _settle_fatigue(self, world, tuning: AgentTuning) -> None:
+        """日末长期疲劳结算：劳动/通勤累积，住宅睡眠恢复；事件是 Replay 真相源。"""
+        cfg = tuning.environment
+        action_events = [
+            event for event in world.event_log.by_type_at_tick("agent_action_taken", world.current_tick)
+        ]
+        by_agent: dict[str, tuple[float, float]] = {}
+        for event in action_events:
+            payload = event.get("payload") or {}
+            agent_id = payload.get("agent_id")
+            if not agent_id:
+                continue
+            action = payload.get("action", "")
+            labor_tu, travel_tu = by_agent.get(agent_id, (0.0, 0.0))
+            if action in cfg.fatigue_affected_actions:
+                labor_tu += max(
+                    0.0,
+                    float(payload.get("tu_spent", 0.0))
+                    - float(payload.get("round_trip_tu", 0.0)),
+                )
+            travel_tu += max(0.0, float(payload.get("round_trip_tu", 0.0)))
+            by_agent[agent_id] = (labor_tu, travel_tu)
+
+        for agent in living_agents(world.state.agents):
+            labor_tu, travel_tu = by_agent.get(agent.agent_id, (0.0, 0.0))
+            home_node = home_node_of(world, agent)
+            dwelling = None
+            has_home_dwelling = False
+            for building in world.state.buildings.values():
+                if building.building_type != "dwelling":
+                    continue
+                parcel = world.state.land_parcels.get(building.parcel_id)
+                if parcel is None or parcel.spatial_node_id != home_node:
+                    continue
+                has_home_dwelling = True
+                if building.status not in {"active", "occupied", "vacant"} or building.condition <= 0:
+                    continue
+                if dwelling is None or building.condition > dwelling.condition:
+                    dwelling = building
+            crowding_ratio = 0.0
+            crowding_loss = 0.0
+            if dwelling is not None and dwelling.condition > 0:
+                recovery = cfg.dwelling_fatigue_recovery_per_day * dwelling.condition / 100.0
+                household = household_of(world, agent)
+                residents = sum(
+                    1 for member_id in household.member_ids
+                    if member_id in world.state.agents and world.state.agents[member_id].alive
+                )
+                capacity = max(1.0, float(dwelling.attributes.get(
+                    "resident_capacity", cfg.dwelling_resident_capacity
+                )))
+                crowding_ratio = residents / capacity
+                excess = max(0.0, crowding_ratio - cfg.dwelling_comfort_ratio)
+                crowding_loss = min(1.0, excess * cfg.dwelling_crowding_recovery_loss_per_ratio)
+                recovery *= 1.0 - crowding_loss
+                shelter = "dwelling"
+            elif not has_home_dwelling:
+                # Legacy settlements may have non-residential buildings (market/shrine)
+                # but no explicit dwelling entity for an abstract home node. That home
+                # still represents shelter; do not mistake it for an unsheltered camp.
+                recovery = cfg.dwelling_fatigue_recovery_per_day
+                shelter = "legacy_unmodeled_dwelling"
+            else:
+                recovery = cfg.outdoor_fatigue_recovery_per_day
+                shelter = "unsheltered"
+            load = labor_tu * cfg.fatigue_per_labor_tu + travel_tu * cfg.fatigue_per_travel_tu
+            before = agent.fatigue
+            before_high_days = agent.fatigue_high_days
+            after = round(min(100.0, max(0.0, before + load - recovery)), 2)
+            after_high_days = before_high_days + 1 if after > cfg.fatigue_efficiency_threshold else 0
+            if abs(after - before) < 1e-9 and after_high_days == before_high_days:
+                continue
+            agent.fatigue = after
+            agent.fatigue_high_days = after_high_days
+            world.event_log.append(world.current_tick, "agent_fatigue_settled", {
+                "agent_id": agent.agent_id,
+                "household_id": agent.household_id,
+                "before": round(before, 2),
+                "after": after,
+                "high_days_before": before_high_days,
+                "high_days_after": after_high_days,
+                "efficiency_active": after_high_days >= cfg.fatigue_efficiency_grace_days,
+                "labor_tu": round(labor_tu, 3),
+                "travel_tu": round(travel_tu, 3),
+                "fatigue_load": round(load, 3),
+                "recovery": round(recovery, 3),
+                "crowding_ratio": round(crowding_ratio, 3),
+                "crowding_recovery_loss": round(crowding_loss, 3),
+                "shelter": shelter,
+            })
 
     # -- 每日结算：死亡+继承 → 催收会话 → 强制催收 → 集市 → 婚配 → 生育 → 回血 --- #
     def _settle(self, world, tuning: AgentTuning) -> None:
@@ -1507,7 +2241,7 @@ class AgentModule:
         return None, "too_weak"
 
     def _settle_water(self, world, tuning: AgentTuning) -> None:
-        """每日生活用水结算（任务30）：按存活成员数扣减家庭水缸，不足计 0。"""
+        """按存活成员扣除日常饮水；缺口只记账，不在本版直接扣健康。"""
         per_member = tuning.water.daily_consumption_per_member
         if per_member <= 0:
             return
@@ -1516,13 +2250,15 @@ class AgentModule:
                 m for m in household.member_ids
                 if m in world.state.agents and world.state.agents[m].alive
             ]
-            if not members or household.water <= 0:
+            if not members:
                 continue
             need = round(per_member * len(members), 2)
-            before = household.water
-            after = max(0.0, round(before - need, 2))
+            before = max(0.0, float(household.water))
+            consumed = min(before, need)
+            after = round(max(0.0, before - need), 2)
+            shortage = round(max(0.0, need - before), 2)
             household.water = after
-            if after < before:
+            if consumed > 0:
                 world.event_log.append(
                     world.current_tick,
                     "water_consumed",
@@ -1530,9 +2266,23 @@ class AgentModule:
                         "household_id": household.household_id,
                         "member_count": len(members),
                         "need": need,
-                        "amount": round(before - after, 2),
-                        "before": before,
+                        "amount": round(consumed, 2),
+                        "shortage": shortage,
+                        "before": round(before, 2),
                         "after": after,
+                    },
+                )
+            if shortage > 0:
+                world.event_log.append(
+                    world.current_tick,
+                    "water_shortage",
+                    {
+                        "household_id": household.household_id,
+                        "member_count": len(members),
+                        "need": need,
+                        "available": round(before, 2),
+                        "shortage": shortage,
+                        "health_penalty_applied": False,
                     },
                 )
 
@@ -1546,7 +2296,13 @@ class AgentModule:
         skipped = {"dead_or_incap": 0, "too_far": 0, "too_weak": 0}
         participants: list[tuple[HouseholdState, AgentState]] = []
         travel: dict[str, float] = {}
-        for household in sorted(living_households(world), key=lambda h: h.household_id):
+        households = sorted(living_households(world), key=lambda h: h.household_id)
+        visitor_limit = tuning.environment.service_capacity_by_node.get(mkt.market_node, {}).get("market_visitors")
+        # Rotate the queue by day so a fixed household-id ordering does not permanently exclude the same families.
+        if households and visitor_limit is not None and len(households) > int(visitor_limit):
+            offset = world.current_tick % len(households)
+            households = households[offset:] + households[:offset]
+        for household in households:
             one_way = (
                 self._spatial.travel_tu(household.home_node, mkt.market_node)
                 if self._spatial is not None
@@ -1563,6 +2319,9 @@ class AgentModule:
             # 004 §3.2-6：当日已在集市（日内动作目标为 market）→ 免往返体力
             if executor.location == mkt.market_node:
                 cost = 0.0
+            if visitor_limit is not None and len(participants) >= int(visitor_limit):
+                skipped["crowded"] = skipped.get("crowded", 0) + 1
+                continue
             executor.stamina = max(0.0, executor.stamina - cost)
             travel[executor.agent_id] = round(cost, 2)
             participants.append((household, executor))
@@ -1589,6 +2348,7 @@ class AgentModule:
                     for household, executor in participants
                 ],
                 "participant_count": len(participants),
+                "visitor_capacity": visitor_limit,
                 "skipped": skipped,
                 "trade_count": trade_count,
                 "credit_count": credit_count,
@@ -1608,6 +2368,15 @@ class AgentModule:
         """
         mkt = tuning.market
         items = list(mkt.trade_values.keys())
+        # Generic market deficit thresholds are not enough for protective goods:
+        # a household needs the configured winter-warmth stock, not merely the
+        # ordinary "has at least a little cloth" threshold.
+        deficit_target = dict(mkt.deficit_threshold)
+        if "cloth" in deficit_target:
+            deficit_target["cloth"] = max(
+                float(deficit_target["cloth"]),
+                float(tuning.textile.warmth_cloth_threshold),
+            )
         count = 0
         for i, (seller_hh, seller) in enumerate(participants):
             for buyer_hh, buyer in participants[i + 1:]:
@@ -1619,19 +2388,19 @@ class AgentModule:
                             continue
                         if not (
                             getattr(seller_hh, give) > mkt.surplus_threshold[give]
-                            and getattr(seller_hh, take) < mkt.deficit_threshold[take]
+                            and getattr(seller_hh, take) < deficit_target[take]
                         ):
                             continue
                         if not (
                             getattr(buyer_hh, take) > mkt.surplus_threshold[take]
-                            and getattr(buyer_hh, give) < mkt.deficit_threshold[give]
+                            and getattr(buyer_hh, give) < deficit_target[give]
                         ):
                             continue
                         ratio = mkt.trade_values[give] / mkt.trade_values[take]
                         avail_give = getattr(seller_hh, give) - mkt.surplus_threshold[give]
-                        need_give = mkt.deficit_threshold[give] - getattr(buyer_hh, give)
+                        need_give = deficit_target[give] - getattr(buyer_hh, give)
                         avail_take = getattr(buyer_hh, take) - mkt.surplus_threshold[take]
-                        need_take = mkt.deficit_threshold[take] - getattr(seller_hh, take)
+                        need_take = deficit_target[take] - getattr(seller_hh, take)
                         give_max = min(
                             avail_give,
                             need_give,
@@ -1710,17 +2479,22 @@ class AgentModule:
         tick = world.current_tick
         count = 0
         for buyer_hh, _buyer in participants:  # participants 已按 household_id 稳定排序
-            outstanding = sum(
-                rec.amount for rec in buyer_hh.debts if rec.origin == "market_credit"
-            )
-            overdue = any(rec.origin == "market_credit" and rec.overdue for rec in buyer_hh.debts)
-            if overdue:
-                continue  # 已有赊账逾期未清：不再新增，避免雪球
-            headroom = credit.max_per_household - outstanding
-            if headroom <= 0:
-                continue
             for item in credit.eligible_items:
                 if item not in HouseholdState.model_fields:
+                    continue
+                outstanding = sum(
+                    rec.amount for rec in buyer_hh.debts
+                    if rec.origin == "market_credit" and getattr(rec, "resource", "grain") == item
+                )
+                overdue = any(
+                    rec.origin == "market_credit" and rec.overdue
+                    and getattr(rec, "resource", "grain") == item
+                    for rec in buyer_hh.debts
+                )
+                if overdue:
+                    continue  # 该物资已有逾期赊账：不再新增，避免雪球
+                headroom = credit.max_per_household - outstanding
+                if headroom <= 0:
                     continue
                 stock = getattr(buyer_hh, item, 0.0)
                 if stock >= credit.min_shortage:
@@ -1750,6 +2524,7 @@ class AgentModule:
                         originated_tick=tick,
                         due_tick=due_tick,
                         origin="market_credit",
+                        resource=item,
                     )
                 )
                 debtor_head = world.state.agents.get(buyer_hh.head_id or "")
@@ -1775,13 +2550,14 @@ class AgentModule:
                         "household_id": buyer_hh.household_id,
                         "debt_type": item,
                         "origin": "market_credit",
+                        "resource": item,
                         "amount": round(amount, 2),
                         "due_tick": due_tick,
                         "originated_tick": tick,
-                        "debtor_grain_before": buyer_before,
-                        "debtor_grain_after": round(getattr(buyer_hh, item, 0.0), 2),
-                        "creditor_grain_before": seller_before,
-                        "creditor_grain_after": round(getattr(seller, item, 0.0), 2),
+                        f"debtor_{item}_before": buyer_before,
+                        f"debtor_{item}_after": round(getattr(buyer_hh, item, 0.0), 2),
+                        f"creditor_{item}_before": seller_before,
+                        f"creditor_{item}_after": round(getattr(seller, item, 0.0), 2),
                         "debt_before": round(outstanding, 2),
                         "debt_after": round(outstanding + amount, 2),
                     },
@@ -1826,6 +2602,10 @@ class AgentModule:
         agent.death_cause = cause
         household = household_of(world, agent)
         outstanding = round(household.debt, 2)
+        food_inventory = {
+            field_name: round(float(getattr(household, field_name, 0.0)), 2)
+            for field_name in tuning.physiology.food_fields
+        }
         world.event_log.append(
             world.current_tick,
             "agent_died",
@@ -1837,7 +2617,18 @@ class AgentModule:
                 "incapacitated_tick": agent.incapacitated_tick,
                 "died_tick": world.current_tick,
                 "health": round(agent.health, 2),
+                "hunger": round(agent.hunger, 2),
+                "stamina": round(agent.stamina, 2),
+                "fatigue": round(agent.fatigue, 2),
+                "fatigue_high_days": agent.fatigue_high_days,
+                "age_years": age_years(agent.birth_tick, world.current_tick),
+                "life_stage": agent.life_stage,
                 "outstanding_debt": outstanding,
+                "household_food_inventory": food_inventory,
+                "household_food_stock": round(sum(food_inventory.values()), 2),
+                "household_water": round(float(household.water), 2),
+                "household_member_count": len(household.member_ids),
+                "home_node": household.home_node,
             },
         )
 
@@ -1850,6 +2641,8 @@ class AgentModule:
         items = [i for i in tuning.market.trade_values if i in HouseholdState.model_fields]
         if "water" not in items and "water" in HouseholdState.model_fields:
             items.append("water")
+        if "coin" not in items and "coin" in HouseholdState.model_fields:
+            items.append("coin")
         return items
 
     def _select_heir(self, world, deceased: AgentState, tuning: AgentTuning) -> Optional[AgentState]:
@@ -1940,6 +2733,13 @@ class AgentModule:
         if heir_hh is None:
             if deceased_hh.debts:
                 self._write_off_debts(world, deceased_hh, reason="no_heir")
+            from vale.modules.land import settle_household_land_inheritance
+            settle_household_land_inheritance(
+                world,
+                deceased_household_id=deceased_hh.household_id,
+                heir_household_id=None,
+                deceased_agent_id=deceased.agent_id,
+            )
             return None
 
         for rec in list(deceased_hh.debts):
@@ -1967,6 +2767,7 @@ class AgentModule:
                         "debtor_household_id": deceased_hh.household_id,
                         "household_id": deceased_hh.household_id,
                         "amount": round(rec.amount, 2),
+                        "resource": rec.resource,
                         "cause": "heir_is_creditor",
                     },
                 )
@@ -1982,6 +2783,7 @@ class AgentModule:
                         originated_tick=world.current_tick,
                         due_tick=rec.due_tick,
                         overdue=rec.overdue,
+                        resource=rec.resource,
                     )
                 )
                 world.event_log.append(
@@ -1999,6 +2801,7 @@ class AgentModule:
                         "creditor_household_id": rec.creditor_household_id,
                         "amount": moved,
                         "due_tick": rec.due_tick,
+                        "resource": rec.resource,
                     },
                 )
             if remainder > 0:
@@ -2014,10 +2817,18 @@ class AgentModule:
                         "debtor_household_id": deceased_hh.household_id,
                         "household_id": deceased_hh.household_id,
                         "amount": remainder,
+                        "resource": rec.resource,
                         "reason": "inheritance_remainder",
                     },
                 )
         deceased_hh.debts = []
+        from vale.modules.land import settle_household_land_inheritance
+        settle_household_land_inheritance(
+            world,
+            deceased_household_id=deceased_hh.household_id,
+            heir_household_id=heir_hh.household_id,
+            deceased_agent_id=deceased.agent_id,
+        )
         return heir_hh
 
     def _write_off_debts(self, world, household: HouseholdState, *, reason: str) -> None:
@@ -2054,6 +2865,7 @@ class AgentModule:
                     "debtor_household_id": household.household_id,
                     "household_id": household.household_id,
                     "amount": round(rec.amount, 2),
+                    "resource": rec.resource,
                     "reason": reason,
                 },
             )
@@ -2178,6 +2990,7 @@ class AgentModule:
                             "creditor_household_id": heir_hh.household_id,
                             "debtor_household_id": other.household_id,
                             "amount": round(rec.amount, 2),
+                            "resource": resource,
                             "due_tick": rec.due_tick,
                         },
                     )
@@ -2202,18 +3015,28 @@ class AgentModule:
                     )
             other.debts = kept
 
-    # -- 婚配（任务12 D5/D15）---------------------------------------------- #
+    # -- 婚配（ADR 007：双向认知、从夫居、家庭协商）------------------------ #
+    def _marriage_acquaintance_views(self, world, a: AgentState, b: AgentState,
+                                     tuning: AgentTuning) -> tuple[dict, dict]:
+        """读取双方各自对对方的认知；短期记忆 buffer 不作为资格门槛。"""
+        ttl = tuning.social.acquaintance_ttl
+        return (
+            social.get_social_view(world.state, a.agent_id, b.agent_id,
+                                   world.current_tick, ttl),
+            social.get_social_view(world.state, b.agent_id, a.agent_id,
+                                   world.current_tick, ttl),
+        )
+
     def _marriage_eligible(self, world, agent: AgentState, tuning: AgentTuning) -> bool:
         m = tuning.marriage
         if not agent.alive or agent.incapacitated:
             return False
         age = age_years(agent.birth_tick, world.current_tick)
-        household = household_of(world, agent)
-        if age < m.min_age or agent.health < m.min_health or household.grain < m.min_grain:
+        if age < m.min_age or agent.health < m.min_health:
             return False
         if agent.spouse_id is None:
             return True
-        # 鳏寡再婚（D5）：配偶已死且允许再婚
+        # 鳏寡再婚：配偶已死且允许再婚
         spouse = world.state.agents.get(agent.spouse_id)
         return m.remarriage_allowed and (spouse is None or not spouse.alive)
 
@@ -2228,7 +3051,7 @@ class AgentModule:
         return False
 
     def _settle_marriage(self, world, tuning: AgentTuning) -> None:
-        """确定性贪心配对（按距离、id 排序），不消耗 rng；同输入必得同结果。"""
+        """确定性贪心配对；候选必须互相 known，且不依赖有限长度的近期记忆 buffer。"""
         m = tuning.marriage
         if self._spatial is None:
             return
@@ -2237,12 +3060,22 @@ class AgentModule:
             if self._marriage_eligible(world, a, tuning)
         ]
         eligible.sort(key=lambda a: a.agent_id)
+        eligible_by_id = {agent.agent_id: agent for agent in eligible}
         candidates: list[tuple[float, str, str, AgentState, AgentState]] = []
-        for i, a in enumerate(eligible):
-            for b in eligible[i + 1:]:
+        # 只枚举已有认知边，不再对全镇所有适婚人口做 O(n²) 配对扫描。
+        for a in eligible:
+            for target_id in sorted(a.acquaintances):
+                if target_id <= a.agent_id:
+                    continue
+                b = eligible_by_id.get(target_id)
+                if b is None:
+                    continue
                 if not m.allow_same_sex and a.sex == b.sex:
                     continue
                 if m.forbid_close_kin and self._is_close_kin(a, b):
+                    continue
+                view_ab, view_ba = self._marriage_acquaintance_views(world, a, b, tuning)
+                if not view_ab["known"] or not view_ba["known"]:
                     continue
                 dist = self._spatial.travel_tu(
                     home_node_of(world, a), home_node_of(world, b)
@@ -2256,15 +3089,15 @@ class AgentModule:
         for dist, _, _, a, b in candidates:
             if a.agent_id in married or b.agent_id in married:
                 continue
-            # 居所制：patrilocal（第2步唯一实现）→ 女方加入男方家庭
             wife, husband = (a, b) if a.sex == AgentSex.FEMALE else (b, a)
-            if not self._can_merge_households(world, wife, husband, tuning):
+            if not self._can_move_wife(world, wife, husband):
                 continue
             source_household_id = wife.household_id
+            target_household_id = husband.household_id
+            view_ab, view_ba = self._marriage_acquaintance_views(world, a, b, tuning)
             married.update((a.agent_id, b.agent_id))
             a.spouse_id, b.spouse_id = b.agent_id, a.agent_id
             a.married_tick = b.married_tick = world.current_tick
-            # 事件主语取 id 较小一方，便于 timeline 参与人匹配
             world.event_log.append(
                 world.current_tick,
                 "agent_married",
@@ -2273,111 +3106,188 @@ class AgentModule:
                     "agent_name": a.name,
                     "spouse_id": b.agent_id,
                     "spouse_name": b.name,
-                    "household_id": husband.household_id,
+                    "household_id": target_household_id,
                     "source_household_id": source_household_id,
                     "distance_tu": round(dist, 3),
+                    "acquaintance": {
+                        f"{a.agent_id}_to_{b.agent_id}": {
+                            "level": view_ab["level"],
+                            "known": view_ab["known"],
+                        },
+                        f"{b.agent_id}_to_{a.agent_id}": {
+                            "level": view_ba["level"],
+                            "known": view_ba["known"],
+                        },
+                    },
                     "participants": [
                         {"id": a.agent_id, "name": a.name},
                         {"id": b.agent_id, "name": b.name},
                     ],
                 },
             )
-            self._merge_households(world, wife, husband, tuning)
+            # 只迁移女方本人；既有子女、原家庭资产和债务均留在原家庭。
+            self._move_wife_to_husband_household(world, wife, husband)
+            target = household_of(world, husband)
+            source = world.state.households[source_household_id]
+            self._transfer_marriage_assets(
+                world, target, source, m.bride_price_surplus_ratio,
+                transfer_type="bride_price", wife=wife, husband=husband, tuning=tuning,
+            )
+            # 陪嫁默认不发生；只有配置明确选择正比例时才从女方原家庭独立转移。
+            self._transfer_marriage_assets(
+                world, source, target, m.dowry_surplus_ratio,
+                transfer_type="dowry", wife=wife, husband=husband, tuning=tuning,
+            )
 
-    def _can_merge_households(self, world, wife: AgentState, husband: AgentState,
-                              tuning: AgentTuning) -> bool:
-        """容量 + 第2步限制：女方家庭除她外不得有成年成员（成年成员留原户时资产无法公平拆分）。"""
+    def _can_move_wife(self, world, wife: AgentState, husband: AgentState) -> bool:
+        """婚姻家庭迁移只要求双方属于不同家庭，不设成员容量或原家庭成年成员限制。"""
+        return wife.household_id != husband.household_id
+
+    def _move_wife_to_husband_household(self, world, wife: AgentState,
+                                        husband: AgentState) -> None:
         source = household_of(world, wife)
         target = household_of(world, husband)
-        if source.household_id == target.household_id:
-            return False
-        min_age = tuning.marriage.min_age
-        for member_id in source.member_ids:
-            if member_id == wife.agent_id:
-                continue
-            member = world.state.agents.get(member_id)
-            if member is None:
-                continue
-            if member.alive and age_years(member.birth_tick, world.current_tick) >= min_age:
-                return False
-        moving = self._moving_members(world, source, wife, tuning)
-        return len(target.member_ids) + len(moving) <= tuning.household.house_max_members
+        source_members_before = list(source.member_ids)
+        target_members_before = list(target.member_ids)
+        source_head_before = source.head_id
+        target_head_before = target.head_id
 
-    def _moving_members(self, world, source, wife: AgentState,
-                        tuning: AgentTuning) -> list[AgentState]:
-        """随母迁入：女方本人 + 她在该家庭的未成年子女（在世）。"""
-        moving = [wife]
-        for member_id in source.member_ids:
-            if member_id == wife.agent_id:
-                continue
-            member = world.state.agents.get(member_id)
-            if member is None or not member.alive:
-                continue
-            if member.mother_id != wife.agent_id:
-                continue
-            if age_years(member.birth_tick, world.current_tick) < tuning.dependency.max_age:
-                moving.append(member)
-        return moving
-
-    def _merge_households(self, world, wife: AgentState, husband: AgentState,
-                          tuning: AgentTuning) -> None:
-        """从夫居合并：女方（及未成年子女）迁入男方家庭，资产逐项相加、债务拼接（守恒）。"""
-        source = household_of(world, wife)
-        target = household_of(world, husband)
-        items = self._inheritance_items(tuning)
-        moving = self._moving_members(world, source, wife, tuning)
-        member_work_before = {
-            m.agent_id: (m.work_node or source.work_node) for m in moving
-        }
-        members_before = list(target.member_ids)
-        target_assets_before = _inventory(target, items)
-        source_assets_before = _inventory(source, items)
-        debts_before = len(target.debts)
-        source_debts_before = len(source.debts)
-
-        for member in moving:
-            if member.agent_id in source.member_ids:
-                source.member_ids.remove(member.agent_id)
-            member.household_id = target.household_id
-            member.location = target.home_node
-            # 从夫居修复：迁入方的个人劳作点重置为 None（取新家庭默认），避免强制通勤惩罚
-            member.work_node = None
-            target.member_ids.append(member.agent_id)
-        # 资产合并（逐项相加；来源清零）
-        for item in items:
-            setattr(target, item, round(getattr(target, item) + getattr(source, item), 2))
-            setattr(source, item, 0.0)
-        # 债务拼接：记录归属改为目标家庭
-        for rec in source.debts:
-            rec.debtor_household_id = target.household_id
-            target.debts.append(rec)
-        source.debts = []
-        if not source.member_ids:
-            source.head_id = None
+        if wife.agent_id in source.member_ids:
+            source.member_ids.remove(wife.agent_id)
+        if wife.agent_id not in target.member_ids:
+            target.member_ids.append(wife.agent_id)
+        wife.household_id = target.household_id
+        wife.location = target.home_node
+        wife.work_node = None
+        if source.head_id == wife.agent_id:
+            remaining = [
+                world.state.agents[mid] for mid in source.member_ids
+                if mid in world.state.agents and world.state.agents[mid].alive
+            ]
+            source.head_id = remaining[0].agent_id if remaining else None
+        if target.head_id is None:
+            target.head_id = husband.agent_id
 
         world.event_log.append(
             world.current_tick,
-            "household_merged",
+            "household_member_transferred",
             {
-                "target_household_id": target.household_id,
+                "agent_id": wife.agent_id,
+                "agent_name": wife.name,
                 "source_household_id": source.household_id,
-                "head_id": target.head_id,
-                "members_before": members_before,
-                "members_after": list(target.member_ids),
-                "target_assets_before": target_assets_before,
-                "target_assets_after": _inventory(target, items),
-                "source_assets_before": source_assets_before,
-                "debts_before": debts_before,
-                "debts_after": len(target.debts),
-                "source_debts_before": source_debts_before,
-                "home_node": target.home_node,
-                "work_node": target.work_node,
-                "work_node_before": {
-                    member.agent_id: (member_work_before[member.agent_id])
-                    for member in moving
+                "target_household_id": target.household_id,
+                "source_members_before": source_members_before,
+                "source_members_after": list(source.member_ids),
+                "target_members_before": target_members_before,
+                "target_members_after": list(target.member_ids),
+                "source_head_before": source_head_before,
+                "source_head_after": source.head_id,
+                "target_head_before": target_head_before,
+                "target_head_after": target.head_id,
+                "location_after": wife.location,
+                "work_node_after": wife.work_node,
+                "reason": "marriage_patrilocal",
+            },
+        )
+        if not source.member_ids:
+            world.event_log.append(
+                world.current_tick, "household_dissolved",
+                {
+                    "household_id": source.household_id,
+                    "last_member_id": wife.agent_id,
+                    "reason": "marriage_member_moved",
                 },
-                "work_node_after": {member.agent_id: target.work_node for member in moving},
-                "reason": "marriage",
+            )
+
+    def _marriage_asset_budget(self, world, household: HouseholdState,
+                               tuning: AgentTuning) -> dict[str, float]:
+        """估算可协商余量：先留家庭食物/用水安全储备，再按劳动力与债务压力折减。"""
+        items = self._inheritance_items(tuning)
+        food_fields = [name for name in tuning.physiology.food_fields if name in items]
+        food_stock = sum(max(0.0, float(getattr(household, name, 0.0)))
+                         for name in food_fields)
+        daily_food_need = 0.0
+        daily_water_need = 0.0
+        living_members = 0
+        for member_id in household.member_ids:
+            member = world.state.agents.get(member_id)
+            if member is None or not member.alive:
+                continue
+            living_members += 1
+            member_age = age_years(member.birth_tick, world.current_tick)
+            share = (tuning.consumption.minor_food_share
+                     if member_age < tuning.dependency.max_age else 1.0)
+            daily_food_need += (
+                tuning.physiology.eat_grain_cost
+                * tuning.physiology.daily_meals_per_member * share
+            )
+            daily_water_need += (
+                tuning.water.daily_consumption_per_member
+                + tuning.water.water_per_meal
+                * tuning.physiology.daily_meals_per_member * share
+            )
+        workers = self._work_capable_count(world, household, tuning)
+        labor_pressure = max(1.0, living_members / max(1, workers))
+        food_reserve = (
+            daily_food_need * tuning.utility.food_security_target_days * labor_pressure
+        )
+        water_reserve = (
+            daily_water_need * tuning.environment.household_water_reserve_days
+        )
+        debt_factor = (
+            food_stock / (food_stock + household.debt)
+            if household.debt > 0 and food_stock > 0 else
+            (0.0 if household.debt > 0 else 1.0)
+        )
+        budget: dict[str, float] = {}
+        for item in items:
+            stock = max(0.0, float(getattr(household, item, 0.0)))
+            reserve = 0.0
+            if item in food_fields and food_stock > 0:
+                reserve = food_reserve * stock / food_stock
+            elif item == "water":
+                reserve = water_reserve
+            budget[item] = round(max(0.0, stock - reserve) * debt_factor, 2)
+        return budget
+
+    def _transfer_marriage_assets(self, world, source: HouseholdState,
+                                  target: HouseholdState, ratio: float, *,
+                                  transfer_type: str, wife: AgentState,
+                                  husband: AgentState, tuning: AgentTuning) -> None:
+        """按双方家庭可支配余量转移彩礼/陪嫁；每次转移独立记账且严格守恒。"""
+        if ratio <= 0 or source.household_id == target.household_id:
+            return
+        items = self._inheritance_items(tuning)
+        budget = self._marriage_asset_budget(world, source, tuning)
+        resources = {
+            item: min(
+                max(0.0, float(getattr(source, item, 0.0))),
+                round(budget.get(item, 0.0) * ratio, 2),
+            )
+            for item in items
+        }
+        resources = {item: amount for item, amount in resources.items() if amount > 0}
+        if not resources:
+            return
+        from_before = _inventory(source, items)
+        to_before = _inventory(target, items)
+        for item, amount in resources.items():
+            setattr(source, item, round(getattr(source, item) - amount, 2))
+            setattr(target, item, round(getattr(target, item) + amount, 2))
+        world.event_log.append(
+            world.current_tick,
+            "marriage_assets_transferred",
+            {
+                "transfer_type": transfer_type,
+                "from_household_id": source.household_id,
+                "to_household_id": target.household_id,
+                "resources": resources,
+                "from_inventory_before": from_before,
+                "from_inventory_after": _inventory(source, items),
+                "to_inventory_before": to_before,
+                "to_inventory_after": _inventory(target, items),
+                "wife_id": wife.agent_id,
+                "husband_id": husband.agent_id,
                 "participants": [
                     {"id": wife.agent_id, "name": wife.name},
                     {"id": husband.agent_id, "name": husband.name},
@@ -2442,10 +3352,23 @@ class AgentModule:
 
         new_id = self._next_household_id(world, source.household_id)
         candidates = split.home_node_candidates
-        home = (
-            candidates[len(world.state.households) % len(candidates)]
-            if candidates else source.home_node
-        )
+        if candidates:
+            occupied = {
+                hh.home_node for hh in world.state.households.values()
+                if hh.household_id != source.household_id
+                and any(m.alive for m in household_members(world, hh))
+            }
+            available = [node for node in candidates
+                         if node not in occupied and node != source.home_node]
+            if not available:
+                world.event_log.append(world.current_tick, "household_split_skipped", {
+                    "source_household_id": source.household_id,
+                    "reason": "no_vacant_residence",
+                })
+                return
+            home = available[0]
+        else:
+            home = source.home_node
         work_node = husband.work_node or source.work_node
         new_household = HouseholdState(
             household_id=new_id,
@@ -2454,6 +3377,8 @@ class AgentModule:
             home_node=home,
             work_node=work_node,
             formed_tick=world.current_tick,
+            registry_node=source.registry_node,
+            registered_tick=world.current_tick if source.registry_node else None,
         )
 
         # 资产：新户取 round(before × ratio)，原户取差额
@@ -2478,6 +3403,7 @@ class AgentModule:
                         originated_tick=rec.originated_tick,
                         due_tick=rec.due_tick,
                         overdue=rec.overdue,
+                        resource=rec.resource,
                     )
                 )
             if remainder > 0:
@@ -2492,6 +3418,13 @@ class AgentModule:
             member.location = home
             member.work_node = None  # 迁入新户后取新户默认劳作点
         world.state.households[new_id] = new_household
+        if new_household.registry_node:
+            world.event_log.append(world.current_tick, "household_registered", {
+                "household_id": new_id, "head_id": husband.agent_id,
+                "home_node": home, "work_node": work_node,
+                "registry_node": new_household.registry_node,
+                "registered_tick": world.current_tick,
+            })
 
         world.event_log.append(
             world.current_tick,
@@ -2505,6 +3438,9 @@ class AgentModule:
                 "assets_before": assets_before,
                 "source_assets_after": _inventory(source, items),
                 "new_assets": new_assets,
+                "source_members_after": list(source.member_ids),
+                "source_debt_records_after": [d.model_dump() for d in source.debts],
+                "new_debt_records": [d.model_dump() for d in new_household.debts],
                 "debts_before": debts_before,
                 "source_debts_after": round(source.debt, 2),
                 "new_debts": round(new_household.debt, 2),
@@ -2557,49 +3493,71 @@ class AgentModule:
             return False
         return True
 
+    def _birth_resource_factor(self, world, mother: AgentState,
+                               tuning: AgentTuning) -> float:
+        """以家庭食物天数和用水天数连续调节生育概率，不设置人口阈值。"""
+        household = household_of(world, mother)
+        food_fields = tuning.physiology.food_fields
+        food_stock = sum(
+            max(0.0, float(getattr(household, field_name, 0.0)))
+            for field_name in food_fields
+        )
+        daily_food_need = 0.0
+        daily_water_need = 0.0
+        for member_id in household.member_ids:
+            member = world.state.agents.get(member_id)
+            if member is None or not member.alive:
+                continue
+            member_age = age_years(member.birth_tick, world.current_tick)
+            share = (tuning.consumption.minor_food_share
+                     if member_age < tuning.dependency.max_age else 1.0)
+            daily_food_need += (
+                tuning.physiology.eat_grain_cost
+                * tuning.physiology.daily_meals_per_member * share
+            )
+            daily_water_need += (
+                tuning.water.daily_consumption_per_member
+                + tuning.water.water_per_meal
+                * tuning.physiology.daily_meals_per_member * share
+            )
+        food_days = (
+            food_stock / daily_food_need if daily_food_need > 0 else float("inf")
+        )
+        water_days = (
+            household.water / daily_water_need if daily_water_need > 0 else float("inf")
+        )
+        food_factor = min(
+            1.0, food_days / tuning.utility.food_security_target_days
+        )
+        water_target_days = max(
+            1.0, tuning.environment.household_water_reserve_days
+        )
+        water_factor = min(1.0, water_days / water_target_days)
+        return round(max(0.0, min(food_factor, water_factor)), 4)
+
     def _settle_birth(self, world, tuning: AgentTuning) -> None:
+        """逐对配偶判断生育；资源充足时概率较高，短缺时连续降低，不设人口/户规模上限。"""
         b = tuning.birth
-        population = len(living_agents(world.state.agents))
-        if population >= b.max_population:
-            return
         boost = self._fertility_boost(world, tuning)
-        chance = min(1.0, b.chance_per_day * boost)
+        base_chance = min(1.0, b.chance_per_day * boost)
         mothers = [
             a for a in living_agents(world.state.agents)
             if a.sex == AgentSex.FEMALE and not a.incapacitated
         ]
         mothers.sort(key=lambda a: a.agent_id)
         for mother in mothers:
-            if population >= b.max_population:
-                break
             father = world.state.agents.get(mother.spouse_id) if mother.spouse_id else None
             if father is None or not father.alive or father.spouse_id != mother.agent_id:
                 continue
             if not self._birth_eligible(world, mother, father, tuning):
                 continue
+            resource_factor = self._birth_resource_factor(world, mother, tuning)
+            chance = min(1.0, base_chance * resource_factor)
             if self.rng.random() >= chance:
                 continue
-            # 阶段二 B：出生前校验户容量（不改婚配 Q6 语义，不自动分家）；超限跳过本次生育
-            household = household_of(world, mother)
-            if (
-                b.respect_house_capacity
-                and len(household.member_ids) + 1 > tuning.household.house_max_members
-            ):
-                world.event_log.append(
-                    world.current_tick,
-                    "birth_skipped",
-                    {
-                        "agent_id": mother.agent_id,
-                        "agent_name": mother.name,
-                        "household_id": household.household_id,
-                        "member_count": len(household.member_ids),
-                        "house_max_members": tuning.household.house_max_members,
-                        "reason": "capacity",
-                    },
-                )
-                continue
-            self._give_birth(world, mother, father, tuning)
-            population += 1
+            self._give_birth(
+                world, mother, father, tuning, resource_factor=resource_factor
+            )
 
     def _child_id(self, world) -> str:
         n = 1
@@ -2625,7 +3583,7 @@ class AgentModule:
         return surname, b.name_fallback_suffix.format(name=base, n=n)
 
     def _give_birth(self, world, mother: AgentState, father: AgentState,
-                    tuning: AgentTuning) -> None:
+                    tuning: AgentTuning, resource_factor: float = 1.0) -> None:
         b = tuning.birth
         child_id = self._child_id(world)
         surname, name = self._child_name(world, mother, father, tuning)
@@ -2697,6 +3655,7 @@ class AgentModule:
                 "mother_health_before": round(mother_health_before, 2),
                 "mother_health_after": round(mother.health, 2),
                 "population_after": len(living_agents(world.state.agents)),
+                "fertility_resource_factor": round(resource_factor, 4),
             },
         )
 
@@ -2734,6 +3693,7 @@ class AgentModule:
                     "debtor_household_id": household.household_id,
                     "household_id": household.household_id,
                     "amount": round(rec.amount, 2),
+                    "resource": rec.resource,
                     "cause": cause,
                 },
             )
@@ -2770,11 +3730,14 @@ class AgentModule:
             creditor_name = (
                 creditor_head.name if creditor_head is not None else creditor_hh.household_id
             )
-            pay = min(rec.amount, household.grain)
+            resource = getattr(rec, "resource", "grain") or "grain"
+            debtor_stock = float(getattr(household, resource, 0.0))
+            pay = min(rec.amount, debtor_stock)
             first_due = not rec.overdue  # 本次是否为该笔首次到期催收
             if pay > 0:
-                household.grain = round(household.grain - pay, 2)
-                creditor_hh.grain = round(creditor_hh.grain + pay, 2)
+                creditor_stock = float(getattr(creditor_hh, resource, 0.0))
+                setattr(household, resource, round(debtor_stock - pay, 2))
+                setattr(creditor_hh, resource, round(creditor_stock + pay, 2))
                 rec.amount = round(rec.amount - pay, 2)
                 rec.overdue = rec.amount > 0
                 world.event_log.append(
@@ -2792,6 +3755,9 @@ class AgentModule:
                         "remaining": round(rec.amount, 2),
                         "overdue": rec.overdue,
                         "originated_tick": rec.originated_tick,
+                        "resource": resource,
+                        f"debtor_{resource}_after": round(getattr(household, resource), 2),
+                        f"creditor_{resource}_after": round(getattr(creditor_hh, resource), 2),
                         "debtor_grain_after": round(household.grain, 2),
                         "creditor_grain_after": round(creditor_hh.grain, 2),
                     },
@@ -2862,10 +3828,12 @@ class AgentModule:
                     continue
                 if tick - rec.due_tick < cfg.trigger_overdue_days:
                     continue
-                if household.grain <= cfg.refusal_threshold:
-                    continue  # 断粮：不走会话，交给既有 debt_defaulted / collection_attempt
-                if household.grain > cfg.trigger_max_grain:
-                    continue  # 有粮且超过上限：有能力偿还，无需私下催收
+                resource = getattr(rec, "resource", "grain") or "grain"
+                resource_stock = float(getattr(household, resource, 0.0))
+                if resource_stock <= cfg.refusal_threshold:
+                    continue  # 该物资断库存：不走会话，交给既有催收路径
+                if resource_stock > cfg.trigger_max_grain:
+                    continue  # 有足额该物资：有能力偿还，无需私下催收
                 if rec.creditor_household_id not in living_ids:
                     continue
                 candidates.append((household, rec))
@@ -2915,6 +3883,7 @@ class AgentModule:
         """
         cfg = tuning.conflict.debt_dispute
         tick = world.current_tick
+        resource = getattr(rec, "resource", "grain") or "grain"
         debtor_id = debtor_hh.head_id or debtor_hh.household_id
         creditor_id = creditor_hh.head_id or creditor_hh.household_id
         debtor_name = self._head_name(world, debtor_hh)
@@ -2978,6 +3947,7 @@ class AgentModule:
                 "household_id": debtor_hh.household_id,
                 "trigger_event": "market_credit_overdue",
                 "amount": round(rec.amount, 2),
+                "resource": resource,
                 "overdue_ticks": tick - rec.due_tick,
             },
         )
@@ -2985,9 +3955,9 @@ class AgentModule:
         # 第 2 轮：债务人回应（只依赖库存与既有事实，不引入 trust/grudge 新状态）
         if proposal == "deferral":
             response = "accept_deferral"
-        elif debtor_hh.grain >= proposed_amount > 0:
+        elif float(getattr(debtor_hh, resource, 0.0)) >= proposed_amount > 0:
             response = "repay"
-        elif debtor_hh.grain <= cfg.refusal_threshold:
+        elif float(getattr(debtor_hh, resource, 0.0)) <= cfg.refusal_threshold:
             response = "refuse"
         else:
             response = "request_deferral"
@@ -3012,6 +3982,7 @@ class AgentModule:
                 "proposal": proposal_key,
                 "proposal_amount": amount_key,
                 "response": response_key,
+                "resource": resource,
             }
             if round_no == 1:
                 # 任务17 裁决 4.1：只读元数据（成因随事件落库，replay 不读）。
@@ -3026,9 +3997,11 @@ class AgentModule:
         }
 
         if response == "repay":
-            pay = min(proposed_amount, debtor_hh.grain, rec.amount)
-            creditor_hh.grain = round(creditor_hh.grain + pay, 2)
-            debtor_hh.grain = round(debtor_hh.grain - pay, 2)
+            debtor_stock = float(getattr(debtor_hh, resource, 0.0))
+            creditor_stock = float(getattr(creditor_hh, resource, 0.0))
+            pay = min(proposed_amount, debtor_stock, rec.amount)
+            setattr(creditor_hh, resource, round(creditor_stock + pay, 2))
+            setattr(debtor_hh, resource, round(debtor_stock - pay, 2))
             rec.amount = round(rec.amount - pay, 2)
             rec.overdue = rec.amount > 0
             rec.dispute_started_tick = tick
@@ -3049,6 +4022,9 @@ class AgentModule:
                     "remaining": round(rec.amount, 2),
                     "source": "debt_dispute",
                     "originated_tick": rec.originated_tick,
+                    "resource": resource,
+                    f"debtor_{resource}_after": round(getattr(debtor_hh, resource), 2),
+                    f"creditor_{resource}_after": round(getattr(creditor_hh, resource), 2),
                     "debtor_grain_after": round(debtor_hh.grain, 2),
                     "creditor_grain_after": round(creditor_hh.grain, 2),
                 },
@@ -3092,6 +4068,7 @@ class AgentModule:
                     "debtor_household_id": debtor_hh.household_id,
                     "household_id": debtor_hh.household_id,
                     "amount": round(rec.amount, 2),
+                    "resource": resource,
                     "old_due_tick": old_due,
                     "new_due_tick": rec.due_tick,
                     "deferral_days": cfg.deferral_days,
@@ -3123,6 +4100,7 @@ class AgentModule:
                 "conflict_id": conflict_id,
                 "reason": reason,
                 "amount": round(rec.amount, 2),
+                "resource": resource,
                 "overdue_ticks": tick - rec.due_tick,
                 "creditor_household_id": creditor_hh.household_id,
                 "debtor_household_id": debtor_hh.household_id,

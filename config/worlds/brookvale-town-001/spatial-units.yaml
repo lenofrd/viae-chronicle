@@ -72,21 +72,21 @@ nodes:
     district: 镇西北
     description: 山神庙与神树所在，柴薪充足，是进入浅山的入口；神树动土为全镇禁忌。
     travel_cost_from_well_tu: 2.0
-    attributes: { 风险: 野兽下山时危险, 步行难度: 缓坡 }
+    attributes: { 风险: 野兽下山时危险, 步行难度: 缓坡, injury_risk_multiplier: 1.25 }
 
   - id: low_mountain
     name: 浅山
     type: resource
     district: 镇外（自山脚进入）
     description: 采药与打猎区，山路崎岖；有迷路、蛇虫、野狼风险，第一版凡人不常去。
-    attributes: { 风险: 迷路 / 蛇虫 / 野狼, 步行难度: 山路崎岖 }
+    attributes: { 风险: 迷路 / 蛇虫 / 野狼, 步行难度: 山路崎岖, injury_risk_multiplier: 1.8 }
 
   - id: deep_mountain
     name: 深山
     type: resource
     district: 镇外（自浅山进入）
     description: 凡人禁区，浓雾、瘴气、妖兽；第一版不精细模拟，凡人通常有去无回。
-    attributes: { 风险: 浓雾 / 瘴气 / 妖兽, 步行难度: 极高 }
+    attributes: { 风险: 浓雾 / 瘴气 / 妖兽, 步行难度: 极高, injury_risk_multiplier: 4.0 }
 
   - id: east_field
     name: 东片田
@@ -118,7 +118,7 @@ nodes:
     type: water
     district: 靠近山脚
     description: 水流湍急、河道较窄有浅滩；镇民饮水点与水车磨坊所在；汛期易山洪。
-    attributes: { 风险: 汛期山洪, 步行难度: 缓坡 }
+    attributes: { 风险: 汛期山洪, 步行难度: 缓坡, injury_risk_multiplier: 1.35 }
 
   - id: river_town
     name: 翠溪镇前段
@@ -126,7 +126,7 @@ nodes:
     district: 镇子南侧
     description: 河道变宽、水流平缓成深潭；捕鱼区与渡口（过河 1 文钱或半碗米），南岸有少量河滩地。
     travel_cost_from_well_tu: 1.0
-    attributes: { 风险: 汛期溺水, 步行难度: 平地 }
+    attributes: { 风险: 汛期溺水, 步行难度: 平地, injury_risk_multiplier: 1.2 }
 
   - id: river_downstream
     name: 翠溪下游

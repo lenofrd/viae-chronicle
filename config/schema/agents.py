@@ -20,6 +20,10 @@ class PhysiologyTuning(BaseModel):
     hunger_gain_per_tick: float = Field(15.0, ge=0)
     eat_hunger_reduction: float = Field(60.0, ge=0)
     eat_grain_cost: float = Field(1.0, ge=0)
+    daily_meals_per_member: float = Field(
+        0.25, ge=0,
+        description="家庭粮食与饮水安全库存估算使用的日均进食次数，与饥饿增长/单餐恢复比值一致",
+    )
     # eat 消耗的食物字段优先级（任务09）：粮不足时依次吃后续字段（如 meat）。
     # 未来加渔业只需在此追加 "fish" 并在 AgentState 加字段，eat 代码不变。
     food_fields: list[str] = Field(default_factory=lambda: ["grain"])
@@ -36,12 +40,17 @@ class UtilityTuning(BaseModel):
     need_weights: dict[str, float] = Field(default_factory=dict)
     economy_urgency_grain_zero: float = Field(1.0, ge=0)
     economy_urgency_grain_positive: float = Field(0.3, ge=0)
+    food_security_target_days: float = Field(12.0, gt=0, description="家庭食物库存低于该天数时，提高食物生产行动紧迫度")
     move_stamina_per_tu: float = Field(5.0, ge=0)
     # 打分时体力惩罚的归一化除数：raw_stamina_cost 为 0-100 量级，
     # gross 为 0-3 量级，故除以该值使两者可比（机制修正，非内容数值）。
     stamina_score_divisor: float = Field(100.0, gt=0)
     distance_penalty_per_tu: float = Field(0.15, ge=0)
     rain_outdoor_score_multiplier: float = Field(0.5, ge=0)
+    household_task_priority_bonus: float = Field(
+        0.75, ge=0,
+        description="家庭协商分工后对成员负责任务的偏好加成；不覆盖生存门控",
+    )
 
 
 class ActionTuning(BaseModel):
@@ -85,6 +94,8 @@ class AgricultureTuning(BaseModel):
     field_growth_per_farm: float = Field(5.0, ge=0, description="每次 farm 提升的长势")
     max_field_growth: float = Field(100.0, gt=0)
     harvest_growth_threshold: float = Field(80.0, ge=0, description="可秋收的最低长势")
+    field_labor_per_farm: float = Field(4.0, gt=0, description="完成一次 farm 动作计入的劳动单位")
+    field_labor_required_by_season: dict[str, float] = Field(default_factory=dict, description="每块田每季必须完成的劳动量；未配置季节不限制 farm")
     # crops.md §4.5 基准产量：expected_yield = base_yield × area × fertility × moisture
     #   × growth_health × (1 − disaster_damage)。作物名同时是家庭库存字段名（grain / vegetable /
     #   未来 fruit），与 spatial 节点上的 crop_type 对齐；新增作物只加配置，不改 harvest 核心结算。
@@ -110,6 +121,9 @@ class BorrowTuning(BaseModel):
 
     borrow_grain_threshold: float = Field(2.0, ge=0, description="存粮低于此值才会触发借粮")
     borrow_grain_amount: float = Field(5.0, ge=0, description="每次借粮数量（石），同时计入等额债务")
+    borrow_food_amount: float = Field(5.0, gt=0, description="无粮可借时每次借入的其他可食物资数量")
+    food_lending_surplus_threshold: float = Field(10.0, ge=0, description="债主必须保留的食物库存")
+    food_resources: list[str] = Field(default_factory=lambda: ["fish", "meat", "vegetable"], description="允许按实物借贷的可食物资")
 
 
 class DebtTuning(BaseModel):
@@ -225,12 +239,6 @@ class AgingTuning(BaseModel):
         return next((s for s in self.life_stages if s.name == name), None)
 
 
-class HouseholdTuning(BaseModel):
-    """家庭规模与住所（任务12 迁移第2步；分家参数留第3步）。"""
-
-    house_max_members: int = Field(8, ge=2, description="单户成员上限；婚配并入前校验")
-
-
 class LaborTuning(BaseModel):
     """劳作点分配（阶段二 C，修缺陷、不调参）。
 
@@ -259,17 +267,24 @@ class SplitTuning(BaseModel):
 
 
 class MarriageTuning(BaseModel):
-    """婚配资格与居所制（任务12，[调参]）。"""
+    """婚配资格、从夫居与家庭间婚姻资产转移（ADR 007）。"""
 
     min_age: int = Field(16, ge=0)
     min_health: float = Field(50.0, ge=0, le=100)
-    min_grain: float = Field(20.0, ge=0)
     max_distance_tu: float = Field(3.0, gt=0)
     allow_same_sex: bool = False
     remarriage_allowed: bool = True
     forbid_close_kin: bool = True
+    bride_price_surplus_ratio: float = Field(
+        0.1, ge=0, le=1,
+        description="男方家庭可支配余量中用于彩礼的比例；先扣食物/用水储备并考虑债务与劳动力",
+    )
+    dowry_surplus_ratio: float = Field(
+        0.0, ge=0, le=1,
+        description="陪嫁自愿选择；0 表示未明确同意，不转移，正值表示可支配余量比例",
+    )
     residence: Literal["patrilocal"] = Field(
-        "patrilocal", description="居所制；第2步只实现从夫居，其他枚举不实现/启动报错"
+        "patrilocal", description="居所制；只实现从夫居"
     )
 
 
@@ -282,7 +297,6 @@ class BirthTuning(BaseModel):
     min_health: float = Field(50.0, ge=0, le=100)
     interval_days: int = Field(360, ge=1)
     chance_per_day: float = Field(0.02, ge=0, le=1)
-    max_population: int = Field(12, ge=1)
     low_population_adults: int = Field(2, ge=0)
     low_population_fertility_boost: float = Field(2.0, ge=1)
     male_ratio: float = Field(0.5, ge=0, le=1)
@@ -300,12 +314,6 @@ class BirthTuning(BaseModel):
     default_surname: str = "某"
     name_fallback_suffix: str = "{name}{n}"
     asset_transfer_ratio: float = Field(0.1, ge=0, le=1, description="出生时父母各转移的存量比例")
-    # 阶段二 B：出生前校验户容量。原值 false = 旧行为（出生不看容量）；新值 true = 超限跳过本次生育。
-    # 理由：诊断显示最大户 10–11 人、超容 tick 占 3%–30%，出生路径完全绕过 house_max_members。
-    # 影响：只压需求峰值，不自动分家；婚配容量（Q6）语义不变。
-    respect_house_capacity: bool = Field(
-        True, description="出生前校验 len(member_ids)+1 <= house_max_members；超限跳过本次生育"
-    )
     # 阶段二 §3.0「有设计」分支：01-physical-state.md §4.4 普通分娩 health −10。
     # 难产（−40 + 死亡风险）设计未给概率，孕期体力限制依赖未实现的 pregnancy_stage，均登记缺口。
     mother_health_cost: float = Field(
@@ -509,6 +517,7 @@ class TextileTuning(BaseModel):
     cloth_per_weave: float = Field(2.0, ge=0, description="一次成功织布的产量（匹）")
     base_success_rate: float = Field(0.9, ge=0, le=1, description="基础织布成功率")
     season_modifier: dict[str, float] = Field(default_factory=dict, description="季节成功率乘数")
+    workshop_nodes: list[str] = Field(default_factory=lambda: ["market"], description="允许织布的固定作坊节点；其他地点须有已启用的 workshop 建筑")
     warmth_cloth_threshold: float = Field(3.0, ge=0, description="冬季御寒所需布量门槛")
     cold_health_loss: float = Field(2.0, ge=0, description="无布御寒时每日健康损失")
 
@@ -535,26 +544,81 @@ class SocialTuning(BaseModel):
 class WaterTuning(BaseModel):
     """生活用水最小切片（004 §2.7，任务 30）。
 
-    水有两个去处：每日生活消耗（按成员数）与烹饪/佐餐（每次进食）。
-    不建模饮水对健康的影响；产量、日耗、每餐用水均为 [调参]。
+    唯一可饮用来源为镇公共水井；河流水体不自动视为饮用水。
+    家庭自行取水、储水；本版不建模井水枯竭、水质处理、饮水健康惩罚或容量上限。
     """
 
-    collect_amount: float = Field(5.0, ge=0, description="每次 collect_water 的产水量")
+    collect_amount: float = Field(12.0, ge=0, description="每次从公共水井取水并带回家庭的水量")
     daily_consumption_per_member: float = Field(
-        1.0, ge=0, description="每名存活成员每日耗水（家庭结算时扣减）"
+        1.0, ge=0, description="每名存活成员每日饮水需求（家庭结算时扣减）"
     )
     water_per_meal: float = Field(
-        0.5, ge=0, description="每次进食所需用水（烹饪/佐餐）；水不足则该次无法进食"
+        0.5, ge=0, description="每次进食所需烹饪/佐餐用水；水不足则该次无法进食"
     )
     household_stock_target: float = Field(
-        5.0, ge=0, description="家庭存水目标；低于此值时 collect_water 紧迫度线性上升"
+        5.0, ge=0, description="常态家庭存水目标；低于此值时 collect_water 紧迫度线性上升"
     )
     scarcity_weight: float = Field(
         2.0, ge=0, description="打水紧迫度权重（缺水时加到 collect_water 的毛效用上）"
     )
+    seasonal_access_distance_tu: dict[str, float] = Field(
+        default_factory=lambda: {"spring": 4.5, "summer": 4.0, "autumn": 4.5, "winter": 2.5},
+        description="各季节往返取水可在工作窗内完成的最大单程距离（TU）",
+    )
+    seasonal_reserve_days: dict[str, float] = Field(
+        default_factory=lambda: {"spring": 180.0, "autumn": 90.0},
+        description="在季节性不可达前，远户应自行储备的覆盖天数；不触发公共转存/救济",
+    )
+
+
+class EnvironmentTuning(BaseModel):
+    """建筑与生活环境影响（第一阶段）；地点可在 agents.yaml 中覆盖。"""
+
+    fatigue_per_labor_tu: float = Field(0.3, ge=0, description="每个有效劳动 TU 增加的长期疲劳")
+    fatigue_per_travel_tu: float = Field(0.05, ge=0, description="每个往返移动 TU 增加的长期疲劳")
+    dwelling_fatigue_recovery_per_day: float = Field(2.0, ge=0, description="在可用住宅内睡眠的每日疲劳恢复")
+    dwelling_cold_protection: float = Field(
+        0.75, ge=0, le=1,
+        description="有效住宅对冬季寒冷伤害的减免比例，按建筑耐久度折算",
+    )
+    dwelling_resident_capacity: int = Field(5, ge=1)
+    dwelling_comfort_ratio: float = Field(0.8, ge=0, le=1)
+    dwelling_crowding_recovery_loss_per_ratio: float = Field(0.5, ge=0, le=1)
+    outdoor_fatigue_recovery_per_day: float = Field(0.5, ge=0, description="无有效住宅时的每日基础恢复")
+    fatigue_efficiency_threshold: float = Field(40.0, ge=0, le=100)
+    fatigue_efficiency_grace_days: int = Field(7, ge=1, description="连续高疲劳达到该天数后才降低劳动效率")
+    fatigue_efficiency_loss_per_point: float = Field(0.004, ge=0)
+    max_fatigue_efficiency_loss: float = Field(0.3, ge=0, le=1)
+    fatigue_affected_actions: list[str] = Field(
+        default_factory=lambda: ["farm", "harvest", "hunt", "fish", "weave", "construct"]
+    )
+    production_efficiency_by_building: dict[str, dict[str, float]] = Field(
+        default_factory=lambda: {"workshop": {"weave": 0.15}},
+        description="建筑类型 -> 行动 -> 产出效率加成；加成按建筑耐久折算",
+    )
+    max_production_efficiency_bonus: float = Field(0.5, ge=0, le=2)
+    bad_weather_injury_multiplier: float = Field(1.5, ge=1, description="恶劣天气对户外受伤风险的乘数")
+    construction_bad_weather_multiplier: float = Field(0.75, ge=0, le=1, description="恶劣天气下露天施工效率")
+    construction_season_multiplier: dict[str, float] = Field(default_factory=lambda: {"spring": 1.0, "summer": 1.0, "autumn": 1.0, "winter": 1.0}, description="季节农忙与气候对施工有效工时的影响")
+    service_capacity_by_node: dict[str, dict[str, int]] = Field(default_factory=dict, description="空间节点的每日公共服务吞吐上限")
+    dwelling_reserve_ratio: float = Field(0.2, ge=0, le=1, description="空置住宅储备比例目标")
+    building_need_emerging_days: int = Field(7, ge=1)
+    building_need_persistent_days: int = Field(30, ge=1)
+    building_need_priority_days: int = Field(90, ge=1)
+    workshop_need_actions_per_30_days: int = Field(20, ge=1)
+    # Public reserve capacity is used only by explicit voluntary contributions.
+    community_food_reserve_capacity: float = Field(2000.0, ge=0)
+    community_water_reserve_capacity: float = Field(1000.0, ge=0)
+    household_water_reserve_days: float = Field(
+        1.0, ge=0, description="家庭婚配资产预算与生育评估保留的用水天数；不触发自动转存或救济",
+    )
+    building_condition_decay_per_day: float = Field(0.002, ge=0)
+    building_weather_wear_multiplier: float = Field(1.5, ge=1)
+    building_repair_need_condition_threshold: float = Field(60.0, ge=0, le=100)
 
 
 class AgentTuning(BaseModel):
+    environment: EnvironmentTuning = Field(default_factory=EnvironmentTuning)
     physiology: PhysiologyTuning = Field(default_factory=PhysiologyTuning)
     utility: UtilityTuning = Field(default_factory=UtilityTuning)
     action: ActionTuning = Field(default_factory=ActionTuning)
@@ -575,7 +639,6 @@ class AgentTuning(BaseModel):
     inheritance: InheritanceTuning = Field(default_factory=InheritanceTuning)
     dependency: DependencyTuning = Field(default_factory=DependencyTuning)
     consumption: ConsumptionTuning = Field(default_factory=ConsumptionTuning)
-    household: HouseholdTuning = Field(default_factory=HouseholdTuning)
     labor: LaborTuning = Field(default_factory=LaborTuning)
     split: SplitTuning = Field(default_factory=SplitTuning)
     # 004：TimeTuning（tu_per_tick/farm_tu 死配置）已删除——工作窗在
@@ -586,12 +649,14 @@ class AgentTuning(BaseModel):
 
 class AgentAssets(BaseModel):
     grain: float = Field(..., ge=0, description="存粮（石）")
+    coin: float = Field(0.0, ge=0, description="家庭零钱（文）")
     vegetable: float = Field(0.0, ge=0, description="存菜（担）")
     cloth: float = Field(0.0, ge=0, description="存布（匹）")
 
 
 class AgentConfig(BaseModel):
     id: str
+    household_id: Optional[str] = Field(None, description="开局家庭 ID；None 时每人单独成户")
     name: str
     sex: AgentSex
     age: int = Field(..., ge=0, description="开局年龄；运行时以 birth_tick 为唯一真相源")

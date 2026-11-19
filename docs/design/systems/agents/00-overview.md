@@ -30,7 +30,9 @@
 - **06-actions.md**：人物能执行的具体动作清单（区分社会期望与越轨行为）。
 - **09-dynamics.md**：习惯化、衰老、性别观念的代际演变。
 - **10-state-and-records.md**：人物快照与人生事件流。
-- **11-life-course.md**：家庭、出生、年龄分段、婚育、继承、分家与死因（任务 12 已落地）。
+- **11-life-course.md**：家庭经济模型、出生、年龄分段、继承、分家与死因；保留任务 12 历史实现记录。
+- **12-population-and-marriage.md**：人口资源承载、认知参与婚姻、从夫居、彩礼、陪嫁与家庭财产边界（ADR 007）。
+- **家庭协作与生存保障**：家庭照料、协商分工、营养饮食、自愿公共储备与救济申请（ADR 008；实现复用 HouseholdState、AgentState、亲缘关系、治理与事件系统）。
 
 ## 4. 状态变量总表（按角色挂载）
 | 模块 | 典型变量 | 变化速率 |
@@ -66,4 +68,5 @@
 ## 8. 横切机制引用
 - 变化速率与滞后见 [09-dynamics.md](file:///f:/viae-chronicle/docs/design/systems/agents/09-dynamics.md)。
 - 状态记录与快照遵循 [10-state-and-records.md](file:///f:/viae-chronicle/docs/design/systems/agents/10-state-and-records.md)。
-- 家庭经济单位、婚育、继承、分家与死因见 [11-life-course.md](file:///f:/viae-chronicle/docs/design/systems/agents/11-life-course.md)。
+- 家庭经济单位、出生、继承、分家与死因的历史实现见 [11-life-course.md](11-life-course.md)；当前人口承载与婚姻规范见 [12-population-and-marriage.md](12-population-and-marriage.md)。
+- 家庭协作、饮食营养、公共储备和救济见 [ADR 008](../../decisions/008-household-coordination-nutrition-and-voluntary-reserves.md)。

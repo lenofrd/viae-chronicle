@@ -136,7 +136,7 @@ def test_forgive_debts_traceable_no_grain_movement(world):
     module._forgive_debts(world, hh(world, lin), cause="death")  # noqa: SLF001
     assert hh(world, lin).debts == []  # 债务列表清空
     forgiven = world.event_log.by_type("debt_forgiven")
-    assert {e["payload"]["creditor_id"] for e in forgiven} == {"li_quan", "hh_zhao_cuilan"}
+    assert {e["payload"]["creditor_id"] for e in forgiven} == {"li_quan", "zhao_cuilan"}
     assert sum(e["payload"]["amount"] for e in forgiven) == pytest.approx(12.0)
     assert all(e["payload"]["cause"] == "death" for e in forgiven)
     # 核销不移动粮食：债主存粮分文不变（坏账由债主承担，非粮转移）
@@ -441,7 +441,24 @@ def test_1800_ticks_not_all_extinct_with_diverse_food(seed):
         if tick % 200 == 0:
             curve.append(sum(1 for a in w.state.agents.values() if a.alive))
     alive = sum(1 for a in w.state.agents.values() if a.alive)
-    assert alive, f"seed={seed} 1800 tick 全员灭绝"
+    if not alive:
+        events = w.event_log.all()
+        deaths = [e for e in events if e["event_type"] == "agent_died"]
+        actions = [e for e in events if e["event_type"] == "agent_action_taken"]
+        first_death = min(deaths, key=lambda e: e["tick"]) if deaths else None
+        action_counts = {
+            action: sum(1 for e in actions if e["payload"].get("action") == action
+                        and int(e.get("tick", -1)) <= 60)
+            for action in sorted({e["payload"].get("action", "unknown") for e in actions})
+        }
+        stocks = {
+            field: round(sum(float(getattr(h, field)) for h in w.state.households.values()), 2)
+            for field in ("grain", "fish", "meat", "vegetable")
+        }
+        pytest.fail(
+            f"seed={seed} 1800 tick 全员灭绝; first_death={first_death}; "
+            f"actions_first_60_ticks={action_counts}; final_food={stocks}; population_curve={curve}"
+        )
     assert len(curve) == 9
     assert all(count >= 0 for count in curve)
     for a in w.state.agents.values():

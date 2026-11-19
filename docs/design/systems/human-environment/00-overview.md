@@ -188,7 +188,7 @@ cause_event_id, effect_scope, reversible, recovery_time
 
 ## 9. 扩展预留
 
-- **新地点**：`systems/` 只写通用机制，具体地点的制度、关系、信息参数放 `locations/<地点>/human-params.md`。加城市时新建 location，通用机制不动。
+- **新地点**：`systems/` 只写通用机制，地点参数沿用 `docs/design/locations/<地点 ID>/` 下既有的地理、人口、规则和初始状态章节；不得假设所有地点都必须新建 `human-params.md`。新增地点时只建立该地点实际需要的文档，通用机制不动。
 - **新子系统**：作为新文件夹加入 `systems/human-environment/`，在依赖图里声明读写关系。
 - **新驱动源**：在 `09-dynamics/` 里新增驱动类型，现有子系统通过配置引用。
 - **新事件类型**：各子系统在自己的文档里声明，`10-state-and-records/` 的通用 payload 结构不变。
@@ -197,8 +197,9 @@ cause_event_id, effect_scope, reversible, recovery_time
 
 ## 10. 文档地图
 
-土地与建造扩展：地块和建筑空间模型见 `01-social-spaces/05-land-parcels-and-buildings.md`，居民自主建造见 `01-social-spaces/06-autonomous-construction.md`；土地权属见 `02-institutions/07-land-tenure-and-use.md`，村庄治理见 `02-institutions/08-village-governance.md`。具体地点参数必须放入 `docs/design/locations/<location>/`，不得写入通用 systems 文档。
+土地与建造扩展：地块和建筑空间模型见 `01-social-spaces/05-land-parcels-and-buildings.md`，居民自主建造见 `01-social-spaces/06-autonomous-construction.md`；土地权属见 `02-institutions/07-land-tenure-and-use.md`，村庄治理见 `02-institutions/08-village-governance.md`。
 
+Brookvale（溪谷镇）的地点参数沿用 `docs/design/locations/brookvale-town/` 既有章节：地理与地块见 `01-geography/`，地方治理见 `04-rules/`，初始状态见 `05-setup/`。不得另建 `xigu-town/` 平行地点目录。
 
 | 文件夹 | 内容 |
 |---|---|
@@ -214,7 +215,7 @@ cause_event_id, effect_scope, reversible, recovery_time
 | `10-state-and-records/` | 人文快照、事件流、查询接口 |
 | `11-livestock/` | 家畜作为活体资产（owner/species/health/utility），繁衍与损耗走 `wealth_changed`，役用状态供 agents 读取 |
 
-Brookvale（溪谷镇）的地点参数沿用 `docs/design/locations/brookvale-town/` 既有章节：地理与地块见 `01-geography/`，地方治理见 `04-rules/`，初始状态见 `05-setup/`。不得另建 `xigu-town/` 或用虚构的 `human-params.md` 替代现有地点结构；其他地点可在各自既有目录维护参数。
+溪谷镇地点参数继续维护在 `docs/design/locations/brookvale-town/` 的既有章节中；本目录不重复定义具体地点数值，也不创建 `human-params.md` 占位文件。
 
 ## 11. 横切机制引用
 

@@ -254,6 +254,34 @@ def test_trade_basis_matches_value_ratio(world):
     )  # 价值相对误差在容忍度内（步长取整带来微小偏差）
 
 
+def test_market_can_replenish_cloth_to_winter_warmth_threshold(world):
+    """布匹市场需求至少覆盖御寒阈值，不能买到 1 匹就被判定“不缺”。"""
+    mod = _module(world)
+    tuning = world.config.agents.tuning
+    tuning.market.credit.enabled = False
+    li = world.state.agents["li_quan"]
+    lin = world.state.agents["lin_yuan"]
+    zhao = world.state.agents["zhao_cuilan"]
+    zhou = world.state.agents["zhou_qiaoniang"]
+    _set_inventory(world, li, grain=100.0)
+    _set_inventory(world, lin, cloth=12.0)
+    _set_inventory(world, zhao, grain=20.0)
+    _set_inventory(world, zhou, grain=20.0)
+    for agent in (li, lin, zhao, zhou):
+        agent.stamina = 100.0
+
+    mod._settle_market(world, tuning)  # noqa: SLF001
+
+    cloth_trades = [
+        event["payload"] for event in world.event_log.by_type("trade_executed")
+        if event["payload"].get("seller_household_id") == hh(world, li).household_id
+        and event["payload"].get("take_item") == "cloth"
+    ]
+    assert len(cloth_trades) == 1
+    assert hh(world, li).cloth == pytest.approx(tuning.textile.warmth_cloth_threshold)
+    assert cloth_trades[0]["take_qty"] == pytest.approx(tuning.textile.warmth_cloth_threshold)
+
+
 def test_no_trade_when_all_at_thresholds(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
@@ -362,10 +390,17 @@ def test_winter_cold_penalty_without_cloth(world):
     _set_inventory(world, lin, cloth=0)
     lin.health = 60.0
     mod._apply_cold_exposure(world, lin, tuning, Season.WINTER)  # noqa: SLF001
-    assert lin.health == pytest.approx(60.0 - tuning.textile.cold_health_loss)
+    # This legacy Brookvale fixture has abstract home nodes but no BuildingState
+    # projection. It must retain the configured shelter fallback, not require a
+    # generated Xigu dwelling entity.
+    expected_loss = tuning.textile.cold_health_loss * (
+        1.0 - tuning.environment.dwelling_cold_protection
+    )
+    assert lin.health == pytest.approx(60.0 - expected_loss)
     ev = world.event_log.by_type("cold_exposure")[-1]["payload"]
     assert ev["agent_id"] == "lin_yuan"
-    assert ev["loss"] == pytest.approx(tuning.textile.cold_health_loss)
+    assert ev["dwelling_id"] == "legacy_unmodeled_dwelling"
+    assert ev["loss"] == pytest.approx(expected_loss)
 
 
 def test_winter_cold_penalty_waived_when_cloth_enough(world):
@@ -556,7 +591,7 @@ def test_survival_gate_forces_eat_when_hunger_would_cross_threshold(world):
     phys = tuning.physiology
     lin = world.state.agents["lin_yuan"]
     _set_inventory(world, lin, grain=3.0)
-    hh(world, lin).water = 1.0  # 任务30：水够一餐，门控直接给 eat
+    hh(world, lin).water = 100.0  # 任务30：水足以覆盖全户日需求，隔离吃饭优先级断言
     lin.hunger = phys.hunger_health_damage_threshold - 1.0  # +hunger_gain 必跨阈值
     lin.stamina = 10.0  # 若按打分，rest 会赢
     events_before = len(world.event_log.by_type("agent_action_taken"))
@@ -606,3 +641,49 @@ def test_phase_two_long_run_has_survivors_and_no_errors(seed):
             assert getattr(a, field) >= 0.0, f"{a.name}.{field} 为负"
         for field in ("grain", "vegetable", "meat", "fish", "cloth", "debt"):
             assert getattr(hh(w, a), field) >= 0.0, f"{a.name}.{field} 为负"
+
+
+def test_water_shortage_forces_collection_before_farming(world):
+    mod = _module(world)
+    lin = world.state.agents["lin_yuan"]
+    household = hh(world, lin)
+    household.water = 0.0
+    lin.hunger = 30.0
+    lin.stamina = 100.0
+    lin.location = household.home_node
+    perception = mod._perceive(world, lin)  # noqa: SLF001
+    assert perception.household_daily_water_need == pytest.approx(
+        world.config.agents.tuning.water.daily_consumption_per_member
+        + world.config.agents.tuning.water.water_per_meal
+        * world.config.agents.tuning.physiology.daily_meals_per_member
+    )
+    action = mod._decide(  # noqa: SLF001
+        perception, world.config.agents.tuning, tu_remaining=100.0
+    )
+    assert action == "collect_water"
+
+    # A single meal should not trigger another collection immediately; the hard
+    # threshold is one day's household need, not the five-unit storage target.
+    household.water = 5.0 - world.config.agents.tuning.water.water_per_meal
+    perception_after_meal = mod._perceive(world, lin)  # noqa: SLF001
+    assert mod._decide(  # noqa: SLF001
+        perception_after_meal, world.config.agents.tuning, tu_remaining=100.0
+    ) != "collect_water"
+
+
+def test_eating_is_unavailable_until_needed_to_avoid_hunger_damage(world):
+    mod = _module(world)
+    lin = world.state.agents["lin_yuan"]
+    household = hh(world, lin)
+    household.grain = 100.0
+    household.water = 100.0
+    lin.hunger = 20.0
+    low = mod._perceive(world, lin)  # noqa: SLF001
+    assert mod.score_action("eat", low, world.config.agents.tuning) == IMPOSSIBLE
+
+    lin.hunger = (
+        world.config.agents.tuning.physiology.hunger_health_damage_threshold
+        - world.config.agents.tuning.physiology.hunger_gain_per_tick
+    )
+    urgent = mod._perceive(world, lin)  # noqa: SLF001
+    assert mod.score_action("eat", urgent, world.config.agents.tuning) != IMPOSSIBLE

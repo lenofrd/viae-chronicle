@@ -88,18 +88,36 @@ def test_social_tuning_defaults_loaded(world):
 
 
 def test_agent_state_social_fields_default_empty(world):
-    for agent in world.state.agents.values():
-        assert agent.acquaintances == {}
-        assert agent.recent_interactions == []
+    from vale.core.state import AgentSex, AgentState
+
+    probe = AgentState(
+        agent_id="probe", name="probe", sex=AgentSex.MALE,
+        birth_tick=0, household_id="probe", location="probe",
+        health=100.0, hunger=0.0, stamina=100.0,
+    )
+    assert probe.acquaintances == {}
+    assert probe.recent_interactions == []
 
 
 def test_kin_and_same_household_default_known(world):
     """同户/亲缘默认 KNOWN（裁决 §3.1：不写事件、由结构派生）。"""
     run_tick(world)
     acq_events = world.event_log.by_type("acquaintance_changed")
-    assert acq_events == []  # kin 初始化不写事件，避免开局刷屏
-    # 开局单人户、无亲缘：认知集合为空
-    assert all(a.acquaintances == {} for a in world.state.agents.values())
+    # 初始同一居住地点的邻居会双向认识；结构派生本身不额外写事件。
+    assert len(acq_events) == 2
+    assert {
+        (event["payload"]["observer_id"], event["payload"]["target_id"])
+        for event in acq_events
+    } == {
+        ("lin_yuan", "zhou_qiaoniang"),
+        ("zhou_qiaoniang", "lin_yuan"),
+    }
+    assert all(
+        event["payload"]["cause"] == "interaction"
+        and event["payload"]["location_source"] == "shared:common_district"
+        for event in acq_events
+    )
+    events_before_kin = len(acq_events)
 
     # 结构派生：结亲（配偶字段）→ apply_kin_defaults 后互为 KNOWN
     a = world.state.agents["lin_yuan"]
@@ -115,9 +133,10 @@ def test_kin_and_same_household_default_known(world):
     social.apply_kin_defaults(world.state, world.current_tick)
     assert c.acquaintances[a.agent_id].level == int(AcquaintanceLevel.KNOWN)
     assert a.acquaintances[c.agent_id].level == int(AcquaintanceLevel.KNOWN)
-    # 幂等：重复调用不产生额外条目
+    # 幂等：重复调用不产生额外条目或事件
     social.apply_kin_defaults(world.state, world.current_tick)
-    assert len(a.acquaintances) == 2
+    assert len(a.acquaintances) == 3
+    assert len(world.event_log.by_type("acquaintance_changed")) == events_before_kin
 
 
 # --------------------------------------------------------------------------- #
@@ -279,25 +298,29 @@ def test_get_social_view_filters_forgotten(world):
     view_fresh = social.get_social_view(
         world.state, creditor.agent_id, debtor.agent_id, now=100, ttl=360)
     assert view_fresh["known"] is True
+    events_before = len(world.event_log.by_type("acquaintance_changed"))
     view_stale = social.get_social_view(
         world.state, creditor.agent_id, debtor.agent_id, now=400, ttl=360)
     assert view_stale["known"] is False  # 查询时只过滤，不写事件
-    assert world.event_log.by_type("acquaintance_changed") == []
+    assert len(world.event_log.by_type("acquaintance_changed")) == events_before
 
 
 def test_cleanup_forgotten_removes_and_writes_event(world):
     observer = world.state.agents["li_quan"]
+    for agent in world.state.agents.values():
+        agent.acquaintances.clear()
     world.current_tick = 720
     observer.acquaintances["lin_yuan"] = AcquaintanceEntry(level=2, last_seen_tick=0)
     observer.acquaintances["zhao_cuilan"] = AcquaintanceEntry(
         level=2, last_seen_tick=world.current_tick - 100)  # 未过期
+    events_before = len(world.event_log.by_type("acquaintance_changed"))
 
     removed = social.cleanup_forgotten(world, world.current_tick, ttl=360)
 
     assert removed == 1
     assert "lin_yuan" not in observer.acquaintances
     assert "zhao_cuilan" in observer.acquaintances
-    events = world.event_log.by_type("acquaintance_changed")
+    events = world.event_log.by_type("acquaintance_changed")[events_before:]
     assert len(events) == 1
     p = events[0]["payload"]
     assert p["cause"] == "forgot" and p["new_level"] == 0

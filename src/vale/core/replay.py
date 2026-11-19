@@ -20,14 +20,19 @@ from vale.core.calendar import DAYS_PER_YEAR
 from vale.core.state import (
     AcquaintanceEntry,
     AgentState,
+    BuildingNeedState,
+    BuildingState,
+    ConstructionProjectState,
     DebtRecord,
     HouseholdState,
     ImpressionEntry,
+    LandParcelState,
+    LandRightState,
     WorldState,
 )
 from vale.modules.social import apply_kin_defaults, record_memory
 
-_ASSET_FIELDS = ("grain", "meat", "fish", "vegetable", "cloth", "water")
+_ASSET_FIELDS = ("grain", "meat", "fish", "vegetable", "cloth", "firewood", "herbs", "hardwood", "coin", "water")
 
 # 事件里可能出现的、以 <field>_after 形式给出的家庭库存快照
 _INV_AFTER_KEYS = {
@@ -36,6 +41,10 @@ _INV_AFTER_KEYS = {
     "fish_after": "fish",
     "vegetable_after": "vegetable",
     "cloth_after": "cloth",
+    "firewood_after": "firewood",
+    "herbs_after": "herbs",
+    "hardwood_after": "hardwood",
+    "coin_after": "coin",
     # 任务30：生活用水（collect_water 产水；旧库无此键自动跳过）
     "water_after": "water",
 }
@@ -89,10 +98,12 @@ class _Replayer:
             birth_tick = self.start_tick - age * DAYS_PER_YEAR
             name, surname, sex = cfg.name, cfg.surname or "", cfg.sex
             home, work = cfg.home_node, cfg.work_node
-            health = cfg.initial_health if cfg.initial_health is not None else 100.0
-            hunger = cfg.initial_hunger if cfg.initial_hunger is not None else 30.0
-            stamina = cfg.initial_stamina if cfg.initial_stamina is not None else 100.0
+            physiology = self.config.agents.tuning.physiology
+            health = cfg.initial_health if cfg.initial_health is not None else physiology.initial_health
+            hunger = cfg.initial_hunger if cfg.initial_hunger is not None else physiology.initial_hunger
+            stamina = cfg.initial_stamina if cfg.initial_stamina is not None else physiology.initial_stamina
         else:
+            physiology = self.config.agents.tuning.physiology
             birth_tick = int(payload.get("birth_tick", self.start_tick))
             name = payload.get("agent_name") or payload.get("child_name") or agent_id
             surname = ""
@@ -104,7 +115,7 @@ class _Replayer:
             hunger = float(payload.get("initial_hunger") or 30.0)
             stamina = float(payload.get("initial_stamina") or 40.0)
         age_now = max(0, (self.start_tick - birth_tick) // DAYS_PER_YEAR)
-        household_id = payload.get("household_id") or _hh_id(agent_id)
+        household_id = payload.get("household_id") or (cfg.household_id if cfg is not None else None) or _hh_id(agent_id)
         household = self._household(
             household_id, home=home, work=work,
             formed_tick=birth_tick if birth_tick >= 0 else 0, member_id=agent_id,
@@ -122,6 +133,7 @@ class _Replayer:
             health=health,
             hunger=hunger,
             stamina=stamina,
+            fatigue=physiology.initial_fatigue,
         )
         self.state.agents[agent_id] = agent
         return agent
@@ -137,18 +149,24 @@ class _Replayer:
 
     # -- 债务 --------------------------------------------------------------- #
     def _find_record(self, household: HouseholdState,
-                     creditor_household_id: str) -> Optional[DebtRecord]:
+                     creditor_household_id: str,
+                     resource: Optional[str] = None) -> Optional[DebtRecord]:
         candidates = [
-            d for d in household.debts if d.creditor_household_id == creditor_household_id
+            d for d in household.debts
+            if d.creditor_household_id == creditor_household_id
+            and (resource is None or getattr(d, "resource", "grain") == resource)
         ]
         if not candidates:
             return None
         return min(candidates, key=lambda d: (d.due_tick, d.originated_tick))
 
-    def _reduce_debt(self, household: HouseholdState, creditor_hh_id: str, amount: float) -> None:
+    def _reduce_debt(
+        self, household: HouseholdState, creditor_hh_id: str,
+        amount: float, resource: Optional[str] = None,
+    ) -> None:
         left = amount
         while left > 1e-9:
-            rec = self._find_record(household, creditor_hh_id)
+            rec = self._find_record(household, creditor_hh_id, resource)
             if rec is None:
                 return
             take = min(rec.amount, left)
@@ -175,6 +193,124 @@ class _Replayer:
         self._validate()
         return ReplayResult(state=self.state, ignored_events=self.ignored)
 
+
+    def _on_land_lease_created(self, payload: dict, tick: int) -> None:
+        lease = payload.get("lease")
+        if lease:
+            self.state.land_leases[lease["lease_id"]] = dict(lease)
+            parcel = self.state.land_parcels.get(lease.get("parcel_id"))
+            right = payload.get("land_right")
+            if parcel is not None and right:
+                from vale.core.state import LandRightState
+                if not any(item.right_id == right["right_id"] for item in parcel.use_rights):
+                    parcel.use_rights.append(LandRightState.model_validate(right))
+            self._apply_household_inventories({payload.get("lessee_household_id"): payload.get("lessee_inventory_after") or {}})
+
+
+
+
+    def _on_land_ownership_relinquished(self, payload: dict, tick: int) -> None:
+        parcel = self.state.land_parcels.get(payload.get("parcel_id", ""))
+        if parcel is not None:
+            parcel.owner_type, parcel.owner_id = "collective", "village"
+            parcel.management_authority = "village_council"
+        for building_id in payload.get("building_ids") or []:
+            building = self.state.buildings.get(building_id)
+            if building is not None:
+                building.owner_type, building.owner_id = "collective", "village"
+
+    def _on_land_lease_renewed(self, payload: dict, tick: int) -> None:
+        lease = self.state.land_leases.get(payload.get("lease_id", ""))
+        if lease:
+            lease.update(payload.get("lease_after") or {})
+            parcel = self.state.land_parcels.get(lease.get("parcel_id"))
+            if parcel is not None:
+                for right in parcel.use_rights:
+                    if right.right_id == f"lease:{lease['lease_id']}":
+                        right.expires_tick = lease.get("expires_tick")
+
+    def _on_land_lease_inherited(self, payload: dict, tick: int) -> None:
+        lease = self.state.land_leases.get(payload.get("lease_id", ""))
+        if lease:
+            lease.update(payload.get("lease_after") or {})
+
+    def _on_land_rent_paid(self, payload: dict, tick: int) -> None:
+        lease = self.state.land_leases.get(payload.get("lease_id", ""))
+        if lease:
+            lease.update(payload.get("lease_after") or {})
+        self._apply_household_inventories(payload.get("inventories_after") or {})
+        self.state.public_treasury = dict(payload.get("public_treasury_after") or self.state.public_treasury)
+
+    def _on_land_rent_missed(self, payload: dict, tick: int) -> None:
+        lease = self.state.land_leases.get(payload.get("lease_id", ""))
+        if lease:
+            lease.update(payload.get("lease_after") or {})
+
+    def _on_land_lease_terminated(self, payload: dict, tick: int) -> None:
+        lease = self.state.land_leases.get(payload.get("lease_id", ""))
+        if lease:
+            lease.update(payload.get("lease_after") or {})
+        parcel = self.state.land_parcels.get(payload.get("parcel_id", ""))
+        if parcel is not None:
+            parcel.use_rights = [r for r in parcel.use_rights if r.right_id != payload.get("right_id")]
+        self._apply_household_inventories(payload.get("inventories_after") or {})
+        self.state.public_treasury = dict(payload.get("public_treasury_after") or self.state.public_treasury)
+
+    def _apply_household_inventories(self, inventories: dict) -> None:
+        for household_id, inventory in inventories.items():
+            household = self.state.households.get(household_id)
+            if household:
+                for item, amount in inventory.items():
+                    if hasattr(household, item):
+                        setattr(household, item, max(0.0, float(amount)))
+
+
+    def _on_resource_loan_created(self, payload: dict, tick: int) -> None:
+        loan = payload.get("loan")
+        if loan:
+            self.state.resource_loans[loan["loan_id"]] = dict(loan)
+        self._apply_household_inventories(payload.get("inventories_after") or {})
+
+
+    def _on_resource_loan_overdue(self, payload: dict, tick: int) -> None:
+        loan = self.state.resource_loans.get(payload.get("loan_id", ""))
+        if loan:
+            loan.update(payload.get("loan_after") or {})
+
+    def _on_resource_loan_repaid(self, payload: dict, tick: int) -> None:
+        loan = self.state.resource_loans.get(payload.get("loan_id", ""))
+        if loan:
+            loan.update(payload.get("loan_after") or {})
+        self._apply_household_inventories(payload.get("inventories_after") or {})
+
+    def _on_household_trade_settled(self, payload: dict, tick: int) -> None:
+        self._apply_household_inventories(payload.get("inventories_after") or {})
+
+    def _on_shared_storage_deposit(self, payload: dict, tick: int) -> None:
+        building = self.state.buildings.get(payload.get("building_id", ""))
+        if building is not None:
+            building.attributes["stored_inventory"] = dict(payload.get("stored_inventory_after") or {})
+            building.attributes["depositor_balances"] = dict(payload.get("depositor_balances_after") or {})
+        self._apply_household_inventories({payload.get("household_id"): payload.get("household_inventory_after") or {}})
+
+    def _on_shared_storage_withdrawal(self, payload: dict, tick: int) -> None:
+        building = self.state.buildings.get(payload.get("building_id", ""))
+        if building is not None:
+            building.attributes["stored_inventory"] = dict(payload.get("stored_inventory_after") or {})
+            building.attributes["depositor_balances"] = dict(payload.get("depositor_balances_after") or {})
+        self._apply_household_inventories({payload.get("household_id"): payload.get("household_inventory_after") or {}})
+
+    def _on_service_request_queued(self, payload: dict, tick: int) -> None:
+        key = payload.get("queue_key")
+        if key:
+            self.state.service_queues[key] = dict(payload.get("queue_after") or {})
+
+    def _on_service_queue_processed(self, payload: dict, tick: int) -> None:
+        key = payload.get("queue_key")
+        if key:
+            self.state.service_queues[key] = dict(payload.get("queue_after") or {})
+
+
     # -- 通用事件 ----------------------------------------------------------- #
     def _on_agent_action_taken(self, payload: dict, tick: int) -> None:
         agent_id = payload.get("agent_id")
@@ -187,6 +323,170 @@ class _Replayer:
         ):
             if key in payload and payload[key] is not None:
                 setattr(self.state.agents[agent_id], field_name, float(payload[key]))
+
+    def _on_agent_fatigue_settled(self, payload: dict, tick: int) -> None:
+        agent = self.state.agents.get(payload.get("agent_id", ""))
+        if agent is None:
+            return
+        if payload.get("after") is not None:
+            agent.fatigue = max(0.0, min(100.0, float(payload["after"])))
+        if payload.get("high_days_after") is not None:
+            agent.fatigue_high_days = max(0, int(payload["high_days_after"]))
+
+    def _on_cold_exposure(self, payload: dict, tick: int) -> None:
+        agent_id = payload.get("agent_id")
+        if not agent_id or payload.get("health_after") is None:
+            return
+        agent = self._ensure_agent(str(agent_id), payload)
+        agent.health = max(0.0, min(100.0, float(payload["health_after"])))
+
+    def _on_field_labor_progressed(self, payload: dict, tick: int) -> None:
+        field_node = payload.get("field_node")
+        if not field_node:
+            return
+        self.state.field_season_labor[field_node] = {
+            "year": int(payload.get("year", 1)),
+            "season": str(payload.get("season", "spring")),
+            "labor_completed": max(0.0, float(payload.get("labor_after", 0.0))),
+        }
+
+    def _on_building_condition_changed(self, payload: dict, tick: int) -> None:
+        building = self.state.buildings.get(payload.get("building_id", ""))
+        if building is None:
+            return
+        if payload.get("condition_after") is not None:
+            building.condition = float(payload["condition_after"])
+        if payload.get("status_after") is not None:
+            building.status = str(payload["status_after"])
+
+    def _apply_community_reserve_transfer(self, payload: dict, *, deposited: bool) -> None:
+        household = self.state.households.get(payload.get("household_id", ""))
+        resources = payload.get("resources") or {}
+        if household is None:
+            return
+        sign = -1.0 if deposited else 1.0
+        for item, amount in resources.items():
+            amount = max(0.0, float(amount))
+            field_name = "water" if item == "water" else item
+            if hasattr(household, field_name):
+                setattr(household, field_name, max(
+                    0.0, round(float(getattr(household, field_name)) + sign * amount, 2)
+                ))
+        for item, value in (payload.get("reserve_after") or {}).items():
+            self.state.community_reserves[item] = max(0.0, float(value))
+
+    def _on_community_reserve_voluntarily_deposited(self, payload: dict, tick: int) -> None:
+        household = self.state.households.get(payload.get("household_id", ""))
+        if household is not None:
+            for item, value in (payload.get("household_inventory_after") or {}).items():
+                if hasattr(household, item):
+                    setattr(household, item, max(0.0, float(value)))
+        for item, value in (payload.get("reserve_after") or {}).items():
+            self.state.community_reserves[item] = max(0.0, float(value))
+
+    def _on_community_relief_issued(self, payload: dict, tick: int) -> None:
+        household = self.state.households.get(payload.get("household_id", ""))
+        if household is not None:
+            for item, value in (payload.get("household_inventory_after") or {}).items():
+                if hasattr(household, item):
+                    setattr(household, item, max(0.0, float(value)))
+        for item, value in (payload.get("reserve_after") or {}).items():
+            self.state.community_reserves[item] = max(0.0, float(value))
+
+    def _on_community_reserve_deposited(self, payload: dict, tick: int) -> None:
+        self._apply_community_reserve_transfer(payload, deposited=True)
+
+    def _on_community_reserve_withdrawn(self, payload: dict, tick: int) -> None:
+        self._apply_community_reserve_transfer(payload, deposited=False)
+
+    def _on_household_storage_overflow_loss(self, payload: dict, tick: int) -> None:
+        household = self.state.households.get(payload.get("household_id", ""))
+        inventory = payload.get("inventory_after") or {}
+        if household is None:
+            return
+        for field_name, value in inventory.items():
+            if hasattr(household, field_name):
+                setattr(household, field_name, max(0.0, float(value)))
+
+    def _on_household_relocated(self, payload: dict, tick: int) -> None:
+        household = self.state.households.get(payload.get("household_id", ""))
+        if household is None:
+            return
+        old_node = payload.get("old_home_node")
+        new_node = payload.get("new_home_node")
+        if new_node:
+            household.home_node = str(new_node)
+        old_parcel = self.state.land_parcels.get(payload.get("old_parcel_id", ""))
+        new_parcel = self.state.land_parcels.get(payload.get("new_parcel_id", ""))
+        if old_parcel is not None:
+            old_parcel.owner_type, old_parcel.owner_id = "collective", "village"
+            old_parcel.management_authority = "village_council"
+        if new_parcel is not None:
+            new_parcel.owner_type, new_parcel.owner_id = "household", household.household_id
+            new_parcel.management_authority = None
+        old_building = self.state.buildings.get(payload.get("old_building_id", ""))
+        new_building = self.state.buildings.get(payload.get("new_building_id", ""))
+        if old_building is not None:
+            old_building.owner_type, old_building.owner_id = "collective", "village"
+            old_building.status = "vacant"
+        if new_building is not None:
+            new_building.owner_type, new_building.owner_id = "household", household.household_id
+            new_building.status = "occupied"
+        for member_id in payload.get("member_ids") or household.member_ids:
+            agent = self.state.agents.get(member_id)
+            if agent is not None:
+                agent.home_node = str(new_node)
+                if agent.location == old_node:
+                    agent.location = str(new_node)
+
+    def _on_building_access_shared(self, payload: dict, tick: int) -> None:
+        building = self.state.buildings.get(payload.get("building_id", ""))
+        if building is not None:
+            building.attributes["shared_with_household_ids"] = list(
+                payload.get("shared_with_household_ids") or []
+            )
+
+    def _on_building_expanded(self, payload: dict, tick: int) -> None:
+        building = self.state.buildings.get(payload.get("building_id", ""))
+        if building is not None and payload.get("footprint_after") is not None:
+            building.footprint_area = float(payload["footprint_after"])
+
+    def _on_building_demolished(self, payload: dict, tick: int) -> None:
+        building = self.state.buildings.get(payload.get("building_id", ""))
+        if building is not None:
+            building.status = "demolished"
+            building.condition = 0.0
+
+    def _on_building_repaired(self, payload: dict, tick: int) -> None:
+        building = self.state.buildings.get(payload.get("building_id", ""))
+        if building is None:
+            return
+        if payload.get("condition_after") is not None:
+            building.condition = float(payload["condition_after"])
+            if building.condition > 0 and building.status == "ruined":
+                building.status = "active"
+
+
+    def _on_building_need_resolved(self, payload: dict, tick: int) -> None:
+        raw = payload.get("need")
+        if raw and raw.get("need_id"):
+            self.state.building_needs[raw["need_id"]] = BuildingNeedState.model_validate(raw)
+
+    def _on_building_need_updated(self, payload: dict, tick: int) -> None:
+        raw = payload.get("need")
+        if not raw or not raw.get("need_id"):
+            return
+        need = BuildingNeedState.model_validate(raw)
+        self.state.building_needs[need.need_id] = need
+
+    def _on_agent_fatigue_settled(self, payload: dict, tick: int) -> None:
+        agent_id = payload.get("agent_id")
+        if agent_id and agent_id in self.state.agents:
+            agent = self.state.agents[agent_id]
+            if payload.get("after") is not None:
+                agent.fatigue = float(payload["after"])
+            if payload.get("high_days_after") is not None:
+                agent.fatigue_high_days = int(payload["high_days_after"])
 
     def _on_gather_success(self, payload: dict, tick: int) -> None:
         agent_id = payload.get("agent_id")
@@ -201,6 +501,149 @@ class _Replayer:
             self._hh_for(agent_id, payload).cloth = max(
                 0.0, round(float(payload["cloth_after"]), 2)
             )
+
+
+
+    def _on_field_labor_progressed(self, payload: dict, tick: int) -> None:
+        node_id = payload.get("field_node")
+        if node_id and payload.get("labor_after") is not None:
+            self.state.field_season_labor[node_id] = {
+                "year": int(payload.get("year", 1)),
+                "season": str(payload.get("season", "")),
+                "labor_completed": float(payload["labor_after"]),
+            }
+
+    def _on_field_flood_damage(self, payload: dict, tick: int) -> None:
+        node_id = payload.get("field_node")
+        if node_id and payload.get("after") is not None:
+            self.state.field_growth[node_id] = max(0.0, float(payload["after"]))
+
+    def _on_field_drought_damage(self, payload: dict, tick: int) -> None:
+        node_id = payload.get("field_node")
+        if node_id and payload.get("after") is not None:
+            self.state.field_growth[node_id] = max(0.0, float(payload["after"]))
+
+    def _on_landslide_damage(self, payload: dict, tick: int) -> None:
+        node_id = payload.get("field_node")
+        if node_id and payload.get("fertility_after") is not None:
+            self.state.field_fertility[node_id] = max(.1, float(payload["fertility_after"]))
+
+    def _on_wildlife_attack(self, payload: dict, tick: int) -> None:
+        agent_id = payload.get("agent_id")
+        agent = self.state.agents.get(agent_id) if agent_id else None
+        if agent is not None and payload.get("health_after") is not None:
+            agent.health = max(0.0, float(payload["health_after"]))
+            agent.last_injury_tick = tick
+
+
+
+    def _on_household_split(self, payload: dict, tick: int) -> None:
+        source_id = payload.get("source_household_id")
+        new_id = payload.get("new_household_id")
+        if not source_id or not new_id:
+            return
+        source = self.state.households.get(source_id)
+        if source is None:
+            source = self._household(source_id, home=payload.get("home_node") or self._default_home,
+                                    work=payload.get("work_node") or self._default_home,
+                                    formed_tick=tick)
+        new_household = self.state.households.get(new_id)
+        if new_household is None:
+            new_household = self._household(
+                new_id, home=payload.get("home_node") or source.home_node,
+                work=payload.get("work_node") or source.work_node,
+                formed_tick=tick,
+            )
+            self.state.households[new_id] = new_household
+        new_household.head_id = payload.get("head_id")
+        new_household.home_node = payload.get("home_node") or new_household.home_node
+        new_household.work_node = payload.get("work_node") or new_household.work_node
+        new_household.registry_node = source.registry_node
+        new_household.registered_tick = tick if source.registry_node else None
+        members = payload.get("members", [])
+        moving_ids = [m.get("id") for m in members if m.get("id")]
+        source.member_ids = list(payload.get("source_members_after",
+                                             [m for m in source.member_ids if m not in moving_ids]))
+        new_household.member_ids = moving_ids
+        for agent_id in moving_ids:
+            agent = self.state.agents.get(agent_id)
+            if agent is None:
+                agent = self._ensure_agent(agent_id, {
+                    "household_id": new_id, "home_node": new_household.home_node,
+                    "work_node": new_household.work_node,
+                })
+            agent.household_id = new_id
+            agent.location = new_household.home_node
+            agent.work_node = None
+        for item, value in (payload.get("source_assets_after") or {}).items():
+            if item in _ASSET_FIELDS:
+                setattr(source, item, max(0.0, float(value)))
+        for item, value in (payload.get("new_assets") or {}).items():
+            if item in _ASSET_FIELDS:
+                setattr(new_household, item, max(0.0, float(value)))
+        if "source_debt_records_after" in payload:
+            source.debts = [DebtRecord(**d) for d in payload["source_debt_records_after"]]
+        if "new_debt_records" in payload:
+            new_household.debts = [DebtRecord(**d) for d in payload["new_debt_records"]]
+
+    def _on_household_registered(self, payload: dict, tick: int) -> None:
+        household_id = payload.get("household_id")
+        if not household_id:
+            return
+        household = self._household(
+            household_id, home=payload.get("home_node") or self._default_home,
+            work=payload.get("work_node") or payload.get("home_node") or self._default_home,
+            formed_tick=int(payload.get("registered_tick", tick)),
+            member_id=payload.get("head_id"),
+        )
+        household.registry_node = payload.get("registry_node")
+        household.registered_tick = int(payload.get("registered_tick", tick))
+        for item, value in (payload.get("assets") or {}).items():
+            if item in _ASSET_FIELDS:
+                setattr(household, item, max(0.0, float(value)))
+        head_id = payload.get("head_id")
+        if head_id:
+            # The household registration event is also the initial registration
+            # record for its head; otherwise singleton households have no later
+            # member/action event from which Replay could reconstruct the agent.
+            self._ensure_agent(str(head_id), {
+                "household_id": household_id,
+                "home_node": payload.get("home_node") or household.home_node,
+                "work_node": payload.get("work_node") or household.work_node,
+            })
+
+    def _on_household_member_registered(self, payload: dict, tick: int) -> None:
+        household_id = payload.get("household_id")
+        agent_id = payload.get("agent_id")
+        household = self.state.households.get(household_id) if household_id else None
+        if household is None or not agent_id:
+            return
+        # Registration events must reconstruct both sides of the household
+        # relation, even when no later action event exists to lazily create the agent.
+        self._ensure_agent(agent_id, {
+            "household_id": household_id,
+            "home_node": payload.get("home_node") or household.home_node,
+            "work_node": payload.get("work_node") or household.work_node,
+        })
+
+    def _on_resource_pool_initialized(self, payload: dict, tick: int) -> None:
+        node_id = payload.get("resource_node")
+        if node_id:
+            self.state.ecological_resources[node_id] = dict(payload.get("pool", {}))
+
+    def _on_resource_regenerated(self, payload: dict, tick: int) -> None:
+        node_id = payload.get("resource_node")
+        pool = self.state.ecological_resources.get(node_id) if node_id else None
+        if pool is not None and payload.get("stock_after") is not None:
+            pool["current_stock"] = float(payload["stock_after"])
+
+    def _on_resource_harvested(self, payload: dict, tick: int) -> None:
+        node_id = payload.get("resource_node")
+        pool = self.state.ecological_resources.get(node_id) if node_id else None
+        if pool is not None and payload.get("stock_after") is not None:
+            pool["current_stock"] = float(payload["stock_after"])
+            pool["harvested_this_tick"] = float(payload.get("harvested_this_tick", 0.0))
+            pool["harvest_tick"] = int(payload.get("harvest_tick", tick))
 
     # -- 任务30：水文与生活用水 ---------------------------------------------- #
     def _on_water_level_changed(self, payload: dict, tick: int) -> None:
@@ -269,6 +712,7 @@ class _Replayer:
         debtor_hh = self._hh_for(debtor_id, payload)
         creditor_hh = self._hh_for(creditor_id, payload)
         creditor_hh_id = payload.get("creditor_household_id") or creditor_hh.household_id
+        resource = payload.get("resource") or payload.get("debt_type") or "grain"
         debtor_hh.debts.append(
             DebtRecord(
                 debtor_household_id=debtor_hh.household_id,
@@ -276,16 +720,15 @@ class _Replayer:
                 amount=max(0.0, round(float(payload.get("amount", 0.0)), 2)),
                 originated_tick=int(payload.get("originated_tick", tick)),
                 due_tick=int(payload.get("due_tick", tick)),
-                # 旧库无 origin（借粮）；新库赊账为 "market_credit"
                 origin=payload.get("origin"),
+                resource=resource,
             )
         )
-        for key, agent_key in (
-            ("debtor_grain_after", "debtor_id"), ("creditor_grain_after", "creditor_id"),
-        ):
+        for side, agent_key in (("debtor", "debtor_id"), ("creditor", "creditor_id")):
+            key = f"{side}_{resource}_after"
             if key in payload and payload[key] is not None and payload.get(agent_key):
                 hh = self._hh_for(payload[agent_key], payload)
-                hh.grain = max(0.0, round(float(payload[key]), 2))
+                setattr(hh, resource, max(0.0, round(float(payload[key]), 2)))
 
     def _on_debt_repaid(self, payload: dict, tick: int) -> None:
         debtor_id = payload.get("debtor_id")
@@ -295,13 +738,13 @@ class _Replayer:
         debtor_hh = self._hh_for(debtor_id, payload)
         creditor_hh = self._hh_for(creditor_id, payload)
         creditor_hh_id = payload.get("creditor_household_id") or creditor_hh.household_id
-        self._reduce_debt(debtor_hh, creditor_hh_id, float(payload.get("amount", 0.0)))
-        for key, agent_key in (
-            ("debtor_grain_after", "debtor_id"), ("creditor_grain_after", "creditor_id"),
-        ):
+        resource = payload.get("resource") or payload.get("debt_type") or "grain"
+        self._reduce_debt(debtor_hh, creditor_hh_id, float(payload.get("amount", 0.0)), resource)
+        for side, agent_key in (("debtor", "debtor_id"), ("creditor", "creditor_id")):
+            key = f"{side}_{resource}_after"
             if key in payload and payload[key] is not None:
                 hh = self._hh_for(payload[agent_key], payload)
-                hh.grain = max(0.0, round(float(payload[key]), 2))
+                setattr(hh, resource, max(0.0, round(float(payload[key]), 2)))
 
     def _on_debt_collected(self, payload: dict, tick: int) -> None:
         debtor_id = payload.get("debtor_id")
@@ -311,13 +754,13 @@ class _Replayer:
         debtor_hh = self._hh_for(debtor_id, payload)
         creditor_hh = self._hh_for(creditor_id, payload)
         creditor_hh_id = payload.get("creditor_household_id") or creditor_hh.household_id
-        self._reduce_debt(debtor_hh, creditor_hh_id, float(payload.get("amount_paid", 0.0)))
-        for key, agent_key in (
-            ("debtor_grain_after", "debtor_id"), ("creditor_grain_after", "creditor_id"),
-        ):
+        resource = payload.get("resource", "grain")
+        self._reduce_debt(debtor_hh, creditor_hh_id, float(payload.get("amount_paid", 0.0)), resource)
+        for side, agent_key in (("debtor", "debtor_id"), ("creditor", "creditor_id")):
+            key = f"{side}_{resource}_after"
             if key in payload and payload[key] is not None:
                 hh = self._hh_for(payload[agent_key], payload)
-                hh.grain = max(0.0, round(float(payload[key]), 2))
+                setattr(hh, resource, max(0.0, round(float(payload[key]), 2)))
 
     def _on_debt_defaulted(self, payload: dict, tick: int) -> None:
         debtor_id = payload.get("debtor_id")
@@ -348,7 +791,7 @@ class _Replayer:
             payload.get("creditor_household_id")
             or self._hh_for(creditor_id, payload).household_id
         )
-        self._reduce_debt(debtor_hh, creditor_hh_id, float(payload.get("amount", 0.0)))
+        self._reduce_debt(debtor_hh, creditor_hh_id, float(payload.get("amount", 0.0)), payload.get("resource", "grain"))
 
     def _on_debt_transferred(self, payload: dict, tick: int) -> None:
         from_id = payload.get("from_id")
@@ -370,7 +813,7 @@ class _Replayer:
             debtor_hh = self.state.households.get(debtor_household_id)
             if debtor_hh is None:
                 return
-            self._reduce_debt(debtor_hh, from_hh.household_id, amount)
+            self._reduce_debt(debtor_hh, from_hh.household_id, amount, payload.get("resource", "grain"))
             debtor_hh.debts.append(
                 DebtRecord(
                     debtor_household_id=debtor_hh.household_id,
@@ -378,10 +821,11 @@ class _Replayer:
                     amount=round(amount, 2),
                     originated_tick=int(payload.get("originated_tick", tick)),
                     due_tick=int(payload.get("due_tick", tick)),
+                    resource=payload.get("resource", "grain"),
                 )
             )
             return
-        self._reduce_debt(from_hh, creditor_hh_id, amount)
+        self._reduce_debt(from_hh, creditor_hh_id, amount, payload.get("resource", "grain"))
         to_hh.debts.append(
             DebtRecord(
                 debtor_household_id=to_hh.household_id,
@@ -389,6 +833,7 @@ class _Replayer:
                 amount=round(amount, 2),
                 originated_tick=int(payload.get("originated_tick", tick)),
                 due_tick=int(payload.get("due_tick", tick)),
+                resource=payload.get("resource", "grain"),
             )
         )
 
@@ -404,7 +849,7 @@ class _Replayer:
             ).household_id
         if creditor_household_id is None:
             return
-        self._reduce_debt(debtor_hh, creditor_household_id, float(payload.get("amount", 0.0)))
+        self._reduce_debt(debtor_hh, creditor_household_id, float(payload.get("amount", 0.0)), payload.get("resource", "grain"))
 
     # -- 集市赊账与债务纠纷（任务15 阶段二）--------------------------------- #
     def _on_debt_deferred(self, payload: dict, tick: int) -> None:
@@ -412,7 +857,7 @@ class _Replayer:
         creditor_hh_id = payload.get("creditor_household_id")
         if debtor_hh is None or not creditor_hh_id:
             return
-        rec = self._find_record(debtor_hh, creditor_hh_id)
+        rec = self._find_record(debtor_hh, creditor_hh_id, payload.get("resource"))
         if rec is None:
             return
         rec.due_tick = int(payload.get("new_due_tick", tick))
@@ -537,6 +982,44 @@ class _Replayer:
         for item in _ASSET_FIELDS:
             setattr(source, item, 0.0)
 
+    def _on_household_member_transferred(self, payload: dict, tick: int) -> None:
+        source_id = payload.get("source_household_id")
+        target_id = payload.get("target_household_id")
+        agent_id = payload.get("agent_id")
+        if not source_id or not target_id or not agent_id:
+            return
+        source = self.state.households.get(source_id)
+        target = self.state.households.get(target_id)
+        if source is None or target is None:
+            return
+        source.member_ids = list(payload.get("source_members_after", source.member_ids))
+        target.member_ids = list(payload.get("target_members_after", target.member_ids))
+        source.head_id = payload.get("source_head_after")
+        target.head_id = payload.get("target_head_after")
+        agent = self._ensure_agent(agent_id, {
+            "household_id": target_id,
+            "home_node": target.home_node,
+            "work_node": target.work_node,
+        })
+        agent.household_id = target_id
+        if "location_after" in payload:
+            agent.location = str(payload["location_after"])
+        if "work_node_after" in payload:
+            agent.work_node = payload["work_node_after"]
+
+    def _on_marriage_assets_transferred(self, payload: dict, tick: int) -> None:
+        for household_key, inventory_key in (
+            ("from_household_id", "from_inventory_after"),
+            ("to_household_id", "to_inventory_after"),
+        ):
+            household = self.state.households.get(payload.get(household_key, ""))
+            inventory = payload.get(inventory_key)
+            if household is None or not isinstance(inventory, dict):
+                continue
+            for item, value in inventory.items():
+                if item in _ASSET_FIELDS and value is not None:
+                    setattr(household, item, max(0.0, round(float(value), 2)))
+
     def _on_household_head_changed(self, payload: dict, tick: int) -> None:
         household_id = payload.get("household_id")
         new_head_id = payload.get("new_head_id")
@@ -640,6 +1123,251 @@ class _Replayer:
         agent_id = payload.get("agent_id")
         if agent_id and "health_after" in payload:
             self._ensure_agent(agent_id, payload).health = float(payload["health_after"])
+
+    # -- 土地权属、地块与建筑 ----------------------------------------------- #
+    def _on_land_parcel_created(self, payload: dict, tick: int) -> None:
+        data = payload.get("parcel")
+        if not data:
+            return
+        parcel = LandParcelState.model_validate(data)
+        self.state.land_parcels[parcel.parcel_id] = parcel
+
+    def _on_land_right_granted(self, payload: dict, tick: int) -> None:
+        parcel = self.state.land_parcels.get(payload.get("parcel_id"))
+        data = payload.get("right")
+        if parcel is None or not data:
+            return
+        right = LandRightState.model_validate(data)
+        if not any(item.right_id == right.right_id for item in parcel.use_rights):
+            parcel.use_rights.append(right)
+
+    def _on_land_right_revoked(self, payload: dict, tick: int) -> None:
+        parcel = self.state.land_parcels.get(payload.get("parcel_id"))
+        right_id = payload.get("right_id")
+        if parcel is not None and right_id:
+            parcel.use_rights = [item for item in parcel.use_rights if item.right_id != right_id]
+
+    def _on_land_ownership_transferred(self, payload: dict, tick: int) -> None:
+        parcel = self.state.land_parcels.get(payload.get("parcel_id"))
+        new_owner = payload.get("new_owner_household_id")
+        if parcel is not None and new_owner:
+            previous_owner = payload.get("previous_owner_household_id")
+            parcel.owner_type = "household"
+            parcel.owner_id = str(new_owner)
+            for building in self.state.buildings.values():
+                if building.parcel_id == parcel.parcel_id and building.owner_id == previous_owner:
+                    building.owner_type = "household"
+                    building.owner_id = str(new_owner)
+
+    def _on_land_ownership_inherited(self, payload: dict, tick: int) -> None:
+        parcel = self.state.land_parcels.get(payload.get("parcel_id"))
+        new_owner = payload.get("new_owner_household_id")
+        if parcel is None or not new_owner:
+            return
+        previous_owner = payload.get("previous_owner_household_id")
+        parcel.owner_type, parcel.owner_id = "household", str(new_owner)
+        parcel.management_authority = None
+        for building in self.state.buildings.values():
+            if building.parcel_id == parcel.parcel_id and building.owner_id == previous_owner:
+                building.owner_type, building.owner_id = "household", str(new_owner)
+
+    def _on_land_ownership_escheated(self, payload: dict, tick: int) -> None:
+        parcel = self.state.land_parcels.get(payload.get("parcel_id"))
+        if parcel is None:
+            return
+        parcel.owner_type = str(payload.get("new_owner_type", "collective"))
+        parcel.owner_id = str(payload.get("new_owner_id", "village"))
+        parcel.management_authority = "village_council"
+        previous_owner = payload.get("previous_owner_household_id")
+        for building in self.state.buildings.values():
+            if building.parcel_id == parcel.parcel_id and building.owner_id == previous_owner:
+                building.owner_type, building.owner_id = "collective", "village"
+
+    def _on_land_right_inherited(self, payload: dict, tick: int) -> None:
+        parcel = self.state.land_parcels.get(payload.get("parcel_id"))
+        if parcel is None:
+            return
+        right_id = payload.get("right_id")
+        right = next((item for item in parcel.use_rights if item.right_id == right_id), None)
+        if right is not None:
+            right.holder_id = str(payload["new_holder_household_id"])
+            right.purpose = "inherited"
+
+    def _on_land_use_changed(self, payload: dict, tick: int) -> None:
+        parcel = self.state.land_parcels.get(payload.get("parcel_id"))
+        if parcel is not None and payload.get("after"):
+            parcel.land_use = str(payload["after"])
+            if payload.get("buildable_area_after") is not None:
+                parcel.buildable_area = float(payload["buildable_area_after"])
+
+    def _on_building_created(self, payload: dict, tick: int) -> None:
+        data = payload.get("building")
+        if not data:
+            return
+        building = BuildingState.model_validate(data)
+        self.state.buildings[building.building_id] = building
+
+
+
+    def _on_construction_project_created(self, payload: dict, tick: int) -> None:
+        data = payload.get("project")
+        if not data:
+            return
+        from vale.core.state import ConstructionProjectState
+        project = ConstructionProjectState.model_validate(data)
+        self.state.construction_projects[project.project_id] = project
+        # Rebuild household members from the canonical Brookvale agent config.
+        for cfg in self.config.agents.agents:
+            household_id = cfg.household_id or _hh_id(cfg.id)
+            if household_id == project.household_id:
+                self._ensure_agent(cfg.id, {
+                    "household_id": household_id,
+                    "home_node": cfg.home_node,
+                    "work_node": cfg.work_node,
+                })
+        household = self.state.households.get(project.household_id)
+        if household:
+            for field_name in ("coin", "hardwood"):
+                key = f"{field_name}_after"
+                if key in payload:
+                    setattr(household, field_name, max(0.0, float(payload[key])))
+
+    def _on_construction_worked(self, payload: dict, tick: int) -> None:
+        from vale.core.state import ConstructionProjectState
+        data = payload.get("project")
+        if data:
+            project = ConstructionProjectState.model_validate(data)
+            self.state.construction_projects[project.project_id] = project
+        worker_id = payload.get("worker_id")
+        worker = self.state.agents.get(worker_id)
+        if worker is None and worker_id:
+            worker = self._ensure_agent(worker_id, payload)
+        if worker is not None and payload.get("stamina_after") is not None:
+            worker.stamina = float(payload["stamina_after"])
+
+    def _on_construction_paused(self, payload: dict, tick: int) -> None:
+        data = payload.get("project")
+        if data:
+            self.state.construction_projects[data["project_id"]] = ConstructionProjectState.model_validate(data)
+
+    def _on_construction_cancelled(self, payload: dict, tick: int) -> None:
+        data = payload.get("project")
+        if data:
+            self.state.construction_projects[data["project_id"]] = ConstructionProjectState.model_validate(data)
+
+    def _on_construction_abandoned(self, payload: dict, tick: int) -> None:
+        data = payload.get("project")
+        if data:
+            self.state.construction_projects[data["project_id"]] = ConstructionProjectState.model_validate(data)
+
+    # -- 村庄治理：代表、选举、议事会与申诉 -------------------------------
+    def _on_representative_registered(self, payload: dict, tick: int) -> None:
+        data = payload.get("representative")
+        if data:
+            from vale.core.state import HouseholdRepresentativeState
+            rep = HouseholdRepresentativeState.model_validate(data)
+            self.state.representatives[rep.household_id] = rep
+
+    def _on_representative_revoked(self, payload: dict, tick: int) -> None:
+        rep = self.state.representatives.get(payload.get("household_id"))
+        if rep:
+            rep.active = False
+
+    def _on_election_opened(self, payload: dict, tick: int) -> None:
+        from vale.core.state import VillageElectionState
+        data = payload.get("election")
+        if data:
+            election = VillageElectionState.model_validate(data)
+            self.state.elections[election.election_id] = election
+
+    def _on_candidate_nominated(self, payload: dict, tick: int) -> None:
+        election = self.state.elections.get(payload.get("election_id"))
+        if election:
+            candidate = str(payload["candidate_id"])
+            election.nominations[candidate] = str(payload["nominated_by_household_id"])
+            if candidate not in election.candidates:
+                election.candidates.append(candidate)
+
+    def _on_election_vote_cast(self, payload: dict, tick: int) -> None:
+        election = self.state.elections.get(payload.get("election_id"))
+        if election:
+            round_key = str(payload.get("round", 1))
+            election.votes_by_round.setdefault(round_key, {})[
+                str(payload["household_id"])
+            ] = str(payload["candidate_id"])
+
+    def _on_election_round_advanced(self, payload: dict, tick: int) -> None:
+        election = self.state.elections.get(payload.get("election_id"))
+        if election:
+            election.current_round = int(payload["round"])
+            election.status = str(payload.get("status", "voting"))
+            if payload.get("candidates") is not None:
+                election.candidates = list(payload["candidates"])
+
+    def _on_election_result_declared(self, payload: dict, tick: int) -> None:
+        election = self.state.elections.get(payload.get("election_id"))
+        if election:
+            election.winner_id = payload.get("winner_id")
+            election.status = str(payload.get("status", "awaiting_recognition"))
+
+    def _on_election_recognized(self, payload: dict, tick: int) -> None:
+        election = self.state.elections.get(payload.get("election_id"))
+        if election:
+            election.status = "recognized"
+            election.winner_id = str(payload["headman_id"])
+            election.deputy_id = payload.get("deputy_id")
+            election.recognized_tick = tick
+            election.term_start_tick = tick
+            election.term_end_tick = int(payload["term_end_tick"])
+            self.state.headman_id = election.winner_id
+            self.state.acting_headman_id = None
+
+    def _on_election_rejected(self, payload: dict, tick: int) -> None:
+        election = self.state.elections.get(payload.get("election_id"))
+        if election:
+            election.status = "rejected"
+            election.rejection_reason = str(payload.get("reason", ""))
+
+    def _on_headman_term_expired(self, payload: dict, tick: int) -> None:
+        if self.state.headman_id == payload.get("headman_id"):
+            self.state.headman_id = None
+            self.state.acting_headman_id = None
+
+    def _on_deputy_activated(self, payload: dict, tick: int) -> None:
+        self.state.acting_headman_id = str(payload["deputy_id"])
+
+    def _on_council_decision_proposed(self, payload: dict, tick: int) -> None:
+        from vale.core.state import CouncilDecisionState
+        data = payload.get("decision")
+        if data:
+            decision = CouncilDecisionState.model_validate(data)
+            self.state.council_decisions[decision.decision_id] = decision
+
+    def _on_council_vote_cast(self, payload: dict, tick: int) -> None:
+        decision = self.state.council_decisions.get(payload.get("decision_id"))
+        if decision:
+            decision.votes[str(payload["household_id"])] = bool(payload["approve"])
+
+    def _on_council_decision_resolved(self, payload: dict, tick: int) -> None:
+        decision = self.state.council_decisions.get(payload.get("decision_id"))
+        if decision:
+            decision.status = str(payload["status"])
+            decision.resolved_tick = tick
+
+    def _on_appeal_submitted(self, payload: dict, tick: int) -> None:
+        from vale.core.state import AppealState
+        data = payload.get("appeal")
+        if data:
+            appeal = AppealState.model_validate(data)
+            self.state.appeals[appeal.appeal_id] = appeal
+
+    def _on_appeal_resolved(self, payload: dict, tick: int) -> None:
+        appeal = self.state.appeals.get(payload.get("appeal_id"))
+        if appeal:
+            appeal.status = "resolved"
+            appeal.outcome = str(payload["outcome"])
+            appeal.review_decision_id = payload.get("review_decision_id")
+            appeal.resolved_tick = tick
 
     # -- 校验 --------------------------------------------------------------- #
     def _validate(self) -> None:

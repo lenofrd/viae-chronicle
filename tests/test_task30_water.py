@@ -129,6 +129,7 @@ def test_collect_water_produces_configured_amount(world):
     lin.stamina = 100.0
     household = hh(world, lin)
     household.water = 0.0
+    world.state.water_level_ratio = 0.0  # 河流水位不是地下水位；不改变井水取水量
     p = mod._perceive(world, lin)  # noqa: SLF001
 
     mod._execute(world, lin, "collect_water", p, tuning)  # noqa: SLF001
@@ -136,8 +137,70 @@ def test_collect_water_produces_configured_amount(world):
     assert household.water == pytest.approx(tuning.water.collect_amount)
     ev = world.event_log.by_type("agent_action_taken")[-1]["payload"]
     assert ev["action"] == "collect_water"
+    assert ev["target_node"] == "well"
     assert ev["water_before"] == pytest.approx(0.0)
     assert ev["water_after"] == pytest.approx(tuning.water.collect_amount)
+
+
+def test_collect_water_returns_carrier_home_after_fetch(world):
+    mod = _module(world)
+    tuning = world.config.agents.tuning
+    lin = world.state.agents["lin_yuan"]
+    household = hh(world, lin)
+    lin.location = household.home_node
+    p = mod._perceive(world, lin)  # noqa: SLF001
+
+    mod._execute(world, lin, "collect_water", p, tuning)  # noqa: SLF001
+
+    assert lin.location == household.home_node
+    next_perception = mod._perceive(world, lin)  # noqa: SLF001
+    assert next_perception.distance_from_location["well"] == pytest.approx(
+        p.distance_from_location["well"]
+    )
+
+
+def test_seasonal_water_reserve_targets_cover_unreachable_periods(world):
+    mod = _module(world)
+    tuning = world.config.agents.tuning
+    lin = world.state.agents["lin_yuan"]
+    p = mod._perceive(world, lin)  # noqa: SLF001
+    daily_need = p.household_daily_water_need
+
+    p.well_distance_from_home = 4.2
+    p.season = Season.SPRING
+    p.season_progress = 0.5
+    assert mod._water_reserve_target(p, tuning) == pytest.approx(daily_need * 90)
+    p.season_progress = 1.0
+    assert mod._water_reserve_target(p, tuning) == pytest.approx(daily_need * 180)
+
+    p.well_distance_from_home = 3.0
+    p.season = Season.AUTUMN
+    p.season_progress = 1.0
+    assert mod._water_reserve_target(p, tuning) == pytest.approx(daily_need * 90)
+
+    p.well_distance_from_home = 2.0
+    p.season = Season.WINTER
+    assert mod._water_reserve_target(p, tuning) == pytest.approx(daily_need)
+
+
+def test_water_shortage_is_recorded_without_health_penalty(world):
+    mod = _module(world)
+    tuning = world.config.agents.tuning
+    lin = world.state.agents["lin_yuan"]
+    household = hh(world, lin)
+    household.water = 0.0
+    health_before = lin.health
+
+    mod._settle_water(world, tuning)  # noqa: SLF001
+
+    shortage = [
+        event["payload"] for event in world.event_log.by_type("water_shortage")
+        if event["payload"]["household_id"] == household.household_id
+    ]
+    assert shortage
+    assert shortage[-1]["shortage"] > 0
+    assert shortage[-1]["health_penalty_applied"] is False
+    assert lin.health == pytest.approx(health_before)
 
 
 def test_daily_water_consumption_per_member(world):
@@ -192,9 +255,10 @@ def test_water_conservation_production_minus_consumption_equals_stock(world):
     ev = world.event_log.by_type("agent_action_taken")[-1]["payload"]
     produced = ev["water_after"] - ev["water_before"]
 
+    before_consumption_events = len(world.event_log.by_type("water_consumed"))
     mod._settle_water(world, tuning)  # noqa: SLF001
     consumed = sum(
-        e["payload"]["amount"] for e in world.event_log.by_type("water_consumed")
+        e["payload"]["amount"] for e in world.event_log.by_type("water_consumed")[before_consumption_events:]
         if e["payload"]["household_id"] == household.household_id
         and e["tick"] == world.current_tick
     )
@@ -254,6 +318,10 @@ def test_eat_infeasible_without_cooking_water(world):
     assert mod.score_action("eat", p, tuning) == float("-inf")
 
     household.water = tuning.water.water_per_meal
+    lin.hunger = (
+        tuning.physiology.hunger_health_damage_threshold
+        - tuning.physiology.hunger_gain_per_tick
+    )
     p = mod._perceive(world, lin)  # noqa: SLF001
     assert mod.score_action("eat", p, tuning) > float("-inf")
 
@@ -339,4 +407,12 @@ def test_replay_restores_hydrology_and_household_water():
     assert state.irrigation_gear == w.state.irrigation_gear
     for hid, household in w.state.households.items():
         if hid in state.households:
-            assert state.households[hid].water == pytest.approx(household.water)
+            water_events = [
+                event for event in events
+                if event.get("payload", {}).get("household_id") == hid
+                and ("water" in event.get("event_type", "") or "water_" in event.get("event_type", ""))
+            ]
+            assert state.households[hid].water == pytest.approx(household.water), (
+                f"water replay mismatch for {hid}: runtime={household.water}, "
+                f"replay={state.households[hid].water}; events={water_events}"
+            )

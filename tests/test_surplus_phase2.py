@@ -268,34 +268,32 @@ def test_a_harvest_uses_formula_and_conserves(world):
 # --------------------------------------------------------------------------- #
 # B：出生户容量校验 + 分娩健康代价
 # --------------------------------------------------------------------------- #
-def test_b_birth_skipped_when_household_full(world):
-    """户内 8 人（上限 8）→ 跳过本次生育：不写 agent_born，写 birth_skipped。"""
+def test_b_birth_not_blocked_by_household_size(world):
+    """家庭成员超过旧上限时仍可生育；是否生育由资源供给和生育条件决定。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
     mother, _father, household = _isolated_couple(world, fillers=6)
     assert len(household.member_ids) == 8
+    household.grain = 1000.0
+    household.water = 1000.0
     tuning.birth.chance_per_day = 1.0
-    # 004：日内多动作改变 rng 流，首 tick 可能已有他户生育——按增量断言隔离
     born_before = len(world.event_log.by_type("agent_born"))
     skipped_before = len(world.event_log.by_type("birth_skipped"))
 
     mod._settle_birth(world, tuning)  # noqa: SLF001
 
-    assert len(world.event_log.by_type("agent_born")) == born_before
-    assert len(world.event_log.by_type("birth_skipped")) == skipped_before + 1
-    event = world.event_log.by_type("birth_skipped")[-1]["payload"]
-    assert event["agent_id"] == mother.agent_id
-    assert event["household_id"] == "hh_test"
-    assert event["member_count"] == 8
-    assert event["house_max_members"] == tuning.household.house_max_members
-    assert event["reason"] == "capacity"
+    assert len(world.event_log.by_type("agent_born")) == born_before + 1
+    assert len(world.event_log.by_type("birth_skipped")) == skipped_before
+    assert len(household.member_ids) == 9
 
 
 def test_b_birth_allowed_below_capacity(world):
     """户内 7 人（上限 8）→ 正常出生，不写 birth_skipped。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
-    _isolated_couple(world, fillers=5)
+    _mother, _father, household = _isolated_couple(world, fillers=5)
+    household.grain = 1000.0
+    household.water = 1000.0
     tuning.birth.chance_per_day = 1.0
     born_before = len(world.event_log.by_type("agent_born"))
     skipped_before = len(world.event_log.by_type("birth_skipped"))
@@ -306,20 +304,11 @@ def test_b_birth_allowed_below_capacity(world):
     assert len(world.event_log.by_type("birth_skipped")) == skipped_before
 
 
-def test_b_capacity_check_can_be_disabled(world):
-    """respect_house_capacity=false 时恢复旧行为（超容仍出生）。"""
-    mod = _module(world)
+def test_birth_capacity_is_not_a_configurable_hard_gate(world):
+    """配置不再暴露 household capacity 开关；家庭规模不是出生硬门槛。"""
     tuning = world.config.agents.tuning
-    _isolated_couple(world, fillers=6)
-    tuning.birth.chance_per_day = 1.0
-    tuning.birth.respect_house_capacity = False
-    born_before = len(world.event_log.by_type("agent_born"))
-    skipped_before = len(world.event_log.by_type("birth_skipped"))
-
-    mod._settle_birth(world, tuning)  # noqa: SLF001
-
-    assert len(world.event_log.by_type("agent_born")) == born_before + 1
-    assert len(world.event_log.by_type("birth_skipped")) == skipped_before
+    assert not hasattr(tuning.birth, "respect_house_capacity")
+    assert not hasattr(tuning, "household")
 
 
 def test_birth_applies_mother_health_cost(world):
