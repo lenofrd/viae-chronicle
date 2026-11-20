@@ -298,6 +298,23 @@ def test_db_unchanged_after_readonly_query(tmp_path):
     assert before == after, "只读查询不应修改数据库文件"
 
 
+def test_after_returns_only_new_events_in_id_order(tmp_path):
+    """可视化增量跟随：after(id) 只返回 id 更大的事件，升序。"""
+    db = tmp_path / "incremental.db"
+    _write_events(db, [
+        (0, "weather_changed", {"weather": "sunny"}),
+        (1, "agent_action_taken", {"agent_id": "a", "action": "rest"}),
+        (2, "agent_action_taken", {"agent_id": "a", "action": "farm"}),
+    ])
+    store = ReadonlyEventStore(str(db))
+    try:
+        assert [e["id"] for e in store.after(0)] == [1, 2, 3]  # 水位 0 = 全部
+        assert [e["id"] for e in store.after(1)] == [2, 3]
+        assert [e["id"] for e in store.after(3)] == []
+    finally:
+        store.close()
+
+
 def test_readonly_store_rejects_write(tmp_path):
     db = tmp_path / "nowrite.db"
     _write_events(db, [(0, "weather_changed", {"weather": "sunny"})])

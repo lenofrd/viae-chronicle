@@ -17,9 +17,15 @@ for _path in (str(SRC_ROOT), str(REPO_ROOT)):
         sys.path.insert(0, _path)
 
 from viz.data import (  # noqa: E402
+    DEFAULT_SPAN_GAP,
     UNKNOWN,
+    EventGroup,
     EventSource,
+    activity_spans,
     agent_profile,
+    biography,
+    build_person_index,
+    person_keys,
     calendar_label,
     event_details,
     event_households,
@@ -27,6 +33,7 @@ from viz.data import (  # noqa: E402
     event_people,
     event_summary,
     filter_events,
+    focus_category,
     focus_events,
     group_events,
     household_profile,
@@ -38,9 +45,16 @@ from viz.data import (  # noqa: E402
 from viz.simulation import SimulationController  # noqa: E402
 
 ALL = "全部"
-GRANULARITIES = {"逐事件": "event", "按天": "day", "按事件簇": "cluster"}
-SPEEDS = {"0.5×": 2.0, "1×": 1.0, "2×": 0.5, "4×": 0.25}
+GRANULARITIES = {"逐事件": "event", "按天": "day", "按事件簇": "cluster", "按活动聚合": "activity"}
+SPEEDS = {"0.5×": 2.0, "1×": 1.0, "2×": 0.5, "4×": 0.25, "全速": 0.0}
+DEFAULT_RENDER_CAP = 2000
 FOCUS_TITLES = {"work": "劳作", "social": "关系与生命", "economy": "经济"}
+PINNED_HINT = "已暂停跟随 · 点「回到最新」恢复"
+
+
+def _iid_safe(key: str) -> str:
+    """Treeview iid 只去除花括号，其余字符保留以保持稳定（跨刷新恢复展开态用）。"""
+    return str(key).replace("{", "").replace("}", "")
 
 
 class ValeApp:
@@ -64,18 +78,32 @@ class ValeApp:
         self.refresh_pending = False
         self.load_generation = 0
         self.filter_generation = 0
+        self.profile_generation = 0
         self.sim_starting = False
         self.sim_state = "stopped"
+        self.last_event_id: Optional[int] = None  # 增量加载水位
+        self.stream_new_hint = False  # 非流式视图下有新事件未刷
         self.favorite_people: set[str] = set()
         self.favorite_households: set[str] = set()
         self.favorite_events: set[int] = set()
         self.agent_options: dict[str, str] = {ALL: ""}
         self.location_options: dict[str, str] = {ALL: ""}
+        self._people_map: dict[str, str] = {}
+        self._location_map: dict[str, str] = {}
+        self._type_values: set[str] = set()
+        self._household_values: set[str] = set()
+        self._focus_type_rows: dict[str, dict[str, str]] = {key: {} for key in FOCUS_TITLES}
+        self._focus_counts: dict[str, dict[str, int]] = {key: {} for key in FOCUS_TITLES}
         self.main_row_event: dict[str, int] = {}
         self.event_rows: dict[int, str] = {}
         self.profile_row_event: dict[str, dict[str, int]] = {"agent": {}, "household": {}}
         self.focus_row_event: dict[str, dict[str, int]] = {key: {} for key in FOCUS_TITLES}
         self.favorite_row_target: dict[str, tuple[str, Any]] = {}
+        # 人物事件索引：载入后后台构建，角色档案查询免全库逐事件匹配（见 _start_index_build）
+        self.person_index: Optional[dict[str, list]] = None
+        self.index_generation = 0
+        self._index_lock = threading.Lock()
+        self._index_builder: Optional[threading.Thread] = None
 
         self._make_variables()
         self._build_ui()
@@ -99,6 +127,8 @@ class ValeApp:
         self.from_var = tk.StringVar()
         self.to_var = tk.StringVar()
         self.granularity_var = tk.StringVar(value="逐事件")
+        self.span_gap_var = tk.IntVar(value=DEFAULT_SPAN_GAP)
+        self.render_cap_var = tk.IntVar(value=DEFAULT_RENDER_CAP)
         self.jump_var = tk.StringVar()
         self.agent_view_var = tk.StringVar()
         self.household_view_var = tk.StringVar()
@@ -134,7 +164,11 @@ class ValeApp:
         speed.pack(side="left")
         speed.bind("<<ComboboxSelected>>", lambda _event: self.change_speed())
         ttk.Checkbutton(run_frame, text="自动刷新", variable=self.auto_refresh_var).pack(side="left", padx=12)
-        ttk.Checkbutton(run_frame, text="跟随最新", variable=self.follow_latest_var).pack(side="left")
+        ttk.Checkbutton(
+            run_frame, text="跟随最新", variable=self.follow_latest_var, command=self._on_follow_toggled
+        ).pack(side="left")
+        self.follow_button = ttk.Button(run_frame, text="回到最新", command=self.back_to_latest)
+        self.follow_button.pack(side="left", padx=(6, 0))
         ttk.Label(run_frame, textvariable=self.tick_var).pack(side="left", padx=6)
         ttk.Label(run_frame, textvariable=self.sim_status_var).pack(side="left", padx=6)
 
@@ -150,13 +184,23 @@ class ValeApp:
         ttk.Combobox(
             filter_frame, textvariable=self.granularity_var, values=list(GRANULARITIES), width=10, state="readonly"
         ).grid(row=1, column=5, sticky="w", pady=3)
-        ttk.Button(filter_frame, text="应用筛选", command=self.apply_filters).grid(row=1, column=6, padx=4, pady=3)
-        ttk.Button(filter_frame, text="清空", command=self.clear_filters).grid(row=1, column=7, padx=4, pady=3)
-        ttk.Label(filter_frame, text="跳转 tick").grid(row=1, column=8, sticky="e", padx=(8, 3), pady=3)
-        ttk.Entry(filter_frame, textvariable=self.jump_var, width=8).grid(row=1, column=9, sticky="w", pady=3)
-        ttk.Button(filter_frame, text="跳转", command=self.jump_to_tick).grid(row=1, column=10, padx=4, pady=3)
-        ttk.Button(filter_frame, text="打开事件库", command=self.open_database).grid(row=1, column=11, padx=4, pady=3)
-        ttk.Button(filter_frame, text="刷新", command=self.refresh).grid(row=1, column=12, padx=4, pady=3)
+        ttk.Label(filter_frame, text="聚合间隔").grid(row=1, column=6, sticky="w", padx=(6, 3), pady=3)
+        gap_spin = ttk.Spinbox(filter_frame, from_=1, to=360, width=5, textvariable=self.span_gap_var)
+        gap_spin.grid(row=1, column=7, sticky="w", pady=3)
+        gap_spin.bind("<Return>", lambda _e: self.apply_filters())
+        ttk.Label(filter_frame, text="显示条数").grid(row=1, column=8, sticky="w", padx=(6, 3), pady=3)
+        cap_spin = ttk.Spinbox(
+            filter_frame, from_=100, to=100000, increment=100, width=7, textvariable=self.render_cap_var
+        )
+        cap_spin.grid(row=1, column=9, sticky="w", pady=3)
+        cap_spin.bind("<Return>", lambda _e: self.apply_filters())
+        ttk.Button(filter_frame, text="应用筛选", command=self.apply_filters).grid(row=1, column=10, padx=4, pady=3)
+        ttk.Button(filter_frame, text="清空", command=self.clear_filters).grid(row=1, column=11, padx=4, pady=3)
+        ttk.Label(filter_frame, text="跳转 tick").grid(row=1, column=12, sticky="e", padx=(8, 3), pady=3)
+        ttk.Entry(filter_frame, textvariable=self.jump_var, width=8).grid(row=1, column=13, sticky="w", pady=3)
+        ttk.Button(filter_frame, text="跳转", command=self.jump_to_tick).grid(row=1, column=14, padx=4, pady=3)
+        ttk.Button(filter_frame, text="打开事件库", command=self.open_database).grid(row=1, column=15, padx=4, pady=3)
+        ttk.Button(filter_frame, text="刷新", command=self.refresh).grid(row=1, column=16, padx=4, pady=3)
 
         self.main_paned = ttk.PanedWindow(outer, orient="vertical")
         self.main_paned.grid(row=2, column=0, sticky="nsew")
@@ -201,6 +245,9 @@ class ValeApp:
         for category, title in FOCUS_TITLES.items():
             self._build_focus_tab(category, title)
         self._build_favorites_tab()
+        # 底部面板首次布局时给足高度，避免被上方面板挤成一条缝
+        self._pane_layout_done = False
+        self.main_paned.bind("<Configure>", self._on_paned_configure)
 
         status = ttk.Frame(outer)
         status.grid(row=3, column=0, sticky="ew", pady=(6, 0))
@@ -260,8 +307,10 @@ class ValeApp:
         tree.bind("<<TreeviewSelect>>", lambda _event, k=kind: self._on_profile_event(k))
         return text, tree, combo
 
-    def _small_event_tree(self, parent):
-        tree = ttk.Treeview(parent, columns=("tick", "type", "summary"), show="headings", selectmode="browse")
+    def _small_event_tree(self, parent, height=6):
+        tree = ttk.Treeview(
+            parent, columns=("tick", "type", "summary"), show="headings", selectmode="browse", height=height
+        )
         for column, title, width in (("tick", "Tick", 60), ("type", "类型", 145), ("summary", "摘要", 330)):
             tree.heading(column, text=title)
             tree.column(column, width=width, stretch=column == "summary")
@@ -269,6 +318,18 @@ class ValeApp:
         tree.configure(yscrollcommand=scroll.set)
         tree._viz_scroll = scroll
         return tree
+
+    def _on_paned_configure(self, _event) -> None:
+        if self._pane_layout_done:
+            return
+        height = self.main_paned.winfo_height()
+        if height <= 100:
+            return
+        try:
+            self.main_paned.sashpos(0, int(height * 0.60))
+        except tk.TclError:
+            return
+        self._pane_layout_done = True
 
     def _build_focus_tab(self, category, title) -> None:
         frame = ttk.Frame(self.focus_notebook, padding=4)
@@ -307,9 +368,28 @@ class ValeApp:
         widget.insert("1.0", content)
         widget.configure(state="disabled")
 
-    def load_source(self, source: EventSource) -> None:
+    def load_source(self, source: EventSource, incremental: bool = False) -> None:
         if self.loading:
-            self.refresh_pending = True
+            if not incremental:
+                self.refresh_pending = True
+            return
+        if (
+            incremental
+            and source is self.source
+            and source.kind == "db"
+            and self.last_event_id is not None
+        ):
+            # 增量：只取水位之后的新事件，避免大库每秒全量重载
+            generation = self.load_generation
+
+            def increment_worker():
+                try:
+                    new_events = source.load(since_id=self.last_event_id)
+                    self.messages.put(("data_appended", generation, new_events))
+                except Exception as exc:
+                    self.messages.put(("data_error", generation, str(exc)))
+
+            threading.Thread(target=increment_worker, name="viz-data-increment", daemon=True).start()
             return
         self.source = source
         self.source_var.set(source.label)
@@ -330,11 +410,20 @@ class ValeApp:
     def refresh(self) -> None:
         self.load_source(self.source)
 
+    def _source_is_live_sim(self) -> bool:
+        """自动刷新只针对本 GUI 启动的模拟库；外部静态库不刷，避免无谓重载。"""
+        return (
+            self.controller is not None
+            and self.controller.db_path is not None
+            and self.source.kind == "db"
+            and str(self.source.path) == str(self.controller.db_path)
+        )
+
     def _auto_refresh(self) -> None:
         if self.closing:
             return
-        if self.auto_refresh_var.get() and self.source.kind == "db":
-            self.refresh()
+        if self.auto_refresh_var.get() and self.source.kind == "db" and self._source_is_live_sim():
+            self.load_source(self.source, incremental=True)
         self.root.after(1000, self._auto_refresh)
 
     def apply_filters(self) -> None:
@@ -358,6 +447,7 @@ class ValeApp:
         for key in ("agent", "household", "location"):
             criteria[key] = criteria[key] or None
         granularity = GRANULARITIES.get(self.granularity_var.get(), "event")
+        gap = self.span_gap_var.get()
         events = list(self.events)
         cfg = self.cfg
         self.filter_generation += 1
@@ -367,7 +457,7 @@ class ValeApp:
         def worker():
             try:
                 filtered = filter_events(events, **criteria)
-                groups = group_events(filtered, granularity, cfg)
+                groups = group_events(filtered, granularity, cfg, gap=gap)
                 self.messages.put(("filtered", generation, filtered, groups))
             except Exception as exc:
                 self.messages.put(("filter_error", generation, str(exc)))
@@ -390,15 +480,29 @@ class ValeApp:
                 kind = message[0]
                 if kind == "data_loaded" and message[1] == self.load_generation:
                     self._data_loaded(message[2])
+                elif kind == "data_appended" and message[1] == self.load_generation:
+                    self._data_appended(message[2])
                 elif kind == "data_error" and message[1] == self.load_generation:
                     self.loading = False
                     self.status_var.set(f"读取失败，保留当前数据：{message[2]}")
                 elif kind == "filtered" and message[1] == self.filter_generation:
                     self.filtered, self.groups = message[2], message[3]
+                    self.stream_new_hint = False
                     self._populate_event_tree()
-                    self.status_var.set(f"显示 {len(self.filtered)} / {len(self.events)} 条事件")
+                    self._update_stream_status()
                 elif kind == "filter_error" and message[1] == self.filter_generation:
                     self.status_var.set(f"筛选失败：{message[2]}")
+                elif kind == "profile_ready" and message[1] == self.profile_generation:
+                    if message[2] == "agent":
+                        self._render_agent_profile(*message[3])
+                    else:
+                        self._render_household_profile(*message[3])
+                elif kind == "profile_error" and message[1] == self.profile_generation:
+                    self.status_var.set(f"档案汇总失败：{message[2]}")
+                elif kind == "index_ready" and message[1] == self.index_generation:
+                    self._update_stream_status()
+                elif kind == "index_error" and message[1] == self.index_generation:
+                    self.status_var.set(f"人物索引构建失败，档案走全库扫描：{message[2]}")
                 elif kind == "sim_started":
                     self._simulation_started(message[1], message[2])
                 elif kind == "sim_status":
@@ -411,41 +515,138 @@ class ValeApp:
             pass
         self.root.after(50, self._poll_messages)
 
+    def _update_stream_status(self, extra: str = "") -> None:
+        shown = len(self.event_rows)
+        base = f"显示 {shown} / 共 {len(self.events)} 条事件"
+        cap = self.render_cap_var.get()
+        if len(self.groups) > cap:
+            base += f"（已截断，仅渲染最近 {cap} 条/组）"
+        if self.stream_new_hint:
+            base += " · 有新事件，点「应用筛选」并入"
+        if self.person_index is None:
+            base += " · 人物索引构建中，角色档案稍慢"
+        if extra:
+            base += f" · {extra}"
+        self.status_var.set(base)
+
     def _data_loaded(self, events) -> None:
         self.loading = False
         self.events = events
         self.event_by_id = {int(event["id"]): event for event in events}
+        self.last_event_id = max(self.event_by_id, default=None)
+        self.stream_new_hint = False
         self._refresh_options()
         for category in FOCUS_TITLES:
             self.refresh_focus(category)
         self.refresh_favorites()
         self.apply_filters()
+        self._start_index_build()
         if self.refresh_pending:
             self.refresh_pending = False
             self.root.after_idle(self.refresh)
 
-    def _refresh_options(self) -> None:
-        event_types = sorted({str(event.get("event_type", "")) for event in self.events})
-        self.type_combo.configure(values=[ALL] + event_types)
-        people = {}
-        households = set()
-        locations = {}
-        for event in self.events:
+    def _start_index_build(self) -> None:
+        """后台构建人物索引；构建中的档案查询回退全库扫描路径，就绪后走索引。"""
+        if self._index_builder is not None and self._index_builder.is_alive():
+            self.index_generation += 1  # 旧构建作废，收尾时不落库
+        self.index_generation += 1
+        generation = self.index_generation
+        snapshot = list(self.events)
+
+        def builder():
+            try:
+                index = build_person_index(snapshot)
+                with self._index_lock:
+                    if generation == self.index_generation:
+                        # 补上构建期间增量到达的事件，随后增量路径接管
+                        for event in self.events[len(snapshot):]:
+                            for key in person_keys(event):
+                                bucket = index.get(key)
+                                if bucket is None:
+                                    index[key] = [event]
+                                else:
+                                    bucket.append(event)
+                        self.person_index = index
+                self.messages.put(("index_ready", generation))
+            except Exception as exc:  # noqa: BLE001 - 索引失败不致命，档案回退全库扫描
+                self.messages.put(("index_error", generation, str(exc)))
+
+        self._index_builder = threading.Thread(target=builder, name="viz-person-index", daemon=True)
+        self._index_builder.start()
+
+    def _view_matches_stream(self) -> bool:
+        """当前视图是否为「无筛选 + 逐事件」的完整事件流（可增量追加）。"""
+        return (
+            self.granularity_var.get() == "逐事件"
+            and self.type_var.get() == ALL
+            and self.agent_filter_var.get() == ALL
+            and self.household_filter_var.get() == ALL
+            and self.location_filter_var.get() == ALL
+            and not self.from_var.get().strip()
+            and not self.to_var.get().strip()
+        )
+
+    def _data_appended(self, new_events) -> None:
+        """增量新事件：不重建界面，只追加行并保留用户全部交互状态。"""
+        if not new_events:
+            return
+        for event in new_events:
+            event_id = int(event["id"])
+            self.events.append(event)
+            self.event_by_id[event_id] = event
+            self.last_event_id = max(self.last_event_id or 0, event_id)
+        with self._index_lock:
+            if self.person_index is not None:
+                # 索引已就绪：增量追加；构建中则跳过（构建线程收尾时会补齐快照之后的事件）
+                for event in new_events:
+                    for key in person_keys(event):
+                        bucket = self.person_index.get(key)
+                        if bucket is None:
+                            self.person_index[key] = [event]
+                        else:
+                            bucket.append(event)
+        self._refresh_options(new_events)
+        for category in FOCUS_TITLES:
+            self._append_focus_events(category, new_events)
+        if self._view_matches_stream():
+            self._append_stream_rows(new_events)
+            if self._should_follow_latest():
+                last_id = self._last_visible_event_id()
+                if last_id is not None:
+                    self._select_main_event(last_id)
+            self._update_stream_status()
+        elif self.sim_state in {"running", "ready", "paused"}:
+            self.stream_new_hint = True
+            self._update_stream_status()
+
+    def _refresh_options(self, new_events=None) -> None:
+        """全量重建（new_events=None）或只用新事件更新筛选下拉的缓存。"""
+        if new_events is None:
+            self._people_map = {}
+            self._location_map = {}
+            self._type_values = set()
+            self._household_values = set()
+            scan_events = self.events
+        else:
+            scan_events = new_events
+        for event in scan_events:
+            self._type_values.add(str(event.get("event_type", "")))
             for person in event_people(event):
                 selector = person.get("id") or person.get("name")
                 if selector:
-                    people[person_label(person)] = selector
-            households.update(event_households(event))
+                    self._people_map[person_label(person)] = selector
+            self._household_values.update(event_households(event))
             for location in event_locations(event):
                 label = f"{self.names[location]}（{location}）" if location in self.names else location
-                locations[label] = location
-        self.agent_options = {ALL: "", **dict(sorted(people.items()))}
-        self.location_options = {ALL: "", **dict(sorted(locations.items()))}
-        household_values = [ALL] + sorted(households)
+                self._location_map[label] = location
+        self.type_combo.configure(values=[ALL] + sorted(self._type_values))
+        self.agent_options = {ALL: "", **dict(sorted(self._people_map.items()))}
+        self.location_options = {ALL: "", **dict(sorted(self._location_map.items()))}
+        household_values = [ALL] + sorted(self._household_values)
         self.agent_filter_combo.configure(values=list(self.agent_options))
         self.agent_view_combo.configure(values=[value for value in self.agent_options if value != ALL])
         self.household_combo.configure(values=household_values)
-        self.household_view_combo.configure(values=sorted(households))
+        self.household_view_combo.configure(values=sorted(self._household_values))
         self.location_combo.configure(values=list(self.location_options))
 
     def _event_tags(self, event) -> tuple[str, ...]:
@@ -490,11 +691,31 @@ class ValeApp:
 
     def _populate_event_tree(self) -> None:
         follow = self._should_follow_latest()
+        # 重建前捕获用户状态：分组展开、滚动位置、面板分隔条，重建后原样恢复
+        open_iids = [
+            iid for iid in self.event_tree.get_children("")
+            if str(iid).startswith("group:") and self.event_tree.item(iid, "open")
+        ]
+        yview = self.event_tree.yview()
+        try:
+            sash = self.main_paned.sashpos(0)
+        except (tk.TclError, IndexError):
+            sash = None
         self.event_tree.delete(*self.event_tree.get_children())
         self.main_row_event.clear()
         self.event_rows.clear()
+        cap = max(1, self.render_cap_var.get())
+        groups = self.groups
+        trimmed = max(0, len(groups) - cap)
+        if trimmed:
+            self.event_tree.insert(
+                "", "end", iid="cap:info", text=f"…更早 {trimmed} 条/组未渲染（调大显示条数或用筛选）",
+                values=("", "", "", "", trimmed),
+            )
+            groups = groups[-cap:]
         grouped = GRANULARITIES.get(self.granularity_var.get(), "event") != "event"
-        for index, group in enumerate(self.groups):
+        activity_mode = GRANULARITIES.get(self.granularity_var.get()) == "activity"
+        for group in groups:
             first = group.events[0]
             if not grouped:
                 event_id = int(first["id"])
@@ -505,11 +726,13 @@ class ValeApp:
                 self.main_row_event[iid] = event_id
                 self.event_rows[event_id] = iid
                 continue
-            parent = f"group:{index}"
+            parent = f"group:{_iid_safe(group.key)}"
             types = {event.get("event_type", "") for event in group.events}
             values = (group.tick, types.pop() if len(types) == 1 else "混合", "", event_summary(first, self.names), len(group.events))
-            self.event_tree.insert("", "end", iid=parent, text=group.label, values=values)
+            self.event_tree.insert("", "end", iid=parent, text=group.label, values=values, open=False)
             self.main_row_event[parent] = int(first["id"])
+            if activity_mode:
+                continue  # 活动区间可能包含数千事件，不展开子行，选中行显示首事件详情
             for event in group.events:
                 event_id = int(event["id"])
                 iid = f"event:{event_id}"
@@ -519,6 +742,14 @@ class ValeApp:
                 )
                 self.main_row_event[iid] = event_id
                 self.event_rows[event_id] = iid
+        for iid in open_iids:
+            if self.event_tree.exists(iid):
+                self.event_tree.item(iid, open=True)
+        if sash is not None:
+            try:
+                self.main_paned.sashpos(0, sash)
+            except (tk.TclError, IndexError):
+                pass
         if follow:
             last_id = self._last_visible_event_id()
             if last_id is not None:
@@ -537,6 +768,47 @@ class ValeApp:
             self.selected_event_id = None
             self._set_text(self.summary_text, "当前筛选没有事件。")
             self._set_text(self.json_text, "")
+        if not scroll and yview[1] < 1.0:
+            self.event_tree.yview_moveto(yview[0])
+
+    def _append_stream_rows(self, new_events) -> None:
+        """流式视图增量追加：不重建、不触碰已有行，超限从头裁剪。"""
+        cap = max(1, self.render_cap_var.get())
+        for event in new_events:
+            event_id = int(event["id"])
+            if event_id in self.event_rows:
+                continue
+            tick = int(event.get("tick", 0))
+            group = EventGroup(
+                f"event:{event_id}", f"#{event_id} · {calendar_label(tick, self.cfg)}", tick, [event]
+            )
+            self.groups.append(group)
+            self.filtered.append(event)
+            iid = f"event:{event_id}"
+            self.event_tree.insert(
+                "", "end", iid=iid, text=group.label, values=self._event_values(event), tags=self._event_tags(event)
+            )
+            self.main_row_event[iid] = event_id
+            self.event_rows[event_id] = iid
+        children = self.event_tree.get_children("")
+        excess = len(children) - cap
+        if excess <= 0:
+            return
+        removed = 0
+        for iid in children:
+            if removed >= excess:
+                break
+            if iid == "cap:info":
+                continue
+            event_id = self.main_row_event.pop(iid, None)
+            if event_id is not None:
+                self.event_rows.pop(event_id, None)
+            self.event_tree.delete(iid)
+            removed += 1
+        if not self.event_tree.exists("cap:info"):
+            self.event_tree.insert(
+                "", 0, iid="cap:info", text="…更早事件未渲染（调大显示条数或用筛选）", values=("", "", "", "", "")
+            )
 
     def _on_event_select(self, _event=None) -> None:
         selection = self.event_tree.selection()
@@ -547,7 +819,26 @@ class ValeApp:
             self.selected_event_id = event_id
             if self.sim_state == "running":
                 self.user_pinned = event_id != self._last_visible_event_id()
+                if self.user_pinned:
+                    self.status_var.set(PINNED_HINT)
             self._show_event(event_id)
+
+    def _on_follow_toggled(self) -> None:
+        if self.follow_latest_var.get() and self.user_pinned:
+            self.user_pinned = False
+            self._resume_follow()
+
+    def back_to_latest(self) -> None:
+        """回到最新：清固定、恢复跟随并滚到最新事件。"""
+        self.follow_latest_var.set(True)
+        self.user_pinned = False
+        self._resume_follow()
+
+    def _resume_follow(self) -> None:
+        last_id = self._last_visible_event_id()
+        if last_id is not None:
+            self._select_main_event(last_id)
+        self._update_stream_status()
 
     def _select_main_event(self, event_id: int, scroll: bool = True) -> None:
         iid = self.event_rows.get(event_id)
@@ -611,10 +902,30 @@ class ValeApp:
         if not selector:
             self.status_var.set("请先选择角色")
             return
-        profile = agent_profile(self.events, selector)
+        self.status_var.set("正在汇总角色档案…")
+        self.profile_generation += 1
+        generation = self.profile_generation
+        events = list(self.events)
+        gap = self.span_gap_var.get()
+
+        def worker():
+            try:
+                # 局部引用快照：构建完成则免全库逐事件人物匹配；未就绪则回退旧路径
+                index = self.person_index
+                profile = agent_profile(events, selector, index=index)
+                # 聚合直接吃已过滤的本人时间线，省一遍全库人物匹配
+                spans = activity_spans(profile.timeline, gap=gap)
+                self.messages.put(("profile_ready", generation, "agent", (selector, profile, spans)))
+            except Exception as exc:  # noqa: BLE001 - 后台线程边界转可读错误
+                self.messages.put(("profile_error", generation, str(exc)))
+
+        threading.Thread(target=worker, name="viz-agent-profile", daemon=True).start()
+
+    def _render_agent_profile(self, selector, profile, spans) -> None:
         spouse = profile.spouse_name or profile.spouse_id or UNKNOWN
         birth = calendar_label(profile.birth_tick, self.cfg) if profile.birth_tick is not None else UNKNOWN
         death = calendar_label(profile.death_tick, self.cfg) if profile.death_tick is not None else UNKNOWN
+        gap = self.span_gap_var.get()
         lines = [
             f"{profile.name}（{profile.agent_id or selector}）",
             f"出生：{birth}    死亡：{death}",
@@ -624,15 +935,51 @@ class ValeApp:
             "近期事件：",
         ]
         lines.extend(f"#{e['id']} · {event_summary(e, self.names)}" for e in profile.recent_events)
+        bio = biography(profile, self.names)
+        if bio:
+            lines.extend(["", f"一生大事记（{len(bio)} 件，按时间序）："])
+            lines.extend(
+                f"{calendar_label(entry.tick, self.cfg)} · {entry.label} · {entry.text}"
+                for entry in bio
+            )
+        if spans:
+            by_label: dict[str, list] = {}
+            for span in spans:
+                by_label.setdefault(span.label, []).append(span)
+            lines.extend(["", f"生平阶段（同一活动间隔 ≤{gap} tick 合并为一段）："])
+            ranked = sorted(by_label.items(), key=lambda item: -sum(s.count for s in item[1]))
+            for label, items in ranked:
+                total = sum(span.count for span in items)
+                first, last = items[0], items[-1]
+                span_note = "" if len(items) == 1 else f" · {len(items)} 段"
+                lines.append(
+                    f"{label}：{calendar_label(first.from_tick, self.cfg)} → "
+                    f"{calendar_label(last.to_tick, self.cfg)} · {total} 次{span_note}"
+                )
         self._set_text(self.agent_text, "\n".join(lines))
         self._populate_profile_timeline("agent", self.agent_timeline, profile.timeline)
+        self._update_stream_status()
 
     def show_household_profile(self) -> None:
         household_id = self.household_view_var.get().strip()
         if not household_id or household_id == ALL:
             self.status_var.set("请先选择家庭")
             return
-        profile = household_profile(self.events, household_id)
+        self.status_var.set("正在汇总家庭档案…")
+        self.profile_generation += 1
+        generation = self.profile_generation
+        events = list(self.events)
+
+        def worker():
+            try:
+                profile = household_profile(events, household_id)
+                self.messages.put(("profile_ready", generation, "household", (household_id, profile)))
+            except Exception as exc:  # noqa: BLE001 - 后台线程边界转可读错误
+                self.messages.put(("profile_error", generation, str(exc)))
+
+        threading.Thread(target=worker, name="viz-household-profile", daemon=True).start()
+
+    def _render_household_profile(self, household_id, profile) -> None:
         members = "、".join(person_label(member) for member in profile.members) or UNKNOWN
         head = profile.head_name or profile.head_id or UNKNOWN
         lines = [
@@ -647,6 +994,7 @@ class ValeApp:
         lines.extend(f"#{e['id']} · {event_summary(e, self.names)}" for e in profile.recent_events)
         self._set_text(self.household_text, "\n".join(lines))
         self._populate_profile_timeline("household", self.household_timeline, profile.timeline)
+        self._update_stream_status()
 
     def _populate_profile_timeline(self, kind, tree, events) -> None:
         tree.delete(*tree.get_children())
@@ -664,18 +1012,20 @@ class ValeApp:
             self.jump_to_event(self.profile_row_event[kind][selection[0]])
 
     def refresh_focus(self, category) -> None:
+        """全量重建关注点面板（仅在整库加载后调用；运行期走增量追加）。"""
         tree = self.focus_trees[category]
         tree.delete(*tree.get_children())
         self.focus_row_event[category].clear()
+        self._focus_type_rows[category].clear()
         events = focus_events(self.events, category)
         by_type: dict[str, list[dict[str, Any]]] = {}
         for event in events:
             by_type.setdefault(str(event.get("event_type", "")), []).append(event)
-        counts = " · ".join(f"{event_type} {len(items)}" for event_type, items in sorted(by_type.items()))
-        self.focus_count_vars[category].set(f"共 {len(events)} 条" + (f" · {counts}" if counts else ""))
+        self._focus_counts[category] = {event_type: len(items) for event_type, items in by_type.items()}
         for type_index, (event_type, items) in enumerate(sorted(by_type.items())):
             parent = f"{category}:type:{type_index}"
             tree.insert("", "end", iid=parent, text=f"{event_type}（{len(items)}）", values=("", "", ""))
+            self._focus_type_rows[category][event_type] = parent
             for event in items:
                 event_id = int(event["id"])
                 iid = f"{category}:event:{event_id}"
@@ -684,6 +1034,39 @@ class ValeApp:
                     values=(event.get("tick"), event_type, event_summary(event, self.names)), tags=self._event_tags(event),
                 )
                 self.focus_row_event[category][iid] = event_id
+        self._update_focus_counts_label(category)
+
+    def _append_focus_events(self, category, new_events) -> None:
+        """增量追加关注点行，不重建树（保留展开与滚动）。"""
+        tree = self.focus_trees[category]
+        counts = self._focus_counts.setdefault(category, {})
+        type_rows = self._focus_type_rows[category]
+        for event in new_events:
+            if focus_category(event) != category:
+                continue
+            event_type = str(event.get("event_type", ""))
+            counts[event_type] = counts.get(event_type, 0) + 1
+            parent = type_rows.get(event_type)
+            if parent is None or not tree.exists(parent):
+                parent = f"{category}:type:{len(type_rows)}"
+                tree.insert("", "end", iid=parent, text=f"{event_type}（1）", values=("", "", ""))
+                type_rows[event_type] = parent
+            else:
+                tree.item(parent, text=f"{event_type}（{counts[event_type]}）")
+            event_id = int(event["id"])
+            iid = f"{category}:event:{event_id}"
+            tree.insert(
+                parent, "end", iid=iid, text=f"#{event_id}",
+                values=(event.get("tick"), event_type, event_summary(event, self.names)),
+                tags=self._event_tags(event),
+            )
+            self.focus_row_event[category][iid] = event_id
+        self._update_focus_counts_label(category)
+
+    def _update_focus_counts_label(self, category) -> None:
+        counts = self._focus_counts.get(category, {})
+        summary = " · ".join(f"{event_type} {count}" for event_type, count in sorted(counts.items()))
+        self.focus_count_vars[category].set(f"共 {sum(counts.values())} 条" + (f" · {summary}" if summary else ""))
 
     def _on_focus_event(self, category) -> None:
         selection = self.focus_trees[category].selection()
@@ -847,9 +1230,18 @@ class ValeApp:
         if controller is not self.controller or not isinstance(status, dict):
             return
         self.sim_starting = False
+        previous_state = self.sim_state
         self.sim_state = str(status.get("state", self.sim_state))
+        if previous_state in {"running"} and self.sim_state in {"paused", "stopped"} and self._source_is_live_sim():
+            # 暂停/停止时补一次增量刷新，把最后一批写入并入（不等下一秒的轮询）
+            self.load_source(self.source, incremental=True)
         if "current_tick" in status:
-            self.tick_var.set(f"当前 tick：{status['current_tick']}")
+            label = f"当前 tick：{status['current_tick']}"
+            if self.sim_state == "running":
+                rate = status.get("rate")
+                if isinstance(rate, (int, float)) and rate > 0:
+                    label += f" · {rate:g} tick/s"
+            self.tick_var.set(label)
         if status.get("error"):
             self.sim_status_var.set(f"模拟错误：{status['error']}")
         else:

@@ -30,6 +30,7 @@ from vale.modules.climate import ClimateModule  # noqa: E402
 
 _WORLD_ID = "brookvale-town-001"
 _DEFAULT_SPEED = 1.0
+_STATUS_INTERVAL = 0.25  # 全速模式下的状态上报间隔（秒）
 
 
 def _create_db_path() -> str:
@@ -52,6 +53,8 @@ class SimulationWorker:
         self.world: World | None = None
         self.event_log: EventLog | None = None
         self.commands: queue.Queue[tuple[dict[str, Any] | None, str | None]] = queue.Queue()
+        self._status_time: float | None = None
+        self._status_tick: int = 0
 
     def _emit(self, message: dict[str, Any]) -> None:
         self.output.write(json.dumps(message, ensure_ascii=False) + "\n")
@@ -59,12 +62,21 @@ class SimulationWorker:
 
     def _status(self, message_type: str = "status") -> None:
         current_tick = self.world.current_tick if self.world is not None else 0
+        now = time.monotonic()
+        rate = None
+        if self._status_time is not None and current_tick >= self._status_tick:
+            elapsed = now - self._status_time
+            if elapsed > 1e-6:
+                rate = round((current_tick - self._status_tick) / elapsed, 1)
+        self._status_time = now
+        self._status_tick = current_tick
         self._emit({
             "type": message_type,
             "status": "ready" if message_type == "ready" else self.state,
             "state": self.state,
             "current_tick": current_tick,
             "db_path": self.db_path,
+            "rate": rate,
         })
 
     def _error(self, message: str) -> None:
@@ -102,8 +114,8 @@ class SimulationWorker:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("speed 的 seconds 必须是数字")
         seconds = float(value)
-        if not math.isfinite(seconds) or seconds <= 0:
-            raise ValueError("speed 的 seconds 必须是大于 0 的有限秒数")
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError("speed 的 seconds 必须是大于等于 0 的有限秒数（0 表示全速）")
         return seconds
 
     def _serve(self) -> None:
@@ -126,8 +138,12 @@ class SimulationWorker:
         next_tick: float | None = None
         while True:
             timeout = None
-            if self.state == "running" and next_tick is not None:
-                timeout = max(0.0, next_tick - time.monotonic())
+            if self.state == "running":
+                if self.speed > 0:
+                    if next_tick is not None:
+                        timeout = max(0.0, next_tick - time.monotonic())
+                else:
+                    timeout = 0.0  # 全速：不等待，立即推进
             try:
                 command, error = self.commands.get(timeout=timeout)
             except queue.Empty:
@@ -166,14 +182,25 @@ class SimulationWorker:
                 else:
                     self._error(f"未知命令：{action!r}")
 
-            if (
-                self.state == "running"
-                and next_tick is not None
-                and time.monotonic() >= next_tick
-            ):
-                run_tick(self.world)
-                self._status()
-                next_tick = time.monotonic() + self.speed
+            if self.state == "running":
+                if self.speed > 0:
+                    if next_tick is not None and time.monotonic() >= next_tick:
+                        run_tick(self.world)
+                        self._status()
+                        next_tick = time.monotonic() + self.speed
+                else:
+                    # 全速：连续推进，定期上报状态，命令到达即时让出
+                    next_report = time.monotonic() + _STATUS_INTERVAL
+                    while self.state == "running":
+                        run_tick(self.world)
+                        now = time.monotonic()
+                        if now >= next_report:
+                            self._status()
+                            next_report = now + _STATUS_INTERVAL
+                        if not self.commands.empty():
+                            break
+                    if self.state == "running":
+                        self._status()
 
     def run(self) -> None:
         try:
