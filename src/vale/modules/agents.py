@@ -43,7 +43,7 @@ RAIN_WEATHERS = {WeatherType.LIGHT_RAIN, WeatherType.MODERATE_RAIN, WeatherType.
 IMPOSSIBLE = float("-inf")
 
 # 候选动作集合（内容外置：动作→目标节点的映射在 _target_node）
-CANDIDATE_ACTIONS = ["eat", "rest", "farm", "collect_water", "harvest", "borrow_grain", "borrow_food", "weave", "construct"]
+CANDIDATE_ACTIONS = ["eat", "rest", "farm", "collect_water", "harvest", "borrow_grain", "borrow_food", "weave", "construct", "court", "try_for_child"]
 
 
 def age_years(birth_tick: int, tick: int) -> int:
@@ -157,6 +157,13 @@ class Perception:
     fatigue_efficiency: float = 1.0
     water_service_available: bool = True
     weave_available: bool = False
+    # 婚育动作（court / try_for_child）：候选配偶与生育可行性快照。
+    # 决策只依赖 Perception，故把"最近适婚对象"与"当前能否生育"在感知层算好。
+    courtship_target_id: Optional[str] = None
+    courtship_target_name: str = ""
+    courtship_distance: float = 0.0
+    can_conceive: bool = False
+    birth_resource_factor: float = 0.0
 
 
 def select_creditor(
@@ -260,6 +267,9 @@ def _target_node(action: str, agent: AgentState, world, spatial=None) -> str:
         return work_node_of(world, agent)
     if action == "collect_water":
         return "well"
+    if action in ("court", "try_for_child"):
+        # 婚育是"表达意愿"，就地完成；距离只用于评分惩罚，不要求走到对方家。
+        return agent.location or home_node_of(world, agent)
     if action == "borrow_grain":
         return _lender_node(world, agent, spatial)
     if action == "borrow_food":
@@ -368,6 +378,9 @@ class AgentModule:
         # 打猎成功率/受伤的随机源：默认独立 Random（故事流非确定），测试传 seeded 实例保证可复现
         self.rng = rng if rng is not None else random.Random()
         self._daily_task_assignments: dict[str, str] = {}
+        # 当日结亲意向：agent_id -> target_id。日内由 court 动作写入，
+        # 日末 _settle_courtship 结算互为目标的配对后清空。
+        self._courtship_offers: dict[str, str] = {}
 
     # -- 生命周期 ----------------------------------------------------------- #
     def step(self, world) -> None:
@@ -748,6 +761,8 @@ class AgentModule:
             return p.work_node
         if action == "collect_water":
             return "well"
+        if action in ("court", "try_for_child"):
+            return p.agent.location or p.home_node
         if action == "borrow_grain":
             return p.lender_node
         if action == "borrow_food":
@@ -1164,6 +1179,22 @@ class AgentModule:
             max(0.0, float(season_labor_required) - labor_completed)
             if season_labor_required is not None else None
         )
+        # 婚育（court / try_for_child）：把候选配偶与生育可行性在感知层算好，
+        # 决策阶段不再读 WorldState（感知隔离）。
+        courtship_target = (
+            self._find_courtship_target(world, agent, tuning)
+            if self._marriage_eligible(world, agent, tuning) else None
+        )
+        spouse = world.state.agents.get(agent.spouse_id) if agent.spouse_id else None
+        can_conceive = bool(
+            agent.sex == AgentSex.FEMALE
+            and spouse is not None and spouse.alive
+            and spouse.spouse_id == agent.agent_id
+            and self._birth_eligible(world, agent, spouse, tuning)
+        )
+        birth_factor = (
+            self._birth_resource_factor(world, agent, tuning) if can_conceive else 0.0
+        )
         return Perception(
             agent=agent,
             weather=weather,
@@ -1197,6 +1228,14 @@ class AgentModule:
             fatigue_efficiency=fatigue_efficiency(agent, tuning.environment),
             water_service_available=service_capacity_available(world, "well", "collect_water", tuning.environment),
             weave_available=weave_available,
+            courtship_target_id=courtship_target.agent_id if courtship_target else None,
+            courtship_target_name=courtship_target.name if courtship_target else "",
+            courtship_distance=(
+                self._spatial.travel_tu(household.home_node, home_node_of(world, courtship_target))
+                if courtship_target else 0.0
+            ),
+            can_conceive=can_conceive,
+            birth_resource_factor=birth_factor,
         )
 
     # -- 决策（只依赖 Perception + tuning）--------------------------------- #
@@ -1331,6 +1370,10 @@ class AgentModule:
             if need == "food_security":
                 target_days = tuning.utility.food_security_target_days
                 return max(0.0, min(1.0, 1.0 - p.household_food_days / target_days))
+            if need == "family":
+                # 家族延续是持续动机，不随饥饿波动；能否行动由可行性闸（未婚/可生育）控制，
+                # 生育强弱另由 try_for_child 的资源安全度乘子决定。
+                return 1.0
             return 0.0
 
         return self._score(action, p, tuning, weights, urgency)
@@ -1379,6 +1422,14 @@ class AgentModule:
         ):
             return IMPOSSIBLE
         if action == "borrow_grain" and p.household_grain >= bor.borrow_grain_threshold:
+            return IMPOSSIBLE
+        # 婚育：无候选配偶 / 当前不可生育 → 不可行（是否"想"由效用决定）
+        if action == "court" and p.courtship_target_id is None:
+            return IMPOSSIBLE
+        if action == "try_for_child" and not p.can_conceive:
+            return IMPOSSIBLE
+        # 生育粮闸：家庭存粮撑不到配置天数时，agent 主动不生育（内容外置的 [调参] 值）
+        if action == "try_for_child" and p.household_food_days < tuning.birth.min_food_days:
             return IMPOSSIBLE
         if action == "construct" and (
             p.construction_project_id is None or not p.construction_target_node
@@ -1449,6 +1500,13 @@ class AgentModule:
 
         if action == "weave":
             gross *= p.production_efficiency
+
+        if action == "try_for_child":
+            # 生育意愿随家庭资源安全度连续下降：缺粮/缺水时 agent 主动放弃生育。
+            # 负反馈内建在效用里，不再依赖系统按 resource_factor 抽签兜底。
+            gross *= max(0.0, 1.0 - urgency("food_security")) * p.birth_resource_factor
+            if gross <= 0.0:
+                return IMPOSSIBLE
 
         # 减去体力惩罚（归一化到与 gross 同量级）与距离惩罚
         stamina_penalty = total_stamina_cost / util.stamina_score_divisor
@@ -1714,6 +1772,10 @@ class AgentModule:
         elif action == "collect_water":
             # 任务30：生活用水最小切片——每次打水按配置产水（无上限，日耗在结算扣减）
             household.water = round(household.water + tuning.water.collect_amount, 2)
+        elif action == "court":
+            self._execute_court(world, agent, p, tuning)
+        elif action == "try_for_child":
+            self._execute_try_for_child(world, agent, p, tuning)
 
         field_growth_after = fg.get(work_node, 0.0)
 
@@ -1776,6 +1838,40 @@ class AgentModule:
                 "weather": p.weather.value,
             },
         )
+
+    # -- 婚育动作（court / try_for_child）----------------------------------- #
+    def _execute_court(self, world, agent: AgentState, p: Perception,
+                       tuning: AgentTuning) -> None:
+        """登记当日结亲意向；双向互选在日末 _settle_courtship 结算。"""
+        target_id = p.courtship_target_id
+        if not target_id:
+            return
+        self._courtship_offers[agent.agent_id] = target_id
+        world.event_log.append(
+            world.current_tick,
+            "courtship_offer",
+            {
+                "agent_id": agent.agent_id,
+                "agent_name": agent.name,
+                "target_id": target_id,
+                "target_name": p.courtship_target_name,
+                "distance_tu": round(p.courtship_distance, 3),
+            },
+        )
+
+    def _execute_try_for_child(self, world, agent: AgentState, p: Perception,
+                               tuning: AgentTuning) -> None:
+        """女方主动求子；是否怀上仍由 chance_per_day × 资源系数决定（生理不确定）。"""
+        father = world.state.agents.get(agent.spouse_id or "")
+        if father is None or not father.alive:
+            raise ValueError("try_for_child selected without a living spouse")
+        b = tuning.birth
+        boost = self._fertility_boost(world, tuning)
+        chance = min(1.0, b.chance_per_day * boost * p.birth_resource_factor)
+        if self.rng.random() >= chance:
+            return
+        self._give_birth(world, agent, father, tuning,
+                         resource_factor=p.birth_resource_factor)
 
     # -- 采集类动作（打猎 / 未来捕鱼，通用分支，不写死动作名）---------------- #
     def _execute_gather(self, world, agent, action, p: Perception, tuning) -> None:
@@ -2149,7 +2245,9 @@ class AgentModule:
             )
 
         try:
-            self._settle_marriage(world, tuning)
+            # 婚配与生育已下沉为 court / try_for_child 动作；日末只结算"双向互选"的结亲意向，
+            # 不再做系统贪心配对或概率抽签。
+            self._settle_courtship(world, tuning)
         except Exception as exc:  # noqa: BLE001
             world.event_log.append(
                 world.current_tick,
@@ -2157,22 +2255,7 @@ class AgentModule:
                 {
                     "agent_id": "_marriage",
                     "agent_name": "婚配",
-                    "phase": "marriage_settlement",
-                    "error": repr(exc),
-                    "traceback": traceback.format_exc(limit=2),
-                },
-            )
-
-        try:
-            self._settle_birth(world, tuning)
-        except Exception as exc:  # noqa: BLE001
-            world.event_log.append(
-                world.current_tick,
-                "agent_error",
-                {
-                    "agent_id": "_birth",
-                    "agent_name": "生育",
-                    "phase": "birth_settlement",
+                    "phase": "courtship_settlement",
                     "error": repr(exc),
                     "traceback": traceback.format_exc(limit=2),
                 },
@@ -2990,7 +3073,7 @@ class AgentModule:
                             "creditor_household_id": heir_hh.household_id,
                             "debtor_household_id": other.household_id,
                             "amount": round(rec.amount, 2),
-                            "resource": resource,
+                            "resource": rec.resource,
                             "due_tick": rec.due_tick,
                         },
                     )
@@ -3050,6 +3133,34 @@ class AgentModule:
             return True
         return False
 
+    def _find_courtship_target(self, world, agent: AgentState,
+                               tuning: AgentTuning) -> Optional[AgentState]:
+        """为未婚者选"最近且合格"的婚配候选（感知层）。
+
+        排序键 (家距, agent_id) 对称且确定：双方各自独立选择时，互为最近的
+        配对天然互指，构成 court「双向互选」的基础；无法互指者即单相思、落空。
+        """
+        m = tuning.marriage
+        if self._spatial is None:
+            return None
+        home = home_node_of(world, agent)
+        best: Optional[tuple[float, str, AgentState]] = None
+        for other in living_agents(world.state.agents):
+            if other.agent_id == agent.agent_id:
+                continue
+            if not m.allow_same_sex and other.sex == agent.sex:
+                continue
+            if not self._marriage_eligible(world, other, tuning):
+                continue
+            if m.forbid_close_kin and self._is_close_kin(agent, other):
+                continue
+            dist = self._spatial.travel_tu(home, home_node_of(world, other))
+            if math.isinf(dist) or dist > m.max_distance_tu:
+                continue
+            if best is None or (dist, other.agent_id) < best[:2]:
+                best = (dist, other.agent_id, other)
+        return best[2] if best else None
+
     def _settle_marriage(self, world, tuning: AgentTuning) -> None:
         """确定性贪心配对；候选必须互相 known，且不依赖有限长度的近期记忆 buffer。"""
         m = tuning.marriage
@@ -3074,14 +3185,17 @@ class AgentModule:
                     continue
                 if m.forbid_close_kin and self._is_close_kin(a, b):
                     continue
-                view_ab, view_ba = self._marriage_acquaintance_views(world, a, b, tuning)
-                if not view_ab["known"] or not view_ba["known"]:
-                    continue
                 dist = self._spatial.travel_tu(
                     home_node_of(world, a), home_node_of(world, b)
                 )
                 if math.isinf(dist) or dist > m.max_distance_tu:
                     continue
+                view_ab, view_ba = self._marriage_acquaintance_views(world, a, b, tuning)
+                if not view_ab["known"] or not view_ba["known"]:
+                    # 同镇通婚：单镇世界无外部婚源，认知边缺失但家距在婚配半径内的
+                    # 适婚者亦可成婚；事件如实记录 known=False（level=same_town）
+                    view_ab = {"level": "same_town", "known": False}
+                    view_ba = {"level": "same_town", "known": False}
                 candidates.append((dist, a.agent_id, b.agent_id, a, b))
         candidates.sort(key=lambda x: (x[0], x[1], x[2]))
 
@@ -3092,52 +3206,97 @@ class AgentModule:
             wife, husband = (a, b) if a.sex == AgentSex.FEMALE else (b, a)
             if not self._can_move_wife(world, wife, husband):
                 continue
-            source_household_id = wife.household_id
-            target_household_id = husband.household_id
             view_ab, view_ba = self._marriage_acquaintance_views(world, a, b, tuning)
             married.update((a.agent_id, b.agent_id))
-            a.spouse_id, b.spouse_id = b.agent_id, a.agent_id
-            a.married_tick = b.married_tick = world.current_tick
-            world.event_log.append(
-                world.current_tick,
-                "agent_married",
-                {
-                    "agent_id": a.agent_id,
-                    "agent_name": a.name,
-                    "spouse_id": b.agent_id,
-                    "spouse_name": b.name,
-                    "household_id": target_household_id,
-                    "source_household_id": source_household_id,
-                    "distance_tu": round(dist, 3),
-                    "acquaintance": {
-                        f"{a.agent_id}_to_{b.agent_id}": {
-                            "level": view_ab["level"],
-                            "known": view_ab["known"],
-                        },
-                        f"{b.agent_id}_to_{a.agent_id}": {
-                            "level": view_ba["level"],
-                            "known": view_ba["known"],
-                        },
+            self._finalize_marriage(world, a, b, dist, view_ab, view_ba, tuning)
+
+    def _finalize_marriage(self, world, a: AgentState, b: AgentState, dist: float,
+                           view_ab: dict, view_ba: dict, tuning: AgentTuning) -> None:
+        """成婚结算：一份逻辑，供 _settle_marriage（测试入口）与 court 意向结算复用。
+
+        同户男女（如开局双人户）成婚时不迁移、不转移资产；异户按从夫居迁移并结算彩礼/陪嫁。
+        """
+        m = tuning.marriage
+        wife, husband = (a, b) if a.sex == AgentSex.FEMALE else (b, a)
+        source_household_id = wife.household_id
+        target_household_id = husband.household_id
+        a.spouse_id, b.spouse_id = b.agent_id, a.agent_id
+        a.married_tick = b.married_tick = world.current_tick
+        world.event_log.append(
+            world.current_tick,
+            "agent_married",
+            {
+                "agent_id": a.agent_id,
+                "agent_name": a.name,
+                "spouse_id": b.agent_id,
+                "spouse_name": b.name,
+                "household_id": target_household_id,
+                "source_household_id": source_household_id,
+                "distance_tu": round(dist, 3),
+                "acquaintance": {
+                    f"{a.agent_id}_to_{b.agent_id}": {
+                        "level": view_ab["level"],
+                        "known": view_ab["known"],
                     },
-                    "participants": [
-                        {"id": a.agent_id, "name": a.name},
-                        {"id": b.agent_id, "name": b.name},
-                    ],
+                    f"{b.agent_id}_to_{a.agent_id}": {
+                        "level": view_ba["level"],
+                        "known": view_ba["known"],
+                    },
                 },
-            )
-            # 只迁移女方本人；既有子女、原家庭资产和债务均留在原家庭。
-            self._move_wife_to_husband_household(world, wife, husband)
-            target = household_of(world, husband)
-            source = world.state.households[source_household_id]
-            self._transfer_marriage_assets(
-                world, target, source, m.bride_price_surplus_ratio,
-                transfer_type="bride_price", wife=wife, husband=husband, tuning=tuning,
-            )
-            # 陪嫁默认不发生；只有配置明确选择正比例时才从女方原家庭独立转移。
-            self._transfer_marriage_assets(
-                world, source, target, m.dowry_surplus_ratio,
-                transfer_type="dowry", wife=wife, husband=husband, tuning=tuning,
-            )
+                "participants": [
+                    {"id": a.agent_id, "name": a.name},
+                    {"id": b.agent_id, "name": b.name},
+                ],
+            },
+        )
+        if source_household_id == target_household_id:
+            return  # 同户成婚：无迁移、无资产转移
+        # 只迁移女方本人；既有子女、原家庭资产和债务均留在原家庭。
+        self._move_wife_to_husband_household(world, wife, husband)
+        target = household_of(world, husband)
+        source = world.state.households[source_household_id]
+        self._transfer_marriage_assets(
+            world, target, source, m.bride_price_surplus_ratio,
+            transfer_type="bride_price", wife=wife, husband=husband, tuning=tuning,
+        )
+        # 陪嫁默认不发生；只有配置明确选择正比例时才从女方原家庭独立转移。
+        self._transfer_marriage_assets(
+            world, source, target, m.dowry_surplus_ratio,
+            transfer_type="dowry", wife=wife, husband=husband, tuning=tuning,
+        )
+
+    def _settle_courtship(self, world, tuning: AgentTuning) -> None:
+        """日末结算当日结亲意向：互为目标的配对成婚（双向互选）。
+
+        意向由 court 动作在日内写入；系统只负责把"双方都选了我"的配对落实，
+        不做任何贪心配对。单相思（对方未同时选我）当日落空，次日可再选。
+        """
+        offers = self._courtship_offers
+        m = tuning.marriage
+        settled: set[str] = set()
+        for a_id in sorted(offers):
+            if a_id in settled:
+                continue
+            b_id = offers[a_id]
+            if offers.get(b_id) != a_id:
+                continue
+            a = world.state.agents.get(a_id)
+            b = world.state.agents.get(b_id)
+            if a is None or b is None or not a.alive or not b.alive:
+                continue
+            if not self._marriage_eligible(world, a, tuning):
+                continue
+            if not self._marriage_eligible(world, b, tuning):
+                continue
+            if m.forbid_close_kin and self._is_close_kin(a, b):
+                continue
+            dist = self._spatial.travel_tu(home_node_of(world, a), home_node_of(world, b))
+            if math.isinf(dist) or dist > m.max_distance_tu:
+                continue
+            view_ab, view_ba = self._marriage_acquaintance_views(world, a, b, tuning)
+            settled.update((a_id, b_id))
+            self._finalize_marriage(world, a, b, dist, view_ab, view_ba, tuning)
+        offers.clear()
 
     def _can_move_wife(self, world, wife: AgentState, husband: AgentState) -> bool:
         """婚姻家庭迁移只要求双方属于不同家庭，不设成员容量或原家庭成年成员限制。"""
@@ -3699,6 +3858,56 @@ class AgentModule:
             )
         household.debts = []
 
+    @staticmethod
+    def _household_foodless(household: HouseholdState) -> bool:
+        """全家无任何可食物资（含债务标的物），用于断粮坏账核销判定。"""
+        return (
+            household.grain <= 0
+            and household.fish <= 0
+            and household.meat <= 0
+            and household.vegetable <= 0
+        )
+
+    def _forgive_one_debt(self, world, household: HouseholdState, rec, *, cause: str) -> None:
+        """核销单笔债务：写 debt_forgiven（可追溯，不静默消失），从列表移除。
+
+        守恒说明与 _forgive_debts 相同：账面坏账核销，债权家庭承担损失，
+        世界总粮不变，世界总债减少并由事件完整记录。
+        """
+        creditor_hh = world.state.households.get(rec.creditor_household_id)
+        creditor_head = (
+            world.state.agents.get(creditor_hh.head_id or "") if creditor_hh is not None else None
+        )
+        creditor_name = (
+            creditor_head.name if creditor_head is not None else rec.creditor_household_id
+        )
+        creditor_agent_id = (
+            creditor_head.agent_id if creditor_head is not None else rec.creditor_household_id
+        )
+        debtor_head = world.state.agents.get(household.head_id or "")
+        debtor_name = (
+            debtor_head.name if debtor_head is not None
+            else (household.head_id or household.household_id)
+        )
+        world.event_log.append(
+            world.current_tick,
+            "debt_forgiven",
+            {
+                "creditor_id": creditor_agent_id,
+                "creditor_name": creditor_name,
+                "creditor_household_id": rec.creditor_household_id,
+                "debtor_id": (household.head_id or household.household_id),
+                "debtor_name": debtor_name,
+                "debtor_household_id": household.household_id,
+                "household_id": household.household_id,
+                "amount": round(rec.amount, 2),
+                "resource": getattr(rec, "resource", "grain") or "grain",
+                "cause": cause,
+            },
+        )
+        if rec in household.debts:
+            household.debts.remove(rec)
+
     def _collect_debts(self, world, agent: AgentState, tuning: AgentTuning) -> None:
         """到期债务催收，区分「违约状态变更」与「催收尝试」（任务10，降低叙事噪声）。
 
@@ -3780,6 +3989,10 @@ class AgentModule:
                         "overdue_ticks": tick - rec.due_tick,
                     },
                 )
+                if tuning.debt.write_off_unpayable and self._household_foodless(household):
+                    # 断粮户坏账核销：逾期标记会永久锁死借粮/借食/赊账救济渠道，
+                    # 家庭无粮可还时当场核销该笔（debt_forgiven 可追溯），有粮户不受影响
+                    self._forgive_one_debt(world, household, rec, cause="断粮坏账核销")
             else:
                 # 已逾期的重复催收失败：写催收尝试（可重复，语义明确），不刷违约
                 world.event_log.append(

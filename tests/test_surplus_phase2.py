@@ -219,25 +219,32 @@ def test_c_east_field_is_worked_within_1800_ticks():
 # A：田产公式化（crops.md §4.5）
 # --------------------------------------------------------------------------- #
 def test_a_expected_yield_equals_legacy_values(world):
-    """初始值下公式产出 = 既有固定产出 × moisture（任务30 起 moisture 由灌溉档派生）。"""
+    """公式产出 = base_yield(config) × moisture（任务30 起 moisture 由灌溉档派生）。"""
     tuning = world.config.agents.tuning
     moisture = _moisture(world)
-    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(75.0 * moisture)
-    assert expected_yield(world, "east_field", "grain", tuning) == pytest.approx(75.0 * moisture)
-    assert expected_yield(world, "west_field", "vegetable", tuning) == pytest.approx(55.0 * moisture)
+    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(
+        tuning.agriculture.base_yield["grain"] * moisture
+    )
+    assert expected_yield(world, "east_field", "grain", tuning) == pytest.approx(
+        tuning.agriculture.base_yield["grain"] * moisture
+    )
+    assert expected_yield(world, "west_field", "vegetable", tuning) == pytest.approx(
+        tuning.agriculture.base_yield["vegetable"] * moisture
+    )
 
 
 def test_a_area_and_fertility_scale_yield(world):
     """area 取自 spatial 节点、fertility 取自 WorldState，均为乘数。"""
     tuning = world.config.agents.tuning
     moisture = _moisture(world)
+    base = tuning.agriculture.base_yield["grain"]
     node = next(n for n in world.config.spatial.nodes if n.id == "south_field")
     node.area = 2.0
-    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(150.0 * moisture)
+    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(base * 2.0 * moisture)
     node.area = 1.0
 
     world.state.field_fertility["south_field"] = 0.5
-    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(37.5 * moisture)
+    assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(base * 0.5 * moisture)
 
 
 def test_a_harvest_uses_formula_and_conserves(world):
@@ -253,16 +260,18 @@ def test_a_harvest_uses_formula_and_conserves(world):
     mod._execute(world, lin, "harvest", mod._perceive(world, lin), tuning)  # noqa: SLF001
 
     gain = expected_yield(world, "west_field", "vegetable", tuning)
-    assert gain == pytest.approx(55.0 * _moisture(world))
+    assert gain == pytest.approx(tuning.agriculture.base_yield["vegetable"] * _moisture(world))
     assert hh(world, lin).vegetable == pytest.approx(vegetable_before + gain)
     assert hh(world, lin).grain == pytest.approx(grain_before)
     payload = world.event_log.by_type("agent_action_taken")[-1]["payload"]
     assert payload["crop"] == "vegetable"
-    assert payload["base_yield"] == pytest.approx(55.0)
+    assert payload["base_yield"] == pytest.approx(tuning.agriculture.base_yield["vegetable"])
     assert payload["field_area"] == pytest.approx(1.0)
     assert payload["field_fertility"] == pytest.approx(1.0)
     assert payload["moisture"] == pytest.approx(_moisture(world))
-    assert payload["expected_yield"] == pytest.approx(55.0 * _moisture(world))
+    assert payload["expected_yield"] == pytest.approx(
+        tuning.agriculture.base_yield["vegetable"] * _moisture(world)
+    )
 
 
 # --------------------------------------------------------------------------- #

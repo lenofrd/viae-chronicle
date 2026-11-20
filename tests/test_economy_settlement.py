@@ -42,6 +42,7 @@ def world():
     for m in w.modules:
         if m.name == "agents":
             m._settle_marriage = lambda *a, **k: None  # noqa: SLF001
+            m._settle_courtship = lambda *a, **k: None  # noqa: SLF001 婚配已下沉为 court 动作
     return w
 
 
@@ -325,12 +326,14 @@ def test_collection_partial_marks_overdue(world):
 
 
 def test_collection_defaulted_when_no_grain(world):
+    """有其他存粮但无债务标的物 → 违约逾期保留，不核销（防「有粮赖账」）。"""
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
     li = world.state.agents["li_quan"]
     hh(world, lin).grain = 0.0
+    hh(world, lin).fish = 5.0  # 尚有其他可食物资，不属于断粮
     hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=10.0,
                             originated_tick=0, due_tick=90)]
     li_before = hh(world, li).grain
@@ -342,6 +345,53 @@ def test_collection_defaulted_when_no_grain(world):
     assert hh(world, lin).debts[0].overdue is True
     ev = world.event_log.by_type("debt_defaulted")[-1]
     assert ev["payload"]["amount"] == pytest.approx(10.0)
+    assert world.event_log.by_type("debt_forgiven") == []
+
+
+def test_collection_foodless_debt_written_off(world):
+    """到期分文未还且全家无任何可食物资 → 违约后当场核销（debt_forgiven），救济渠道不再被逾期锁死。"""
+    run_tick(world)
+    module = _module(world)
+    tuning = world.config.agents.tuning
+    lin = world.state.agents["lin_yuan"]
+    li = world.state.agents["li_quan"]
+    debtor = hh(world, lin)
+    for resource in ("grain", "fish", "meat", "vegetable"):
+        setattr(debtor, resource, 0.0)
+    debtor.debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=10.0,
+                     originated_tick=0, due_tick=90)]
+    world.current_tick = 90
+    module._collect_debts(world, lin, tuning)  # noqa: SLF001
+
+    assert world.event_log.by_type("debt_defaulted"), "违约事件仍须记录"
+    forgiven = world.event_log.by_type("debt_forgiven")
+    assert forgiven, "断粮坏账应核销"
+    assert forgiven[-1]["payload"]["cause"] == "断粮坏账核销"
+    assert forgiven[-1]["payload"]["amount"] == pytest.approx(10.0)
+    assert debtor.debts == []
+    assert debtor.debt == pytest.approx(0.0)
+
+    rebuilt = rebuild_state(world.event_log.all(), world.config).state
+    assert rebuilt.households["hh_lin_yuan"].debts == []
+
+
+def test_collection_foodless_write_off_disabled_keeps_debt(world):
+    """write_off_unpayable=False 时维持旧语义：断粮仅违约，债务保留。"""
+    run_tick(world)
+    module = _module(world)
+    tuning = world.config.agents.tuning
+    tuning.debt.write_off_unpayable = False
+    lin = world.state.agents["lin_yuan"]
+    debtor = hh(world, lin)
+    for resource in ("grain", "fish", "meat", "vegetable"):
+        setattr(debtor, resource, 0.0)
+    debtor.debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=10.0,
+                     originated_tick=0, due_tick=90)]
+    world.current_tick = 90
+    module._collect_debts(world, lin, tuning)  # noqa: SLF001
+
+    assert world.event_log.by_type("debt_forgiven") == []
+    assert debtor.debts[0].overdue is True
 
 
 def test_collection_interval_throttles_repeated_attempts(world):
@@ -422,15 +472,15 @@ def test_health_no_recovery_when_hunger_high(world):
     tuning = world.config.agents.tuning
     lin = world.state.agents["lin_yuan"]
     lin.health = 50.0
-    lin.hunger = 50.0   # ≥ 阈值 40
+    lin.hunger = 50.0   # ≥ 旧阈值 40、< 新阈值 60：新调参下允许回血 0.5
     lin.stamina = 60.0
     world.current_tick = 5
     before_events = len(world.event_log.by_type("health_recovered"))
 
     module._recover_health(world, lin, tuning)  # noqa: SLF001
 
-    assert lin.health == pytest.approx(50.0)
-    assert len(world.event_log.by_type("health_recovered")) == before_events
+    assert lin.health == pytest.approx(50.5)  # hunger 50 < 阈值 60，回血 0.5
+    assert len(world.event_log.by_type("health_recovered")) == before_events + 1
 
 
 def test_health_recovery_capped_at_100(world):

@@ -131,6 +131,11 @@ class DebtTuning(BaseModel):
 
     due_days: int = Field(90, ge=1, description="借粮后多少天到期（1 tick = 1 天）")
     collection_interval_days: int = Field(30, ge=1, description="到期后每隔多少天催收一次")
+    write_off_unpayable: bool = Field(
+        True,
+        description="到期分文未还且全家无任何可食物资时核销该笔坏账（debt_forgiven），"
+        "避免断粮户被逾期标记永久锁死救济渠道；有粮户不受影响，仍走催收会话/强制扣粮",
+    )
     # 秋收还款上限复用 AgricultureTuning.harvest_debt_repayment（已批准参数），避免双源
 
 
@@ -299,6 +304,10 @@ class BirthTuning(BaseModel):
     chance_per_day: float = Field(0.02, ge=0, le=1)
     low_population_adults: int = Field(2, ge=0)
     low_population_fertility_boost: float = Field(2.0, ge=1)
+    min_food_days: float = Field(
+        0.0, ge=0,
+        description="求子前家庭食物需覆盖的天数下限；不足时 agent 不选 try_for_child（0=不设闸）",
+    )
     male_ratio: float = Field(0.5, ge=0, le=1)
     newborn_health_parent_ratio: float = Field(0.8, ge=0)
     newborn_stamina_parent_ratio: float = Field(0.8, ge=0)

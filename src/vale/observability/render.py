@@ -343,6 +343,14 @@ def _render_agent_aged(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
+def _render_courtship_offer(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    target = payload.get("target_name") or payload.get("target_id") or "?"
+    text = f"[{name}] 向 [{target}] 表达结亲意愿"
+    degraded = not all(k in payload for k in ("agent_id", "target_id"))
+    return text, degraded
+
+
 def _render_agent_married(payload: dict) -> tuple[str, bool]:
     name = payload.get("agent_name") or payload.get("agent_id") or "?"
     spouse = payload.get("spouse_name") or payload.get("spouse_id") or "?"
@@ -891,6 +899,9 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
             reason = "missing_cold_field" if degraded else None
         elif event_type == "agent_aged":
             text, degraded = _render_agent_aged(payload)
+            reason = "missing_life_field" if degraded else None
+        elif event_type == "courtship_offer":
+            text, degraded = _render_courtship_offer(payload)
             reason = "missing_life_field" if degraded else None
         elif event_type == "agent_married":
             text, degraded = _render_agent_married(payload)

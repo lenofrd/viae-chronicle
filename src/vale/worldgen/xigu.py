@@ -638,7 +638,9 @@ def build_xigu_agents_config(
                 home_node=home.id,
                 work_node=work_node,
                 assets=AgentAssets(
-                    grain=round(rng.uniform(5, 12), 2) if first_member else 0.0,
+                    # 开局口粮 50–70 石：覆盖全镇约 180 天到首个秋收（tick 181+），
+                    # 消除第一年春荒死潮 [调参][临时值，待长期方案复核]
+                    grain=round(rng.uniform(50, 70), 2) if first_member else 0.0,
                     coin=round(rng.uniform(1, 6), 2) if first_member else 0.0,
                     vegetable=round(rng.uniform(0, 2), 2) if first_member else 0.0,
                     cloth=round(rng.uniform(0, 2), 2) if first_member else 0.0,

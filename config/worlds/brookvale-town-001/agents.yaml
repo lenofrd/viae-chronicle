@@ -55,7 +55,7 @@ tuning:
     initial_fatigue: 0                  # A6：开局疲劳
 
   utility:
-    need_weights: { survival: 3.0, stamina: 2.0, economy: 1.5, food_security: 3.0, safety: 0.0, social: 0.0 }  # [调参] 公式改为 weight×urgency×fulfill 后重平衡的权重
+    need_weights: { survival: 3.0, stamina: 2.0, economy: 1.5, food_security: 3.0, safety: 0.0, social: 0.0, family: 1.2 }  # [调参] family=未婚结亲/生育的持续动机；courtship 与 try_for_child 由它驱动
     economy_urgency_grain_zero: 1.0     # B2：断粮时经济紧缺度
     economy_urgency_grain_positive: 1.0 # [调参] 耕作始终有产出价值，故有粮时经济紧缺度也取 1.0（原 0.2/0.3）
     food_security_target_days: 12.0
@@ -74,6 +74,10 @@ tuning:
       harvest: { economy: 4.0, food_security: 1.0 }         # 秋收：高经济满足，仅秋季且长势达标可行
       borrow_grain: { survival: 0.8 }
       borrow_food: { survival: 0.7 }   # 无粮可借时向有余食家庭借入
+      # 婚育动作：由 family 需求驱动。court 仅在未婚且有候选时可行；
+      # try_for_child 仅育龄女方、在生育闸内可行，效用另乘家庭资源安全度。
+      court: { family: 1.0 }
+      try_for_child: { family: 1.0 }
       # 采集类 survival 满足必须 < eat(1.0)：有粮时饥饿应驱动 eat 而非外出采集；
       # 采集由 economy（囤粮）+ 无粮时的生存紧缺驱动。survival 仅用于让"断粮饥饿"压过 rest。
       # 打猎是「远途远征」：只在饱腹+田地封顶的农闲窗口出猎（economy 驱动），绝不能在饥饿时压过 eat，
@@ -95,13 +99,15 @@ tuning:
       weave: 2                          # [调参] 织布（室内轻活）
       collect_water: 1                  # [调参] 打水（轻活；任务30 已接产水）
       borrow_grain: 1                   # [调参] 借粮交涉
+      court: 1                          # [调参] 结亲（就地表达意愿，无往返）
+      try_for_child: 1                  # [调参] 求子（轻活）
       borrow_food: 1                    # 邻户借入鱼/肉/蔬菜
     heavy_actions: [farm, harvest, hunt]        # 004：重活名单（体力按速率结算）
     heavy_stamina_per_tu: 25            # 004 裁决：重活 4 TU 归零（25 × 4 = 100）
     outdoor: [farm, collect_water, harvest, hunt, fish]  # 任务10：捕鱼为户外，受雨天影响
 
   water:                                # 唯一饮用水源为公共水井；河流不自动视为饮用水
-    collect_amount: 12                  # 每次取水并带回家庭的水量
+    collect_amount: 24                  # [调参][临时值] 每次取水并带回家庭的水量（12→24：大户单劳力日耗≈人数，12 时劳力须每日打水，断粮虚弱期打水断供全家断饮；24 降为隔日家务，待长期方案复核）
     daily_consumption_per_member: 1     # 每名存活成员每日饮水需求
     water_per_meal: 0.5                 # 每次进食烹饪/佐餐耗水；水不足则不能进食
     household_stock_target: 5           # 常态家庭存水目标
@@ -115,7 +121,7 @@ tuning:
     harvest_growth_threshold: 80        # 秋收前提：长势 ≥ 80
     field_labor_per_farm: 4
     field_labor_required_by_season: {spring: 80, summer: 80, autumn: 0, winter: 0}  # 春夏各 20 次 farm；秋冬不再整地
-    base_yield: { grain: 75, vegetable: 55 }  # [调参] 阶段二：crop_gain 更名 base_yield（crops.md §4.5）。area=1/fertility=1/moisture=1/growth_health=1/disaster=0，产出与旧值逐项相等；提产留阶段三
+    base_yield: { grain: 155, vegetable: 110 }  # [调参][临时值] 阶段二：crop_gain 更名 base_yield（crops.md §4.5）。75/55→105/75→155/110：2 年基线（seed 20261118）显示秋收产出只够约 52 人吃半年，第 2 年春荒必崩且崩后劳力不足无法恢复；再 +48% 把承载力抬到约 76 人，待长期方案复核
     harvest_debt_repayment: 10          # [调参] 秋收偿还债务（石）——"偿还部分"未给具体值，暂取 10，待确认
 
   borrow:                               # 04-03 新增：借粮生存（第一版极简）
@@ -127,12 +133,13 @@ tuning:
 
   debt:                                 # 任务08 新增：债务到期与催收节奏
     due_days: 180                       # 任务10 复核：保留 180 = 有意使到期跨越秋收窗口（秋收 tick181+），借款人有机会秋收后还款；非临时平衡
-    collection_interval_days: 30        # [调参] 到期后每 30 天催收一次
+    collection_interval_days: 7         # [调参][临时值] 到期后催收/核销检查间隔（30→7：40 年诊断显示断粮户死亡窗口约 9–16 天（饥饿 4 天触顶 + 健康 5 天归零 + 失能宽限 7 天），月度检查使断粮坏账核销来不及解锁救济；待长期方案复核）
+    write_off_unpayable: true           # [调参] 到期分文未还且全家无粮时核销该笔坏账（debt_forgiven），防逾期锁死救济渠道
     # 秋收还款上限复用 agriculture.harvest_debt_repayment(=10)；长势封顶复用 max_field_growth(=100)
 
   health:                               # 任务08 新增：健康回血
     health_recovery_per_day: 0.5        # [调参] 每日回血速率
-    health_recovery_hunger_threshold: 40  # [调参] 饥饿低于此值才回血
+    health_recovery_hunger_threshold: 60  # [调参][临时值] 饥饿低于此值才回血（40→60：镇民每 4 天一餐、饥饿长期 40+，旧阈值使健康永不回升、婚育闸门恒闭，待长期方案复核）
     health_recovery_stamina_threshold: 50 # [调参] 体力高于此值才回血
 
   death:                                # 任务10 新增：死亡与失能生命周期
@@ -167,7 +174,7 @@ tuning:
     market_node: market                 # 集市空地（spatial-units.yaml 已补 0.6 TU 距离）
     market_day_interval: 10             # [调参] 每 10 天一次，一年 36 次
     market_day_offset: 0                # [调参] tick % 10 == 0 为集市日
-    market_min_stamina: 15              # [调参] 扣完往返赶路体力后仍需保留的门槛，低于则不去
+    market_min_stamina: 6               # [调参][临时值] 扣完往返赶路体力后仍需保留的门槛（15→6：断粮垂弱者也要能走到集市赊济，待长期方案复核）
     market_max_distance_tu: 6.0         # [调参] 单程上限：排除深山/远山，全镇四区均在范围内
     trade_values: { grain: 1.0, vegetable: 1.2, meat: 2.0, fish: 1.5, cloth: 3.0 }  # [调参] 相对价值
     surplus_threshold: { grain: 20, vegetable: 10, meat: 10, fish: 10, cloth: 5 }   # [调参] 富余：只卖超出部分
@@ -178,10 +185,10 @@ tuning:
     credit:                             # 任务15 阶段二新增：集市赊账（零利息，当期交粮、到期还粮）
       enabled: true                     # 开启切片
       eligible_items: [fish, grain, meat, vegetable]           # 首切片只允许粮
-      max_per_household: 30             # [调参] 单户未清偿赊账上限（约家庭年需求 1/10，防雪球）
-      due_days: 60                      # [调参] 一季，秋后还
-      min_surplus: 10                   # [调参] 卖方至少余 10 才赊
-      min_shortage: 5                    # [调参] 买方存粮 < 5 才赊入（须 < min_surplus）
+      max_per_household: 60             # [调参][临时值] 单户未清偿赊账上限（30→180→60：180 等于给多孩户长期输血，粮从富户搬去养孩子，收回为 60——约一名成人 240 天口粮，够渡一次荒、不够长期养娃，待长期方案复核）
+      due_days: 150                     # [调参][临时值] 赊账到期天数（60→300→150：300 天使 8 年仅 3 次到期窗口，"逾期不新增"的防雪球闸失效、赊账可无限滚动；收回为 150，兼顾跨一个生长季与防雪球，待长期方案复核）
+      min_surplus: 45                   # [调参] 卖方至少余 45 才赊（须 > min_shortage）
+      min_shortage: 30                   # [调参] 买方存粮 < 30 才赊入且按缺口补足（提高每次赊入缓冲，渡荒用）
 
   conflict:                             # 任务15 阶段二新增：债务纠纷（只做机制，不调参）
     debt_dispute:                       # 「有粮赖账」时的 2 轮私下催收；断粮走强制扣粮
@@ -215,8 +222,8 @@ tuning:
 
   marriage:                             # 任务12 新增：婚配资格
     min_age: 16                         # [调参]
-    min_health: 50                      # [调参]
-    max_distance_tu: 3.0                # [调参] 家到家的单程上限
+    min_health: 40                      # [调参][临时值] 50→40：口粮节奏压低全镇健康均衡带（30–49），50 门槛使婚配恒闭，待长期方案复核
+    max_distance_tu: 6.0                # [调参][临时值] 3.0→6.0：镇子半径 ~4.5 TU，3.0 上限使开局同居对之外无任何新婚配，婚育链条断裂，待长期方案复核
     allow_same_sex: false
     remarriage_allowed: true            # D5：允许鳏寡再婚
     forbid_close_kin: true              # D15：禁止亲子/同父/同母婚配
@@ -228,11 +235,12 @@ tuning:
     min_age_female: 16                  # [调参]
     max_age_female: 45                  # [调参]
     max_age_male: 60                    # [调参]
-    min_health: 50                      # [调参]
-    interval_days: 360                  # [调参] D6：裁决 540→360
-    chance_per_day: 0.02                # [调参] D6：每对配偶每日生育概率
+    min_health: 40                      # [调参][临时值] 50→40：与婚配门槛同步，防健康均衡带压死生育，待长期方案复核
+    interval_days: 300                  # [调参][临时值] D6 裁决 540→360，再 360→240：240 使 8 年大户膨胀到 12 人（10 个 0–6 岁幼童），单劳力抚养比爆炸且分家机制（丈夫须非户主）对开局户主户失效，崩塌户即此类大户；300 放缓大户膨胀并保留二代同期群规模，待长期方案复核
+    chance_per_day: 0.02                # [调参][临时值] D6 0.02→0.03 又回 0.02：与 interval 联动控制受孕密度，目的同上，待长期方案复核
     low_population_adults: 2            # [调参] A5：成年人口下限阈值
     low_population_fertility_boost: 2.0 # [调参] A5：低人口时的生育概率乘数
+    min_food_days: 150                  # [调参][临时值] 家庭存粮不足 150 天时女方不选求子：90 天闸下第一年仍有 19 个新生儿，人口冲高到 57 后再崩；150 使开局 100–140 天存粮的户在第 1 年秋收前不生育，待长期方案复核
     male_ratio: 0.5                     # 性别比例（seeded rng）
     newborn_health_parent_ratio: 0.8    # D7：父母均值 × 0.8
     newborn_stamina_parent_ratio: 0.8

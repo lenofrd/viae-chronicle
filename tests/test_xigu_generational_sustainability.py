@@ -24,7 +24,10 @@ from vale.worldgen.xigu import XiguGenerationConfig, build_xigu_agents_config, g
 
 
 TICKS_PER_YEAR = 360
-HORIZON = 40 * TICKS_PER_YEAR
+# 2 年基线口径（老板裁决）：不再跑 40 年世代链，只验证婚育由 agent 自主发生后
+# 婚姻数与新生儿数是否为正、人口是否存活、无模块错误。40 年世代链指标保留在
+# _diagnostics 里作观察，但不再作为断言。
+HORIZON = 2 * TICKS_PER_YEAR
 
 
 def _build(seed: int) -> World:
@@ -218,6 +221,7 @@ def _diagnostics(world, population_curve, checkpoints):
         "actions_by_30_days": action_breakdown,
         "gather_success_by_30_days": gather_breakdown,
         "births": len(births),
+        "marriages": len(marriages),
         "generation_2_births": len(generation_1_ids),
         "generation_2_marriage_events": len(generation_2_marriages),
         "generation_3_marriage_events": len(generation_3_marriages),
@@ -372,7 +376,7 @@ def test_generated_homes_are_reachable_from_the_public_well():
 
 
 @pytest.mark.long_run
-def test_forty_year_xigu_run_tracks_three_generations_and_descendants_in_labor_force():
+def test_two_year_xigu_run_records_agent_driven_marriages_and_births():
     seed = 20261118
     world = _build(seed)
     population_curve = []
@@ -412,39 +416,18 @@ def test_forty_year_xigu_run_tracks_three_generations_and_descendants_in_labor_f
                 break
         diagnostics = _diagnostics(world, population_curve, checkpoints)
         diagnostics["simulated_ticks"] = simulated_ticks
-        assert diagnostics["final_population"] > 0, f"40-year town extinct: {diagnostics}"
+        assert diagnostics["final_population"] > 0, f"2-year town extinct: {diagnostics}"
+        assert diagnostics["marriages"] > 0, (
+            f"no agent-driven marriages in 2 years: {diagnostics}"
+        )
         assert diagnostics["births"] > 0, f"no descendants were born: {diagnostics}"
-        assert diagnostics["generation_2_marriage_events"] > 0, (
-            f"second generation never married: {diagnostics}"
-        )
-        assert diagnostics["generation_3_marriage_events"] > 0, (
-            f"third generation never married: {diagnostics}"
-        )
-        assert diagnostics["descendants_at_work"] > 0, (
-            f"descendants never entered productive work: {diagnostics}"
-        )
-        assert diagnostics["agent_errors"] == 0, f"agent/module errors during generational run: {diagnostics}"
-        print("Xigu 40-year generational sustainability summary:", {
+        assert diagnostics["agent_errors"] == 0, f"agent/module errors during run: {diagnostics}"
+        print("Xigu 2-year marriage/birth summary:", {
             key: diagnostics[key] for key in (
                 "simulated_ticks", "minimum_population", "final_population",
-                "final_children_under_16", "final_working_age_population", "final_population_55_plus",
-                "household_count", "active_household_count", "dwelling_count",
-                "occupied_dwellings", "vacant_dwellings", "ruined_dwellings",
-                "field_count", "fields_with_growth", "harvestable_fields",
-                "births", "generation_2_births", "generation_2_marriage_events",
-                "generation_3_marriage_events", "generation_3_marriage_details",
-                "generation_2_married_people", "generation_2_marriage_details",
-                "generation_2_alive_adults_at_end", "generation_2_unmarried_alive_adults_at_end",
-                "generation_3_births", "generation_3_birth_details", "generation_3_alive_at_end",
-                "second_generation_births", "deaths", "deaths_by_cause",
-                "first_death_tick", "descendants_at_work",
-                "distinct_initial_work_fields", "seasonal_field_labor_records",
-                "minimum_household_food_stock", "final_food_stock",
-                "cold_exposure_events", "cold_health_loss",
-                "community_reserve_initialization", "community_reserve_deposit_events",
-                "community_reserve_withdraw_events", "community_reserve_final",
-                "first_death_household_work_node", "first_death_household_reserve_events",
-                "agent_errors",
+                "marriages", "births", "deaths", "deaths_by_cause",
+                "generation_2_marriage_events", "generation_3_marriage_events",
+                "final_food_stock", "agent_errors",
             )
         })
     finally:

@@ -40,6 +40,7 @@ def world():
     for m in w.modules:
         if m.name == "agents":
             m._settle_marriage = lambda *a, **k: None  # noqa: SLF001
+            m._settle_courtship = lambda *a, **k: None  # noqa: SLF001 婚配已下沉为 court 动作
     return w
 
 
@@ -443,14 +444,14 @@ def test_marriage_age_health_and_distance_thresholds_are_unchanged(world):
     tuning = world.config.agents.tuning
     marriage = tuning.marriage
 
-    wife.birth_tick = world.current_tick - 15 * DAYS_PER_YEAR
+    wife.birth_tick = world.current_tick - (marriage.min_age - 1) * DAYS_PER_YEAR
     assert module._marriage_eligible(world, wife, tuning) is False  # noqa: SLF001
 
-    wife.birth_tick = world.current_tick - 16 * DAYS_PER_YEAR
-    wife.health = 49.0
+    wife.birth_tick = world.current_tick - marriage.min_age * DAYS_PER_YEAR
+    wife.health = marriage.min_health - 1.0
     assert module._marriage_eligible(world, wife, tuning) is False  # noqa: SLF001
 
-    wife.health = 50.0
+    wife.health = marriage.min_health
     assert module._marriage_eligible(world, wife, tuning) is True  # noqa: SLF001
 
     _set_mutual_known(world, wife, husband)

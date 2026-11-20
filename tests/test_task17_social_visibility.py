@@ -39,6 +39,7 @@ def _build(seed: int = 0) -> World:
     for m in w.modules:
         if m.name == "agents":
             m._settle_marriage = lambda *a, **k: None  # noqa: SLF001
+            m._settle_courtship = lambda *a, **k: None  # noqa: SLF001 婚配已下沉为 court 动作
     return w
 
 

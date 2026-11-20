@@ -203,9 +203,9 @@ def test_small_town_marriage_preserves_acquaintance_gate_without_freezing_fertil
         "last_tick": world.current_tick,
         "agent_errors": len(world.event_log.by_type("agent_error")),
     }
-    # 这个种子保护既有双向认知婚配门槛；出生是独立的概率/资源过程，
-    # 不应再把历史上的零出生结果当作规则。代际繁衍由专门集成测试验收。
+    # 婚配已下沉为 court 动作（agent 双向互选），案发数随候选与距离变化，
+    # 不再钉死"恰好 1 例"；本用例只保证认知/健康门槛没有把婚配冻死。
     diagnostics["marriages"] = len(world.event_log.by_type("agent_married"))
-    assert diagnostics["marriages"] == 1, diagnostics
+    assert diagnostics["marriages"] >= 1, diagnostics
     assert diagnostics["births"] > 0, diagnostics
     assert diagnostics["agent_errors"] == 0
