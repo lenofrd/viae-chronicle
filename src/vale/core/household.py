@@ -81,5 +81,5 @@ def inventory_of(world, agent: AgentState, items: list[str] | None = None) -> di
     """家庭库存快照（默认取集市物品集合的键；只读）。"""
     household = household_of(world, agent)
     if items is None:
-        items = ["grain", "meat", "fish", "vegetable", "cloth"]
+        items = ["grain", "meat", "fish", "vegetable", "cloth", "firewood", "herbs", "hardwood", "coin"]
     return {i: round(getattr(household, i, 0.0), 2) for i in items}

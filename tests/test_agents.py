@@ -5,6 +5,8 @@ load_config → EventLog(":memory:") → World(...) → 注册 ClimateModule + A
 """
 from __future__ import annotations
 
+import math
+
 from household_helpers import hh
 from vale.core.household import home_node_of, work_node_of
 
@@ -38,6 +40,7 @@ def world():
     for m in w.modules:
         if m.name == "agents":
             m._settle_marriage = lambda *a, **k: None  # noqa: SLF001
+            m._settle_courtship = lambda *a, **k: None  # noqa: SLF001 婚配已下沉为 court 动作
     return w
 
 
@@ -77,6 +80,11 @@ def test_agents_loaded_from_config(world):
 def test_hungry_agent_eats_and_state_updates(world):
     """高饥饿 + 有粮 → 选 eat；饥饿降低、存粮减少、last_action 更新。"""
     run_tick(world)  # 初始化气候 + 空间索引 + 人物投影
+    # Isolate meal accounting from the separate public-granary redistribution system.
+    world.state.community_reserves.clear()
+    for building in world.state.buildings.values():
+        if building.attributes.get("community_reserve"):
+            building.status = "ruined"
     lin = world.state.agents["lin_yuan"]
     lin.hunger = 90.0
     hh(world, lin).grain = 5.0
@@ -275,12 +283,22 @@ def test_borrow_grain_triggers_when_low_grain(world):
     隔离出「无任何食物、无采集」的决策分支。
     """
     run_tick(world)
+    # Isolate the private-credit branch from the communal granary/cistern safety net.
+    world.state.community_reserves.clear()
+    for building in world.state.buildings.values():
+        if building.attributes.get("community_reserve"):
+            building.status = "ruined"
     world.config.agents.tuning.gathering.actions.clear()
     lin = world.state.agents["lin_yuan"]
+    # The opening tick may have pooled the richest household's surplus; restore
+    # a known private creditor after disabling the communal safety net.
+    hh(world, world.state.agents["li_quan"]).grain = 100.0
     hh(world, lin).grain = 0.0      # 无任何食物 → eat 不可行
     hh(world, lin).meat = 0.0
     hh(world, lin).fish = 0.0
     hh(world, lin).vegetable = 0.0
+    for field_node in world.state.field_growth:
+        world.state.field_growth[field_node] = world.config.agents.tuning.agriculture.max_field_growth
     lin.stamina = 100.0  # 体力满：消除 rest 的体力紧缺项，借粮(1.8) > rest(1.5)
     lin.hunger = 95.0
 
@@ -354,3 +372,279 @@ def test_single_agent_failure_isolated(world, monkeypatch):
     # 世界仍在推进，人物投影仍完整
     assert world.current_tick > 0
     assert set(world.state.agents.keys()) == {"lin_yuan", "zhao_cuilan", "li_quan", "zhou_qiaoniang"}
+
+
+# --------------------------------------------------------------------------- #
+# ADR 007：人口承载与婚姻
+# --------------------------------------------------------------------------- #
+def _prepare_marriage_pair(world):
+    """准备一对可婚配的初始居民，并隔离其他候选人。"""
+    from vale.core.calendar import DAYS_PER_YEAR
+
+    run_tick(world)  # 初始化空间索引与人物投影；fixture 已关闭自动婚配
+    module = _agent_module(world)
+    # world fixture 默认关闭自动婚配；本测试显式恢复真实结算方法。
+    module._settle_marriage = AgentModule._settle_marriage.__get__(module, AgentModule)  # noqa: SLF001
+    wife = world.state.agents["zhao_cuilan"]
+    husband = world.state.agents["lin_yuan"]
+    for agent in world.state.agents.values():
+        agent.acquaintances.clear()
+        agent.recent_interactions.clear()
+        if agent.agent_id not in {wife.agent_id, husband.agent_id}:
+            agent.health = 1.0
+            agent.spouse_id = None
+    for agent in (wife, husband):
+        agent.health = 90.0
+        agent.incapacitated = False
+        agent.birth_tick = world.current_tick - 25 * DAYS_PER_YEAR
+        agent.spouse_id = None
+        agent.married_tick = None
+    # 测试只覆盖认知与家庭迁移；将两户放到同一可达地点，避免空间图距离干扰。
+    world.state.households[wife.household_id].home_node = "common_district"
+    world.state.households[husband.household_id].home_node = "common_district"
+    wife.location = husband.location = "common_district"
+    world.config.agents.tuning.marriage.max_distance_tu = 100.0
+    return module, wife, husband
+
+
+def _set_mutual_known(world, a, b):
+    from vale.core.state import AcquaintanceEntry
+
+    now = world.current_tick
+    a.acquaintances[b.agent_id] = AcquaintanceEntry(level=2, last_seen_tick=now)
+    b.acquaintances[a.agent_id] = AcquaintanceEntry(level=2, last_seen_tick=now)
+
+
+def test_shared_place_contact_creates_mutual_known(world):
+    """共同地点接触通过现有认知接口双向建立 known。"""
+    module, wife, husband = _prepare_marriage_pair(world)
+    wife.location = husband.location = "market"
+    module._record_shared_location_interactions(world, world.config.agents.tuning)  # noqa: SLF001
+    assert wife.acquaintances[husband.agent_id].level == 2
+    assert husband.acquaintances[wife.agent_id].level == 2
+    changes = [
+        event for event in world.event_log.by_type("acquaintance_changed")
+        if {event["payload"]["observer_id"], event["payload"]["target_id"]}
+        == {wife.agent_id, husband.agent_id}
+    ]
+    assert len(changes) == 2
+    assert {event["payload"]["observer_id"] for event in changes} == {
+        wife.agent_id, husband.agent_id
+    }
+    from vale.core.replay import rebuild_state
+    replayed = rebuild_state(world.event_log.all(), world.config).state
+    assert replayed.agents[wife.agent_id].acquaintances[husband.agent_id].level == 2
+    assert replayed.agents[husband.agent_id].acquaintances[wife.agent_id].level == 2
+
+
+def test_marriage_age_health_and_distance_thresholds_are_unchanged(world):
+    from vale.core.calendar import DAYS_PER_YEAR
+
+    module, wife, husband = _prepare_marriage_pair(world)
+    tuning = world.config.agents.tuning
+    marriage = tuning.marriage
+
+    wife.birth_tick = world.current_tick - (marriage.min_age - 1) * DAYS_PER_YEAR
+    assert module._marriage_eligible(world, wife, tuning) is False  # noqa: SLF001
+
+    wife.birth_tick = world.current_tick - marriage.min_age * DAYS_PER_YEAR
+    wife.health = marriage.min_health - 1.0
+    assert module._marriage_eligible(world, wife, tuning) is False  # noqa: SLF001
+
+    wife.health = marriage.min_health
+    assert module._marriage_eligible(world, wife, tuning) is True  # noqa: SLF001
+
+    _set_mutual_known(world, wife, husband)
+    world.state.households[wife.household_id].home_node = "common_district"
+    world.state.households[husband.household_id].home_node = "market"
+    distance = module._spatial.travel_tu("common_district", "market")
+    assert math.isfinite(distance) and distance > 0
+    marriage.max_distance_tu = distance - 0.01
+    module._settle_marriage(world, tuning)  # noqa: SLF001
+    assert wife.spouse_id is None and husband.spouse_id is None
+
+    marriage.max_distance_tu = distance + 0.01
+    module._settle_marriage(world, tuning)  # noqa: SLF001
+    assert wife.spouse_id == husband.agent_id
+    assert husband.spouse_id == wife.agent_id
+
+
+def test_marriage_requires_mutual_known_and_not_recent_memory(world):
+    """单向认识不能结婚；双方 known 即可，有限近期记忆为空不撤销资格。"""
+    module, wife, husband = _prepare_marriage_pair(world)
+    from vale.core.state import AcquaintanceEntry
+
+    wife.acquaintances[husband.agent_id] = AcquaintanceEntry(
+        level=2, last_seen_tick=world.current_tick
+    )
+    module._settle_marriage(world, world.config.agents.tuning)  # noqa: SLF001
+    assert wife.spouse_id is None and husband.spouse_id is None
+
+    _set_mutual_known(world, wife, husband)
+    wife.recent_interactions.clear()
+    husband.recent_interactions.clear()
+    module._settle_marriage(world, world.config.agents.tuning)  # noqa: SLF001
+    assert wife.spouse_id == husband.agent_id
+    assert husband.spouse_id == wife.agent_id
+    assert wife.household_id == husband.household_id
+    assert not world.event_log.by_type("household_merged")
+
+
+def test_marriage_moves_only_wife_and_keeps_two_households_independent(world):
+    """女方原家庭的成年成员、既有子女、资产与债务留存；彩礼/陪嫁独立守恒。"""
+    from vale.core.calendar import DAYS_PER_YEAR
+    from config.schema.agents import AgentSex
+    from vale.core.state import DebtRecord
+
+    module, wife, husband = _prepare_marriage_pair(world)
+    source = world.state.households[wife.household_id]
+    target = world.state.households[husband.household_id]
+
+    sibling = wife.model_copy(update={
+        "agent_id": "marriage_adult_sibling", "name": "女方兄长",
+        "household_id": source.household_id, "sex": AgentSex.MALE,
+        "birth_tick": world.current_tick - 24 * DAYS_PER_YEAR,
+        "health": 1.0, "spouse_id": None, "mother_id": None, "father_id": None,
+        "children_ids": [], "acquaintances": {}, "recent_interactions": [],
+        "impressions": {},
+    })
+    child = wife.model_copy(update={
+        "agent_id": "marriage_existing_child", "name": "女方旧子",
+        "household_id": source.household_id, "sex": AgentSex.FEMALE,
+        "birth_tick": world.current_tick - 5 * DAYS_PER_YEAR,
+        "health": 80.0, "spouse_id": None, "mother_id": wife.agent_id,
+        "father_id": husband.agent_id, "children_ids": [],
+        "acquaintances": {}, "recent_interactions": [], "impressions": {},
+    })
+    world.state.agents[sibling.agent_id] = sibling
+    world.state.agents[child.agent_id] = child
+    source.member_ids.extend([sibling.agent_id, child.agent_id])
+    source.head_id = wife.agent_id
+    world.event_log.append(world.current_tick, "household_member_registered", {
+        "household_id": source.household_id, "agent_id": sibling.agent_id,
+        "home_node": source.home_node, "work_node": source.work_node,
+    })
+    world.event_log.append(world.current_tick, "household_member_registered", {
+        "household_id": source.household_id, "agent_id": child.agent_id,
+        "home_node": source.home_node, "work_node": source.work_node,
+    })
+
+    source.grain, source.coin = 20.0, 20.0
+    target.grain, target.coin = 100.0, 50.0
+    source.debts = [DebtRecord(
+        debtor_household_id=source.household_id,
+        creditor_household_id=target.household_id,
+        amount=2.0, originated_tick=world.current_tick, due_tick=world.current_tick + 90,
+    )]
+    debt_before = [record.model_dump() for record in source.debts]
+    grain_total_before = source.grain + target.grain
+    coin_total_before = source.coin + target.coin
+
+    tuning = world.config.agents.tuning
+    tuning.marriage.bride_price_surplus_ratio = 0.1
+    tuning.marriage.dowry_surplus_ratio = 0.1
+    _set_mutual_known(world, wife, husband)
+    module._settle_marriage(world, tuning)  # noqa: SLF001
+
+    assert wife.household_id == target.household_id
+    assert sibling.household_id == source.household_id
+    assert child.household_id == source.household_id  # 既有子女不自动随迁
+    assert sibling.agent_id in source.member_ids and child.agent_id in source.member_ids
+    assert wife.agent_id not in source.member_ids
+    assert wife.agent_id in target.member_ids
+    assert source.head_id == sibling.agent_id
+    assert source.grain > 20.0  # 男方家庭支付彩礼后，女方原家庭收到资源
+    assert source.debts[0].model_dump() == debt_before[0]
+    assert source.grain + target.grain == pytest.approx(grain_total_before)
+    assert source.coin + target.coin == pytest.approx(coin_total_before)
+    transfers = world.event_log.by_type("marriage_assets_transferred")
+    assert {event["payload"]["transfer_type"] for event in transfers} == {
+        "bride_price", "dowry"
+    }
+    assert not world.event_log.by_type("household_merged")
+
+    from vale.core.replay import rebuild_state
+    replayed = rebuild_state(world.event_log.all(), world.config).state
+    assert replayed.households[source.household_id].grain == pytest.approx(source.grain)
+    assert replayed.households[target.household_id].grain == pytest.approx(target.grain)
+    assert replayed.households[source.household_id].member_ids == source.member_ids
+    assert replayed.households[target.household_id].member_ids == target.member_ids
+
+
+def test_birth_has_no_population_or_household_member_cap(world):
+    """存活人口超过 12、单户人数超过 8 后，符合条件的配偶仍可生育。"""
+    import random
+    from vale.core.calendar import DAYS_PER_YEAR
+
+    run_tick(world)
+    module = _agent_module(world)
+    mother = world.state.agents["zhao_cuilan"]
+    father = world.state.agents["lin_yuan"]
+    household = world.state.households[mother.household_id]
+    old_father_household = world.state.households[father.household_id]
+    if father.agent_id in old_father_household.member_ids:
+        old_father_household.member_ids.remove(father.agent_id)
+    father.household_id = household.household_id
+    if father.agent_id not in household.member_ids:
+        household.member_ids.append(father.agent_id)
+    father.spouse_id, mother.spouse_id = mother.agent_id, father.agent_id
+    mother.health = father.health = 90.0
+    mother.birth_tick = father.birth_tick = world.current_tick - 25 * DAYS_PER_YEAR
+    mother.last_birth_tick = None
+
+    for index in range(9):
+        agent_id = f"uncapped_household_member_{index}"
+        extra = father.model_copy(update={
+            "agent_id": agent_id, "name": agent_id,
+            "household_id": household.household_id, "spouse_id": None,
+            "health": 1.0, "birth_tick": world.current_tick - 20 * DAYS_PER_YEAR,
+            "children_ids": [], "mother_id": None, "father_id": None,
+            "acquaintances": {}, "recent_interactions": [], "impressions": {},
+        })
+        world.state.agents[agent_id] = extra
+        household.member_ids.append(agent_id)
+
+    for agent in world.state.agents.values():
+        if agent.agent_id != mother.agent_id and agent.sex.value == "female":
+            agent.health = 1.0
+    assert len([a for a in world.state.agents.values() if a.alive]) > 12
+    assert len(household.member_ids) > 8
+
+    household.grain = 1000.0
+    household.water = 1000.0
+    tuning = world.config.agents.tuning
+    tuning.birth.chance_per_day = 1.0
+    module.rng = random.Random(0)
+    before = len(world.state.agents)
+    module._settle_birth(world, tuning)  # noqa: SLF001
+    assert len(world.state.agents) == before + 1
+    assert any(
+        event["payload"].get("mother_id") == mother.agent_id
+        for event in world.event_log.by_type("agent_born")
+    )
+    assert not world.event_log.by_type("birth_skipped")
+
+
+def test_birth_probability_responds_to_food_and_water_security(world):
+    """食物/用水库存连续调节生育概率，不通过人口数或户人数硬截断。"""
+    run_tick(world)
+    module = _agent_module(world)
+    mother = world.state.agents["zhao_cuilan"]
+    household = world.state.households[mother.household_id]
+    tuning = world.config.agents.tuning
+
+    for field in tuning.physiology.food_fields:
+        setattr(household, field, 0.0)
+    household.grain = 100.0
+    household.water = 100.0
+    secure = module._birth_resource_factor(world, mother, tuning)  # noqa: SLF001
+    assert secure == pytest.approx(1.0)
+
+    household.grain = 1.5  # 单人家庭约 6 天粮食，低于 12 天安全目标
+    constrained_food = module._birth_resource_factor(world, mother, tuning)  # noqa: SLF001
+    assert 0.0 < constrained_food < secure
+
+    household.grain = 100.0
+    household.water = 0.0
+    constrained_water = module._birth_resource_factor(world, mother, tuning)  # noqa: SLF001
+    assert constrained_water == 0.0

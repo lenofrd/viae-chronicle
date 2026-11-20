@@ -245,17 +245,22 @@ def test_a4_newborn_household_has_no_extra_inventory(world):
 # =========================================================================== #
 # A5：人口上下限
 # =========================================================================== #
-def test_a5_birth_stops_at_population_cap(world):
+def test_a5_birth_not_stopped_by_population_count(world):
+    """生育不读取全镇人口阈值；资源充足且配偶合格时继续生育。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
     mother = world.state.agents["zhao_cuilan"]
     father = world.state.agents["lin_yuan"]
     mother.spouse_id, father.spouse_id = father.agent_id, mother.agent_id
     mother.health = father.health = 90.0
-    tuning.birth.max_population = len(world.state.agents)  # 已达上限
-    born_before = len(world.event_log.by_type("agent_born"))  # 004：首 tick 可能已有他户生育
+    household = hh(world, mother)
+    household.grain = 1000.0
+    household.water = 1000.0
+    tuning.birth.chance_per_day = 1.0
+    assert not hasattr(tuning.birth, "max_population")
+    born_before = len(world.event_log.by_type("agent_born"))
     mod._settle_birth(world, tuning)  # noqa: SLF001
-    assert len(world.event_log.by_type("agent_born")) == born_before
+    assert len(world.event_log.by_type("agent_born")) == born_before + 1
 
 
 def test_a5_low_population_boost(world):

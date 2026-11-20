@@ -176,7 +176,7 @@
 **范围**：
 
 - 一个小镇，镇内 5–10 个建筑节点，田地 3–5 片，河流 3–5 段，山 3 层加若干具体资源点。
-- 20–30 个镇民，3–5 个主角精细模拟；背景人物移动和交互先聚合，进入主角视野或被查询时展开。
+- 通用原型规模可先按 20–30 名镇民、3–5 个主角精细模拟；具体地点配置可以明确覆盖该通用范围。溪谷镇的地点级开局裁决为 40 名居民、30 户家庭，详见 `locations/brookvale-town/05-setup/01-initial-state.md`。背景人物移动和交互先聚合，进入主角视野或被查询时展开。
 - 纯规则驱动，先不接 LLM。
 - 跑 1–2 年（400–700 tick）。
 
@@ -211,7 +211,7 @@
 
 - **natural-environment（自然环境）**：`00-overview.md` + 模块 `01-spatial-skeleton`、`02-climate`、`03-hydrology`、`04-terrain`、`05-soil-and-fields`、`06-vegetation`、`07-fauna`、`08-hazards` + 横切层 `09-dynamics/`、`10-state-and-records/`。
 - **human-environment（人文环境）**：`00-overview.md` + 模块 `01-social-spaces`、`02-institutions`、`03-relationships`、`04-information`、`05-education`、`06-stratification`、`07-conflicts`、`08-rituals-beliefs`、`11-livestock`（家畜资产，横切层之后） + 横切层 `09-dynamics/`、`10-state-and-records/`。
-- **agents（人物）**：`00-overview.md`、`01-physical-state.md` … `06-actions.md` + 横切层 `09-dynamics.md`、`10-state-and-records.md`。
+- **agents（人物）**：`00-overview.md`、`01-physical-state.md` … `06-actions.md`、`11-life-course.md`、`12-population-and-marriage.md` + 横切层 `09-dynamics.md`、`10-state-and-records.md`。
 - **interaction（交互）**：`00-overview.md`、`01-session-structure.md`、`02-negotiation-dynamics.md`、`03-importance-and-pacing.md`、`04-outcomes-and-consequences.md` + 横切层 `09-dynamics.md`、`10-state-and-records.md`。
 
 ### 横切层编号约定

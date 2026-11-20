@@ -343,6 +343,14 @@ def _render_agent_aged(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
+def _render_courtship_offer(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    target = payload.get("target_name") or payload.get("target_id") or "?"
+    text = f"[{name}] 向 [{target}] 表达结亲意愿"
+    degraded = not all(k in payload for k in ("agent_id", "target_id"))
+    return text, degraded
+
+
 def _render_agent_married(payload: dict) -> tuple[str, bool]:
     name = payload.get("agent_name") or payload.get("agent_id") or "?"
     spouse = payload.get("spouse_name") or payload.get("spouse_id") or "?"
@@ -409,6 +417,35 @@ def _render_debt_transferred(payload: dict) -> tuple[str, bool]:
     return text, degraded
 
 
+def _render_household_member_transferred(payload: dict) -> tuple[str, bool]:
+    name = payload.get("agent_name") or payload.get("agent_id") or "?"
+    source = payload.get("source_household_id") or "?"
+    target = payload.get("target_household_id") or "?"
+    text = f"[{name}] 从家庭 {source} 迁入家庭 {target}"
+    degraded = not all(k in payload for k in ("agent_id", "source_household_id", "target_household_id"))
+    return text, degraded
+
+
+def _render_marriage_assets_transferred(payload: dict) -> tuple[str, bool]:
+    transfer_type = payload.get("transfer_type")
+    label = {"bride_price": "彩礼", "dowry": "陪嫁"}.get(transfer_type, "婚姻财物")
+    source = payload.get("from_household_id") or "?"
+    target = payload.get("to_household_id") or "?"
+    names = {
+        "grain": "粮", "coin": "铜钱", "vegetable": "蔬菜", "cloth": "布",
+        "meat": "肉", "fish": "鱼", "water": "水", "firewood": "柴",
+        "herbs": "药草", "hardwood": "硬木",
+    }
+    resources = payload.get("resources") or {}
+    details = "、".join(
+        f"{names.get(item, item)} {_num(amount)}"
+        for item, amount in sorted(resources.items())
+    ) or "无"
+    text = f"{label}：家庭 {source} 向家庭 {target} 转移 {details}"
+    degraded = not all(k in payload for k in ("transfer_type", "from_household_id", "to_household_id"))
+    return text, degraded
+
+
 def _render_household_merged(payload: dict) -> tuple[str, bool]:
     target = payload.get("target_household_id") or "?"
     source = payload.get("source_household_id") or "?"
@@ -445,7 +482,10 @@ def _render_household_dissolved(payload: dict) -> tuple[str, bool]:
     household = payload.get("household_id") or "?"
     last = payload.get("last_member_name") or payload.get("last_member_id") or "?"
     debts = payload.get("debts")
-    text = f"家庭 {household} 因最后成员 [{last}] 死亡而消亡"
+    if payload.get("reason") == "marriage_member_moved":
+        text = f"家庭 {household} 因成员迁出而空置"
+    else:
+        text = f"家庭 {household} 因最后成员 [{last}] 死亡而消亡"
     if debts is not None:
         text += f"（遗留债务 {_num(debts)} 笔）"
     degraded = not all(k in payload for k in ("household_id", "last_member_id"))
@@ -791,6 +831,12 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "agent_died":
             text, degraded = _render_agent_died(payload)
             reason = "missing_life_field" if degraded else None
+        elif event_type == "household_member_transferred":
+            text, degraded = _render_household_member_transferred(payload)
+            reason = "missing_household_field" if degraded else None
+        elif event_type == "marriage_assets_transferred":
+            text, degraded = _render_marriage_assets_transferred(payload)
+            reason = "missing_household_field" if degraded else None
         elif event_type == "household_merged":
             text, degraded = _render_household_merged(payload)
             reason = "missing_household_field" if degraded else None
@@ -853,6 +899,9 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
             reason = "missing_cold_field" if degraded else None
         elif event_type == "agent_aged":
             text, degraded = _render_agent_aged(payload)
+            reason = "missing_life_field" if degraded else None
+        elif event_type == "courtship_offer":
+            text, degraded = _render_courtship_offer(payload)
             reason = "missing_life_field" if degraded else None
         elif event_type == "agent_married":
             text, degraded = _render_agent_married(payload)
