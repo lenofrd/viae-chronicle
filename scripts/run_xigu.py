@@ -76,7 +76,7 @@ def main():
     report = {
         "days": args.days,
         "initial_population": initial_population,
-        "final_population": sum(1 for a in world.state.agents.values() if a.alive),
+        "final_population": sum(1 for a in world.state.human.agents.values() if a.alive),
         "births": len(births),
         "deaths": len(deaths),
         "deaths_by_cause": dict(Counter(e["payload"].get("cause", "unknown") for e in deaths)),
@@ -87,7 +87,7 @@ def main():
         "descendants_at_work": len(descendant_workers),
         "agent_errors": sum(1 for e in events if e["event_type"] == "agent_error"),
         "food_stock": {
-            field: round(sum(float(getattr(h, field)) for h in world.state.households.values()), 2)
+            field: round(sum(float(getattr(h, field)) for h in world.state.human.households.values()), 2)
             for field in ("grain", "vegetable", "meat", "fish")
         },
     }

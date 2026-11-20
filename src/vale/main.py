@@ -44,7 +44,7 @@ def main() -> None:
     for _ in range(10):
         t = world.current_tick
         run_tick(world)
-        s = world.state.climate
+        s = world.state.environment.climate
         print(
             f"Tick {t:>2}: {s.year}年{s.month}月{s.day}日 {s.solar_term:<2} "
             f"season={s.season.value:>6} progress={s.season_progress:.3f} "

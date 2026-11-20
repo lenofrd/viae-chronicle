@@ -6,7 +6,7 @@
   2. 按当前季节 precipitation_prob 判定是否降雨；
   3. 更新温度、湿度（受 max_*_delta_per_tick 限制，禁止瞬移）；
   4. 未雨累加 drought_accumulation（超 no_rain_threshold 才计），降雨按 recovery_rate 降低；
-  5. 写回 world.state.climate（含日期字段）；
+  5. 写回 world.state.environment.climate（含日期字段）；
   6. 发 weather_changed 事件（载荷含日期），跨季时发 season_changed 事件。
 
 第一版只跑旱情路径，洪水阈值留空不触发汛情。
@@ -17,6 +17,7 @@ import random
 from typing import Any
 
 from config.schema.natural_params import DroughtState, IrrigationGear, Season, WeatherType
+from vale.contracts.water import regenerate_water_sources
 
 from ..core.calendar import (
     calendar_from_tick,
@@ -68,7 +69,7 @@ class ClimateModule:
     # 初始化（首次 step 时从配置载入初始状态）
     # ------------------------------------------------------------------
     def _ensure_initialized(self, world) -> None:
-        if world.state.climate is not None:
+        if world.state.environment.climate is not None:
             return
         cfg = world.config.natural_params
         init = cfg.climate_initial
@@ -90,7 +91,7 @@ class ClimateModule:
         if acc is None:
             acc = float(init.days_no_soaking_rain or 0)
 
-        world.state.climate = ClimateSnapshot(
+        world.state.environment.climate = ClimateSnapshot(
             season=season,
             season_progress=t["season_progress"],
             year=t["year"],
@@ -113,9 +114,9 @@ class ClimateModule:
         # 任务30：水文初始状态（缺省时沿用 WorldState 默认 0.6 / low）
         hydro_init = cfg.hydrology_initial
         if hydro_init.water_level_ratio is not None:
-            world.state.water_level_ratio = float(hydro_init.water_level_ratio)
+            world.state.environment.water_level_ratio = float(hydro_init.water_level_ratio)
         if hydro_init.irrigation_gear:
-            world.state.irrigation_gear = hydro_init.irrigation_gear
+            world.state.environment.irrigation_gear = hydro_init.irrigation_gear
 
     # ------------------------------------------------------------------
     # 每 Tick 演化
@@ -124,7 +125,7 @@ class ClimateModule:
         self._ensure_initialized(world)
         cfg = world.config.natural_params
         evo = cfg.climate_evolution
-        snap: ClimateSnapshot = world.state.climate
+        snap: ClimateSnapshot = world.state.environment.climate
         # 时间换算（单一真相源）：季节与进度均由 tick 派生，跨季靠与上一 tick 快照对比判定
         t = _derive_time(world)
         season = t["season"]
@@ -174,7 +175,7 @@ class ClimateModule:
             trend = trend[-self.trend_window:]
 
         # 6. 写回快照
-        world.state.climate = snap.model_copy(
+        world.state.environment.climate = snap.model_copy(
             update={
                 "season": season,
                 "season_progress": new_progress,
@@ -228,12 +229,14 @@ class ClimateModule:
 
         # 8. 任务30：水文演化（确定性，随当日降水）
         self._evolve_hydrology(world, cfg, precip)
+        # P3a：按最新水位为水源补水（水源库存归环境域，取水由 contracts.water 结算）
+        regenerate_water_sources(world)
 
     # ------------------------------------------------------------------
     def _evolve_hydrology(self, world, cfg, precip_mm: float) -> None:
         """单点水位演化 + 灌溉档派生；仅在数值变化时写事件（004 §2.7）。"""
         evo = cfg.hydrology_evolution
-        before = float(world.state.water_level_ratio)
+        before = float(world.state.environment.water_level_ratio)
         if precip_mm >= evo.soak_threshold_mm:
             # 有效降水按「到满水位的剩余空间」补水：避免常年封顶 1.0，使水位随旱涝摆动
             after = before + evo.recharge_per_mm * precip_mm * (1.0 - before)
@@ -242,10 +245,10 @@ class ClimateModule:
             after = before - evo.dry_loss_per_day
             reason = "dry"
         after = round(max(0.0, min(1.0, after)), 6)
-        prev_gear = world.state.irrigation_gear
+        prev_gear = world.state.environment.irrigation_gear
         gear = self._classify_irrigation(after, evo.gear_thresholds)
-        world.state.water_level_ratio = after
-        world.state.irrigation_gear = gear
+        world.state.environment.water_level_ratio = after
+        world.state.environment.irrigation_gear = gear
         if abs(after - before) > 1e-9:
             world.event_log.append(
                 tick=world.current_tick,

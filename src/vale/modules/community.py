@@ -1,6 +1,8 @@
 """Building, fatigue, public-service and terrain effects for residents."""
 from __future__ import annotations
 
+from vale.contracts.queries import EnvironmentQuery
+
 
 def fatigue_efficiency(agent, tuning) -> float:
     """Return labor speed after a sustained high-fatigue spell.
@@ -26,10 +28,10 @@ def production_efficiency_at_node(world, node_id: str, action: str, tuning) -> f
     if not node_id:
         return 1.0
     bonus = 0.0
-    for building in world.state.buildings.values():
+    for building in world.state.human.buildings.values():
         if building.status not in {"active", "occupied"} or building.condition <= 0:
             continue
-        parcel = world.state.land_parcels.get(building.parcel_id)
+        parcel = world.state.human.land_parcels.get(building.parcel_id)
         if parcel is None or parcel.spatial_node_id != node_id:
             continue
         by_action = tuning.production_efficiency_by_building.get(building.building_type, {})
@@ -76,7 +78,7 @@ def settle_community_reserves(world, environment_tuning, agent_tuning) -> None:
 
 def _community_storehouse_and_manager(world, manager_agent_id: str | None = None):
     storehouse = next((
-        building for building in world.state.buildings.values()
+        building for building in world.state.human.buildings.values()
         if building.building_type == "storehouse"
         and building.attributes.get("community_reserve")
         and building.status in {"active", "occupied"}
@@ -86,14 +88,14 @@ def _community_storehouse_and_manager(world, manager_agent_id: str | None = None
         raise ValueError("no active community storehouse")
     assigned_manager = (
         storehouse.attributes.get("manager_agent_id")
-        or world.state.headman_id
-        or world.state.acting_headman_id
+        or world.state.human.headman_id
+        or world.state.human.acting_headman_id
     )
     if not assigned_manager:
         raise PermissionError("community storehouse has no appointed manager")
     if manager_agent_id is not None and manager_agent_id != assigned_manager:
         raise PermissionError("only the appointed storehouse manager may approve relief")
-    manager = world.state.agents.get(assigned_manager)
+    manager = world.state.human.agents.get(assigned_manager)
     if manager is None or not manager.alive:
         raise PermissionError("community storehouse manager is unavailable")
     return storehouse, manager
@@ -103,10 +105,10 @@ def contribute_to_community_reserve(
     world, household_id: str, contributor_agent_id: str, resource: str, amount: float
 ) -> float:
     """Record an explicit, voluntary household contribution to the public reserve."""
-    household = world.state.households.get(household_id)
+    household = world.state.human.households.get(household_id)
     if household is None:
         raise ValueError(f"unknown household: {household_id}")
-    contributor = world.state.agents.get(contributor_agent_id)
+    contributor = world.state.human.agents.get(contributor_agent_id)
     if (contributor is None or not contributor.alive
             or contributor_agent_id not in household.member_ids):
         raise PermissionError("contributor must be a living member of the contributing household")
@@ -121,7 +123,7 @@ def contribute_to_community_reserve(
     stock = max(0.0, float(getattr(household, resource, 0.0)))
     if amount > stock + 1e-9:
         raise ValueError("contribution exceeds household-owned stock")
-    reserve = world.state.community_reserves
+    reserve = world.state.human.community_reserves
     if resource == "water":
         capacity = min(environment.community_water_reserve_capacity, float(
             storehouse.attributes.get("water_reserve_capacity", environment.community_water_reserve_capacity)
@@ -150,8 +152,8 @@ def request_community_relief(
     world, household_id: str, applicant_agent_id: str, requested_resources: dict[str, float]
 ) -> str:
     """A household member applies for relief; this queues but never issues stock."""
-    household = world.state.households.get(household_id)
-    applicant = world.state.agents.get(applicant_agent_id)
+    household = world.state.human.households.get(household_id)
+    applicant = world.state.human.agents.get(applicant_agent_id)
     if (household is None or applicant is None or not applicant.alive
             or applicant_agent_id not in household.member_ids):
         raise PermissionError("relief applicant must be a living member of the household")
@@ -169,7 +171,7 @@ def request_community_relief(
     if not clean:
         raise ValueError("relief request must contain a positive amount")
     sequence = sum(
-        1 for item in world.state.service_queues.values()
+        1 for item in world.state.human.service_queues.values()
         if item.get("queue_type") == "community_relief"
         and item.get("household_id") == household_id
     ) + 1
@@ -179,7 +181,7 @@ def request_community_relief(
         "household_id": household_id, "applicant_agent_id": applicant_agent_id,
         "requested_resources": clean, "status": "pending", "created_tick": world.current_tick,
     }
-    world.state.service_queues[request_id] = queue_after
+    world.state.human.service_queues[request_id] = queue_after
     world.event_log.append(world.current_tick, "service_request_queued", {
         "queue_key": request_id, "queue_after": queue_after,
     })
@@ -191,12 +193,12 @@ def approve_community_relief(
 ) -> dict[str, float]:
     """Issue only resources explicitly approved by the appointed storehouse manager."""
     _, manager = _community_storehouse_and_manager(world, manager_agent_id)
-    request = world.state.service_queues.get(request_id)
+    request = world.state.human.service_queues.get(request_id)
     if request is None or request.get("queue_type") != "community_relief":
         raise ValueError("unknown community relief request")
     if request.get("status") != "pending":
         raise ValueError("community relief request is not pending")
-    household = world.state.households.get(request.get("household_id", ""))
+    household = world.state.human.households.get(request.get("household_id", ""))
     if household is None:
         raise ValueError("relief applicant household no longer exists")
     requested = request.get("requested_resources") or {}
@@ -209,7 +211,7 @@ def approve_community_relief(
             clean[resource] = value
     if not clean:
         raise ValueError("approved relief must contain a positive amount")
-    reserve = world.state.community_reserves
+    reserve = world.state.human.community_reserves
     for resource, amount in clean.items():
         if float(reserve.get(resource, 0.0)) + 1e-9 < amount:
             raise ValueError(f"insufficient public reserve: {resource}")
@@ -225,7 +227,7 @@ def approve_community_relief(
     })
     queue_after = {**request, "status": "approved", "approved_resources": clean,
                    "resolved_tick": world.current_tick}
-    world.state.service_queues[request_id] = queue_after
+    world.state.human.service_queues[request_id] = queue_after
     world.event_log.append(world.current_tick, "service_queue_processed", {
         "queue_key": request_id, "queue_after": queue_after,
     })
@@ -244,7 +246,7 @@ def update_building_needs(world, tuning) -> None:
 
     def update(need_id: str, need_type: str, node_id: str, building_type: str,
                demand: float, capacity: float, pressured: bool) -> None:
-        previous = world.state.building_needs.get(need_id)
+        previous = world.state.human.building_needs.get(need_id)
         if not pressured and (previous is None or previous.status == "resolved"):
             return
         first_seen = previous.first_seen_tick if previous and previous.status == "active" else world.current_tick
@@ -268,7 +270,7 @@ def update_building_needs(world, tuning) -> None:
         )
         if previous is not None and previous.model_dump() == need.model_dump():
             return
-        world.state.building_needs[need_id] = need
+        world.state.human.building_needs[need_id] = need
         world.event_log.append(world.current_tick, "building_need_updated", {
             "need": need.model_dump(mode="json"),
         })
@@ -276,10 +278,10 @@ def update_building_needs(world, tuning) -> None:
     households = living_households(world)
     occupied_nodes = {household.home_node for household in households}
     dwellings = []
-    for building in world.state.buildings.values():
+    for building in world.state.human.buildings.values():
         if building.building_type != "dwelling" or building.status in {"ruined", "demolished"}:
             continue
-        parcel = world.state.land_parcels.get(building.parcel_id)
+        parcel = world.state.human.land_parcels.get(building.parcel_id)
         if parcel is not None:
             dwellings.append((building, parcel.spatial_node_id))
     vacant = sum(1 for _, node_id in dwellings if node_id not in occupied_nodes)
@@ -293,13 +295,13 @@ def update_building_needs(world, tuning) -> None:
     for household in households:
         residents = sum(
             1 for member_id in household.member_ids
-            if member_id in world.state.agents and world.state.agents[member_id].alive
+            if member_id in world.state.human.agents and world.state.human.agents[member_id].alive
         )
         dwelling = next((
-            building for building in world.state.buildings.values()
+            building for building in world.state.human.buildings.values()
             if building.building_type == "dwelling"
             and building.status in {"active", "occupied", "vacant"}
-            and (parcel := world.state.land_parcels.get(building.parcel_id)) is not None
+            and (parcel := world.state.human.land_parcels.get(building.parcel_id)) is not None
             and parcel.spatial_node_id == household.home_node
         ), None)
         capacity = (
@@ -327,7 +329,7 @@ def update_building_needs(world, tuning) -> None:
     threshold = int(getattr(tuning, "workshop_need_actions_per_30_days", 20))
     tracked_workshop_nodes = set(weave_by_node)
     tracked_workshop_nodes.update(
-        need.location_node_id for need in world.state.building_needs.values()
+        need.location_node_id for need in world.state.human.building_needs.values()
         if need.need_type == "production_capacity" and need.status == "active"
     )
     for node_id in sorted(tracked_workshop_nodes):
@@ -335,9 +337,9 @@ def update_building_needs(world, tuning) -> None:
         has_workshop = any(
             building.building_type == "workshop"
             and building.status in {"active", "occupied"}
-            and (parcel := world.state.land_parcels.get(building.parcel_id)) is not None
+            and (parcel := world.state.human.land_parcels.get(building.parcel_id)) is not None
             and parcel.spatial_node_id == node_id
-            for building in world.state.buildings.values()
+            for building in world.state.human.buildings.values()
         )
         update(
             f"node:{node_id}:workshop", "production_capacity", node_id,
@@ -345,21 +347,21 @@ def update_building_needs(world, tuning) -> None:
             count >= threshold and not has_workshop,
         )
 
-    for building in world.state.buildings.values():
+    for building in world.state.human.buildings.values():
         need_id = f"building:{building.building_id}:repair"
         if building.status in {"demolished", "abandoned"}:
-            previous = world.state.building_needs.get(need_id)
+            previous = world.state.human.building_needs.get(need_id)
             if previous is not None and previous.status == "active":
-                parcel = world.state.land_parcels.get(building.parcel_id)
+                parcel = world.state.human.land_parcels.get(building.parcel_id)
                 node_id = parcel.spatial_node_id if parcel is not None else "unknown"
                 update(need_id, "maintenance", node_id, building.building_type,
                        float(100.0 - building.condition),
                        float(tuning.building_repair_need_condition_threshold), False)
             continue
         pressured = building.condition < tuning.building_repair_need_condition_threshold
-        if not pressured and need_id not in world.state.building_needs:
+        if not pressured and need_id not in world.state.human.building_needs:
             continue
-        parcel = world.state.land_parcels.get(building.parcel_id)
+        parcel = world.state.human.land_parcels.get(building.parcel_id)
         node_id = parcel.spatial_node_id if parcel is not None else "unknown"
         update(
             need_id, "maintenance", node_id, building.building_type,
@@ -372,11 +374,10 @@ def update_building_needs(world, tuning) -> None:
 
 def settle_building_maintenance(world, tuning) -> None:
     """Apply small, event-sourced daily wear; repairs restore condition through projects."""
-    climate = world.state.climate
-    weather = getattr(getattr(climate, "current_weather", None), "value", "")
+    weather = EnvironmentQuery.weather_name(world)
     wet = "rain" in str(weather).lower() or "雨" in str(weather)
     weather_factor = tuning.building_weather_wear_multiplier if wet else 1.0
-    for building in world.state.buildings.values():
+    for building in world.state.human.buildings.values():
         if building.status not in {"active", "occupied", "vacant"} or building.condition <= 0:
             continue
         exposure = max(0.0, float(building.attributes.get("weather_exposure", 1.0)))

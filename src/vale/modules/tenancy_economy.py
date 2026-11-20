@@ -4,7 +4,7 @@ from copy import deepcopy
 from vale.core.state import LandRightState
 
 def _household(world, household_id):
-    household = world.state.households.get(household_id)
+    household = world.state.human.households.get(household_id)
     if household is None:
         raise ValueError(f"unknown household: {household_id}")
     return household
@@ -14,11 +14,11 @@ def create_land_lease(world, lease_id, *, parcel_id, lessor_household_id,
                       period_days=30, duration_days=360, rent_item="coin",
                       council_decision_id=None, maintenance_responsibility="lessee"):
     """Lease a parcel while preserving ownership; collective land needs council approval."""
-    if lease_id in world.state.land_leases or rent_item not in {"coin", "grain"}:
+    if lease_id in world.state.human.land_leases or rent_item not in {"coin", "grain"}:
         raise ValueError("duplicate lease id or unsupported rent item")
     if rent_per_period < 0 or deposit < 0 or period_days < 1 or duration_days < 1 or maintenance_responsibility not in {"lessor", "lessee", "shared"}:
         raise ValueError("invalid lease terms")
-    parcel = world.state.land_parcels.get(parcel_id)
+    parcel = world.state.human.land_parcels.get(parcel_id)
     lessee = _household(world, lessee_household_id)
     lessor = None if (parcel is not None and parcel.owner_type == "collective") else _household(world, lessor_household_id)
     if parcel is None or parcel.contested or parcel.owner_type == "protected":
@@ -30,7 +30,7 @@ def create_land_lease(world, lease_id, *, parcel_id, lessor_household_id,
     if parcel.owner_type == "collective":
         if lessor_household_id != "village":
             raise ValueError("collective land rent must be paid to the village treasury")
-        decision = world.state.council_decisions.get(council_decision_id or "")
+        decision = world.state.human.council_decisions.get(council_decision_id or "")
         if decision is None or decision.status != "approved" or decision.subject != f"lease:{parcel_id}:{lessee_household_id}":
             raise ValueError("collective lease requires its matching approved council decision")
     elif parcel.owner_type != "household":
@@ -58,12 +58,12 @@ def create_land_lease(world, lease_id, *, parcel_id, lessor_household_id,
         "lessee_inventory_after": {rent_item: after},
     })
     setattr(lessee, rent_item, after)
-    world.state.land_leases[lease_id] = lease
+    world.state.human.land_leases[lease_id] = lease
     parcel.use_rights.append(right)
     return lease
 
 def settle_land_rent(world, lease_id):
-    lease = world.state.land_leases.get(lease_id)
+    lease = world.state.human.land_leases.get(lease_id)
     if lease is None or lease["status"] not in {"active", "arrears"} or world.current_tick < lease["next_due_tick"]:
         return False
     lessee = _household(world, lease["lessee_household_id"])
@@ -74,7 +74,7 @@ def settle_land_rent(world, lease_id):
     paid = getattr(lessee, item) + 1e-9 >= amount_due
     after = dict(lease)
     inventories = {lessee.household_id: {item: round(getattr(lessee, item) - (amount_due if paid else 0), 2)}}
-    treasury_after = dict(world.state.public_treasury)
+    treasury_after = dict(world.state.human.public_treasury)
     if lessor is not None:
         inventories[lessor.household_id] = {item: round(getattr(lessor, item) + (amount_due if paid else 0), 2)}
     elif paid:
@@ -94,15 +94,15 @@ def settle_land_rent(world, lease_id):
         h = _household(world, hid)
         for field, value in values.items():
             setattr(h, field, value)
-    world.state.public_treasury = treasury_after
+    world.state.human.public_treasury = treasury_after
     lease.update(after)
     return paid
 
 def terminate_land_lease(world, lease_id, *, reason="expired"):
-    lease = world.state.land_leases.get(lease_id)
+    lease = world.state.human.land_leases.get(lease_id)
     if lease is None or lease["status"] not in {"active", "arrears"}:
         raise ValueError("lease is not active")
-    parcel = world.state.land_parcels[lease["parcel_id"]]
+    parcel = world.state.human.land_parcels[lease["parcel_id"]]
     lessee = _household(world, lease["lessee_household_id"])
     lessor = None if lease["lessor_household_id"] == "village" else _household(world, lease["lessor_household_id"])
     item = lease["rent_item"]
@@ -111,7 +111,7 @@ def terminate_land_lease(world, lease_id, *, reason="expired"):
     applied = min(deposit, arrears)
     refund = round(deposit - applied, 2)
     inventories = {lessee.household_id: {item: round(getattr(lessee, item) + refund, 2)}}
-    treasury_after = dict(world.state.public_treasury)
+    treasury_after = dict(world.state.human.public_treasury)
     if applied > 0:
         if lessor is not None:
             inventories[lessor.household_id] = {item: round(getattr(lessor, item) + applied, 2)}
@@ -131,7 +131,7 @@ def terminate_land_lease(world, lease_id, *, reason="expired"):
         h = _household(world, hid)
         for field, value in values.items():
             setattr(h, field, value)
-    world.state.public_treasury = treasury_after
+    world.state.human.public_treasury = treasury_after
     parcel.use_rights = [r for r in parcel.use_rights if r.right_id != f"lease:{lease_id}"]
     lease.update(after)
     return lease
@@ -139,14 +139,14 @@ def terminate_land_lease(world, lease_id, *, reason="expired"):
 
 def renew_land_lease(world, lease_id, *, additional_days, new_rent_per_period=None, council_decision_id=None):
     """Renew an unexpired lease; collective land requires a matching council approval."""
-    lease = world.state.land_leases.get(lease_id)
+    lease = world.state.human.land_leases.get(lease_id)
     if lease is None or lease["status"] != "active" or world.current_tick >= lease["expires_tick"]:
         raise ValueError("only an active, unexpired lease can be renewed")
     if additional_days < 1 or (new_rent_per_period is not None and new_rent_per_period < 0):
         raise ValueError("invalid renewal terms")
-    parcel = world.state.land_parcels[lease["parcel_id"]]
+    parcel = world.state.human.land_parcels[lease["parcel_id"]]
     if lease["lessor_household_id"] == "village":
-        decision = world.state.council_decisions.get(council_decision_id or "")
+        decision = world.state.human.council_decisions.get(council_decision_id or "")
         expected = f"lease:{parcel.parcel_id}:{lease['lessee_household_id']}"
         if decision is None or decision.status != "approved" or decision.subject != expected:
             raise ValueError("collective lease renewal requires matching council approval")
@@ -165,8 +165,8 @@ def renew_land_lease(world, lease_id, *, additional_days, new_rent_per_period=No
 
 def settle_due_leases(world):
     results = []
-    for lease_id in sorted(world.state.land_leases):
-        lease = world.state.land_leases[lease_id]
+    for lease_id in sorted(world.state.human.land_leases):
+        lease = world.state.human.land_leases[lease_id]
         if lease["status"] not in {"active", "arrears"}:
             continue
         if world.current_tick >= lease["expires_tick"]:
@@ -208,14 +208,14 @@ def _storage_access(building, household_id):
             or household_id in building.attributes.get("shared_with_household_ids", []))
 
 def deposit_shared_storage(world, building_id, household_id, *, item, quantity):
-    building, household = world.state.buildings.get(building_id), _household(world, household_id)
+    building, household = world.state.human.buildings.get(building_id), _household(world, household_id)
     if building is None or building.building_type != "storehouse" or building.status not in {"active", "occupied"} or not _storage_access(building, household_id):
         raise ValueError("active storehouse access is required")
     goods = {"grain", "meat", "fish", "vegetable", "cloth", "firewood", "herbs", "hardwood"}
     if item not in goods or quantity <= 0 or getattr(household, item) + 1e-9 < quantity:
         raise ValueError("invalid deposit or insufficient household inventory")
-    stored = dict(building.attributes.get("stored_inventory") or {})
-    balances = dict(building.attributes.get("depositor_balances") or {})
+    stored = dict(building.stored_inventory)
+    balances = dict(building.depositor_balances)
     capacity = float(building.attributes.get("storage_capacity", 120.0))
     if sum(float(v) for v in stored.values()) + quantity > capacity + 1e-9:
         raise ValueError("storehouse capacity exceeded")
@@ -227,18 +227,18 @@ def deposit_shared_storage(world, building_id, household_id, *, item, quantity):
         "building_id": building_id, "household_id": household_id, "stored_inventory_after": stored,
         "depositor_balances_after": balances, "household_inventory_after": inv,
     })
-    building.attributes["stored_inventory"], building.attributes["depositor_balances"] = stored, balances
+    building.stored_inventory, building.depositor_balances = stored, balances
     setattr(household, item, inv[item])
     return stored[item]
 
 def withdraw_shared_storage(world, building_id, household_id, *, item, quantity):
-    building, household = world.state.buildings.get(building_id), _household(world, household_id)
+    building, household = world.state.human.buildings.get(building_id), _household(world, household_id)
     if building is None or building.building_type != "storehouse" or building.status not in {"active", "occupied"} or not _storage_access(building, household_id):
         raise ValueError("active storehouse access is required")
     if quantity <= 0:
         raise ValueError("quantity must be positive")
-    stored = dict(building.attributes.get("stored_inventory") or {})
-    balances = dict(building.attributes.get("depositor_balances") or {})
+    stored = dict(building.stored_inventory)
+    balances = dict(building.depositor_balances)
     key = f"{household_id}:{item}"
     if item not in stored or float(balances.get(key, 0)) + 1e-9 < quantity or float(stored[item]) + 1e-9 < quantity:
         raise ValueError("withdrawal exceeds this household's deposit")
@@ -249,7 +249,7 @@ def withdraw_shared_storage(world, building_id, household_id, *, item, quantity)
         "building_id": building_id, "household_id": household_id, "stored_inventory_after": stored,
         "depositor_balances_after": balances, "household_inventory_after": inv,
     })
-    building.attributes["stored_inventory"], building.attributes["depositor_balances"] = stored, balances
+    building.stored_inventory, building.depositor_balances = stored, balances
     setattr(household, item, inv[item])
     return inv[item]
 
@@ -258,7 +258,7 @@ def enqueue_service_request(world, request_id, *, node_id, service, household_id
     if requested_units <= 0:
         raise ValueError("requested_units must be positive")
     key = f"{node_id}:{service}"
-    queue = deepcopy(world.state.service_queues.get(key) or {
+    queue = deepcopy(world.state.human.service_queues.get(key) or {
         "node_id": node_id, "service": service, "requests": [], "served_units": 0.0,
     })
     if any(r["request_id"] == request_id for r in queue["requests"]):
@@ -267,14 +267,14 @@ def enqueue_service_request(world, request_id, *, node_id, service, household_id
              "requested_units": float(requested_units), "queued_tick": world.current_tick}
     queue["requests"].append(entry)
     world.event_log.append(world.current_tick, "service_request_queued", {"queue_key": key, "queue_after": queue, "request": entry})
-    world.state.service_queues[key] = queue
+    world.state.human.service_queues[key] = queue
     return {"position": len(queue["requests"]), "estimated_wait_ticks": len(queue["requests"])-1}
 
 def process_service_queue(world, *, node_id, service, capacity_units):
     if capacity_units < 0:
         raise ValueError("capacity_units must be non-negative")
     key = f"{node_id}:{service}"
-    queue = deepcopy(world.state.service_queues.get(key) or {
+    queue = deepcopy(world.state.human.service_queues.get(key) or {
         "node_id": node_id, "service": service, "requests": [], "served_units": 0.0,
     })
     remaining, served = float(capacity_units), []
@@ -290,7 +290,7 @@ def process_service_queue(world, *, node_id, service, capacity_units):
     queue["requests"] = [r for r in queue["requests"] if float(r["requested_units"]) > 1e-9]
     queue["served_units"] = round(float(queue.get("served_units", 0))+sum(x["units"] for x in served), 4)
     world.event_log.append(world.current_tick, "service_queue_processed", {"queue_key": key, "queue_after": queue, "served": served})
-    world.state.service_queues[key] = queue
+    world.state.human.service_queues[key] = queue
     return served
 
 class TenancyEconomyModule:
@@ -303,8 +303,8 @@ class TenancyEconomyModule:
         settle_due_resource_loans(world)
         tuning = getattr(getattr(world.config, "agents", None), "tuning", None)
         capacities = getattr(getattr(tuning, "environment", None), "service_capacity_by_node", {}) or {}
-        for key in sorted(world.state.service_queues):
-            queue = world.state.service_queues[key]
+        for key in sorted(world.state.human.service_queues):
+            queue = world.state.human.service_queues[key]
             node_id, service = queue.get("node_id"), queue.get("service")
             capacity = (capacities.get(node_id) or {}).get(service)
             if capacity is not None and queue.get("requests"):
@@ -315,7 +315,7 @@ def lend_household_goods(world, loan_id, *, lender_household_id, borrower_househ
     """Transfer goods as a tracked in-kind loan, not an unrecorded gift."""
     lender, borrower = _household(world, lender_household_id), _household(world, borrower_household_id)
     goods = {"grain", "meat", "fish", "vegetable", "cloth", "firewood", "herbs", "hardwood"}
-    if loan_id in world.state.resource_loans or lender_household_id == borrower_household_id:
+    if loan_id in world.state.human.resource_loans or lender_household_id == borrower_household_id:
         raise ValueError("duplicate loan id or identical households")
     if item not in goods or quantity <= 0 or repayment_quantity < quantity or due_tick <= world.current_tick:
         raise ValueError("invalid in-kind loan terms")
@@ -339,12 +339,12 @@ def lend_household_goods(world, loan_id, *, lender_household_id, borrower_househ
         h = _household(world, hid)
         for field, value in values.items():
             setattr(h, field, value)
-    world.state.resource_loans[loan_id] = loan
+    world.state.human.resource_loans[loan_id] = loan
     return loan
 
 def repay_household_goods(world, loan_id, *, quantity):
     """Repay an in-kind loan partially or fully; lender receives actual goods."""
-    loan = world.state.resource_loans.get(loan_id)
+    loan = world.state.human.resource_loans.get(loan_id)
     if loan is None or loan["status"] not in {"active", "overdue"}:
         raise ValueError("resource loan is not outstanding")
     if quantity <= 0:
@@ -375,8 +375,8 @@ def repay_household_goods(world, loan_id, *, quantity):
 def settle_due_resource_loans(world):
     """Mark overdue in-kind obligations once, without repeatedly emitting events."""
     changed = []
-    for loan_id in sorted(world.state.resource_loans):
-        loan = world.state.resource_loans[loan_id]
+    for loan_id in sorted(world.state.human.resource_loans):
+        loan = world.state.human.resource_loans[loan_id]
         if loan["status"] == "active" and world.current_tick > int(loan["due_tick"]):
             after = dict(loan, status="overdue", overdue_tick=world.current_tick)
             world.event_log.append(world.current_tick, "resource_loan_overdue", {

@@ -46,12 +46,12 @@ def test_drought_accumulates_without_rain(world):
     """连续 10 天无雨，旱情累积值应增加（且单调递增）。"""
     world.register(ClimateModule(rng=_DryRng()))
     run_tick(world)  # 初始化
-    initial_acc = world.state.climate.drought_accumulation
+    initial_acc = world.state.environment.climate.drought_accumulation
 
     accs = [initial_acc]
     for _ in range(9):
         run_tick(world)
-        accs.append(world.state.climate.drought_accumulation)
+        accs.append(world.state.environment.climate.drought_accumulation)
 
     assert accs[-1] > accs[0]
     assert all(accs[i + 1] >= accs[i] for i in range(len(accs) - 1))
@@ -63,10 +63,10 @@ def test_rain_reduces_drought(world):
     """连续降雨应按 recovery_rate 降低旱情累积。"""
     world.register(ClimateModule(rng=_WetRng()))
     run_tick(world)
-    initial_acc = world.state.climate.drought_accumulation
+    initial_acc = world.state.environment.climate.drought_accumulation
     for _ in range(3):
         run_tick(world)
-    assert world.state.climate.drought_accumulation < initial_acc
+    assert world.state.environment.climate.drought_accumulation < initial_acc
 
 
 def test_season_changes_spring_to_summer(world):
@@ -78,7 +78,7 @@ def test_season_changes_spring_to_summer(world):
     # 春季 90 天：tick 1..90 为春，tick 91 起入夏，故需 91 次 run_tick
     for _ in range(92):
         run_tick(world)
-        seasons_seen.add(world.state.climate.season.value)
+        seasons_seen.add(world.state.environment.climate.season.value)
     assert "summer" in seasons_seen
     # 应有 season_changed 事件
     season_events = world.event_log.by_type("season_changed")
@@ -95,7 +95,7 @@ def test_temperature_delta_within_limit(world):
     temps = []
     for _ in range(12):
         run_tick(world)
-        temps.append(world.state.climate.temperature_c)
+        temps.append(world.state.environment.climate.temperature_c)
     deltas = [abs(temps[i + 1] - temps[i]) for i in range(len(temps) - 1)]
     assert deltas, "should have run multiple ticks"
     assert all(d <= 2.0 + 1e-9 for d in deltas), f"temperature jumped: {deltas}"

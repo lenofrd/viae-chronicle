@@ -51,12 +51,12 @@ def initialize_land(world) -> None:
     Field nodes are collective by default; the established south-field
     holding is seeded as Li Quan household property and work assignments become rights.
     """
-    if world.state.land_parcels:
+    if world.state.human.land_parcels:
         return
 
     for cell in getattr(world.config, "terrain", []) or []:
         cell_id = f"terrain:{cell.x}:{cell.y}"
-        world.state.terrain_cells[cell_id] = TerrainCellState(
+        world.state.environment.terrain_cells[cell_id] = TerrainCellState(
             cell_id=cell_id,
             x=cell.x,
             y=cell.y,
@@ -69,7 +69,7 @@ def initialize_land(world) -> None:
 
     household_by_home = {
         household.home_node: household
-        for household in world.state.households.values()
+        for household in world.state.human.households.values()
     }
 
     for node in sorted(world.config.spatial.nodes, key=lambda item: item.id):
@@ -80,8 +80,8 @@ def initialize_land(world) -> None:
             owner_type, owner_id = "protected", "village"
         elif household is not None:
             owner_type, owner_id = "household", household.household_id
-        elif attrs.get("initial_owner_agent_id") in world.state.agents:
-            owner_agent = world.state.agents[attrs["initial_owner_agent_id"]]
+        elif attrs.get("initial_owner_agent_id") in world.state.human.agents:
+            owner_agent = world.state.human.agents[attrs["initial_owner_agent_id"]]
             owner_type, owner_id = "household", owner_agent.household_id
         else:
             owner_type, owner_id = "collective", "village"
@@ -114,7 +114,7 @@ def initialize_land(world) -> None:
                 "vacant_home": bool(attrs.get("residence") and household is None),
             },
         )
-        world.state.land_parcels[parcel.parcel_id] = parcel
+        world.state.human.land_parcels[parcel.parcel_id] = parcel
         world.event_log.append(world.current_tick, "land_parcel_created", {
             "parcel": parcel.model_dump(mode="json"),
         })
@@ -132,15 +132,15 @@ def initialize_land(world) -> None:
                 created_tick=world.current_tick,
                 attributes={"spatial_node_id": node.id},
             )
-            world.state.buildings[building.building_id] = building
+            world.state.human.buildings[building.building_id] = building
             world.event_log.append(world.current_tick, "building_created", {
                 "building": building.model_dump(mode="json"),
             })
 
     # The market's collective storehouse also provides the village granary and cistern.
     # It is deliberately not household-owned, so no family receives a private storage bonus.
-    market_parcel = world.state.land_parcels.get("parcel:market")
-    if market_parcel is not None and "building:community_storehouse" not in world.state.buildings:
+    market_parcel = world.state.human.land_parcels.get("parcel:market")
+    if market_parcel is not None and "building:community_storehouse" not in world.state.human.buildings:
         environment_tuning = world.config.agents.tuning.environment
         food_reserve_capacity = environment_tuning.community_food_reserve_capacity
         water_reserve_capacity = environment_tuning.community_water_reserve_capacity
@@ -161,16 +161,16 @@ def initialize_land(world) -> None:
                 "water_reserve_capacity": water_reserve_capacity,
             },
         )
-        world.state.buildings[storehouse.building_id] = storehouse
+        world.state.human.buildings[storehouse.building_id] = storehouse
         world.event_log.append(world.current_tick, "building_created", {
             "building": storehouse.model_dump(mode="json"),
         })
 
     # The existing deterministic household work allocation is the source of
     # initial cultivation rights; it is not replaced by a second allocation.
-    for household in sorted(world.state.households.values(), key=lambda item: item.household_id):
+    for household in sorted(world.state.human.households.values(), key=lambda item: item.household_id):
         for node_id in household.work_nodes or [household.work_node]:
-            parcel = world.state.land_parcels.get(f"parcel:{node_id}")
+            parcel = world.state.human.land_parcels.get(f"parcel:{node_id}")
             if parcel is None or not parcel.land_use.startswith("farmland"):
                 continue
             right = LandRightState(
@@ -195,14 +195,14 @@ def grant_land_right(
     right_type: str, purpose: str | None = None,
 ) -> LandRightState:
     """Grant a recorded right after validating the parcel and holder."""
-    parcel = world.state.land_parcels.get(parcel_id)
+    parcel = world.state.human.land_parcels.get(parcel_id)
     if parcel is None:
         raise KeyError(f"unknown land parcel: {parcel_id}")
     if parcel.contested:
         raise ValueError("cannot grant rights on a contested parcel")
     if parcel.owner_type == "protected" or parcel.land_use == "protected":
         raise ValueError("protected land cannot receive ordinary private-use rights")
-    if holder_type == "household" and holder_id not in world.state.households:
+    if holder_type == "household" and holder_id not in world.state.human.households:
         raise ValueError(f"unknown household: {holder_id}")
     if holder_type not in {"household", "collective", "public"}:
         raise ValueError(f"unsupported right holder type: {holder_type}")
@@ -227,14 +227,14 @@ def transfer_land_ownership(
     world, parcel_id: str, *, new_owner_household_id: str, actor_id: str,
 ) -> LandParcelState:
     """Transfer household-owned land; collective/protected land is not saleable."""
-    parcel = world.state.land_parcels.get(parcel_id)
+    parcel = world.state.human.land_parcels.get(parcel_id)
     if parcel is None:
         raise KeyError(f"unknown land parcel: {parcel_id}")
     if parcel.contested:
         raise ValueError("cannot transfer a contested parcel")
     if parcel.owner_type != "household" or not parcel.owner_id:
         raise ValueError("only household-owned parcels may be transferred")
-    if new_owner_household_id not in world.state.households:
+    if new_owner_household_id not in world.state.human.households:
         raise ValueError(f"unknown household: {new_owner_household_id}")
     if new_owner_household_id == parcel.owner_id:
         return parcel
@@ -246,7 +246,7 @@ def transfer_land_ownership(
         "actor_id": actor_id,
     })
     parcel.owner_id = new_owner_household_id
-    for building in world.state.buildings.values():
+    for building in world.state.human.buildings.values():
         if building.parcel_id == parcel_id and building.owner_id == before:
             building.owner_type = "household"
             building.owner_id = new_owner_household_id
@@ -258,7 +258,7 @@ def change_land_use(
     decision_id: str,
 ) -> LandParcelState:
     """Apply a council-approved use change; ordinary code cannot bypass approval."""
-    parcel = world.state.land_parcels.get(parcel_id)
+    parcel = world.state.human.land_parcels.get(parcel_id)
     if parcel is None:
         raise KeyError(f"unknown land parcel: {parcel_id}")
     if parcel.contested:
@@ -267,7 +267,7 @@ def change_land_use(
         raise ValueError("protected land use cannot be changed by village approval")
     if approved_by != "household_council" or not decision_id.strip():
         raise ValueError("land-use changes require a household council decision")
-    decision = world.state.council_decisions.get(decision_id)
+    decision = world.state.human.council_decisions.get(decision_id)
     expected_subject = f"land_use_change:{parcel_id}:{new_land_use}"
     if decision is None or decision.status != "approved" or decision.subject != expected_subject or not decision.major:
         raise ValueError("land-use change requires its matching approved major council decision")
@@ -306,8 +306,8 @@ def change_land_use(
 def relocate_household(world, *, household_id: str, new_parcel_id: str,
                       decision_id: str) -> LandParcelState:
     """Move a household into an existing vacant dwelling before proposing new construction."""
-    household = world.state.households.get(household_id)
-    new_parcel = world.state.land_parcels.get(new_parcel_id)
+    household = world.state.human.households.get(household_id)
+    new_parcel = world.state.human.land_parcels.get(new_parcel_id)
     if household is None or new_parcel is None:
         raise ValueError("household and destination parcel must exist")
     if new_parcel.contested or new_parcel.land_use != "residential":
@@ -317,7 +317,7 @@ def relocate_household(world, *, household_id: str, new_parcel_id: str,
     if new_parcel.owner_type not in {"collective", "household"}:
         raise ValueError("destination ownership does not permit household relocation")
     destination = next((
-        building for building in world.state.buildings.values()
+        building for building in world.state.human.buildings.values()
         if building.parcel_id == new_parcel_id
         and building.building_type == "dwelling"
         and building.status == "vacant"
@@ -327,20 +327,20 @@ def relocate_household(world, *, household_id: str, new_parcel_id: str,
     if destination is None:
         raise ValueError("destination parcel has no usable vacant dwelling")
     old_parcel = next((
-        parcel for parcel in world.state.land_parcels.values()
+        parcel for parcel in world.state.human.land_parcels.values()
         if parcel.spatial_node_id == household.home_node
     ), None)
     if old_parcel is None or old_parcel.owner_type != "household" or old_parcel.owner_id != household_id:
         raise ValueError("current household home parcel is not household-owned")
     old_building = next((
-        building for building in world.state.buildings.values()
+        building for building in world.state.human.buildings.values()
         if building.parcel_id == old_parcel.parcel_id
         and building.building_type == "dwelling"
         and building.status in {"occupied", "active"}
     ), None)
     if old_building is None:
         raise ValueError("current household dwelling is missing")
-    decision = world.state.council_decisions.get(decision_id)
+    decision = world.state.human.council_decisions.get(decision_id)
     if (decision is None or decision.status != "approved"
             or decision.subject != f"relocate:{household_id}:{new_parcel_id}"
             or household_id not in decision.affected_household_ids):
@@ -357,7 +357,7 @@ def relocate_household(world, *, household_id: str, new_parcel_id: str,
     destination.status = "occupied"
     household.home_node = new_parcel.spatial_node_id
     for member_id in household.member_ids:
-        agent = world.state.agents.get(member_id)
+        agent = world.state.human.agents.get(member_id)
         if agent is None:
             continue
         # Residence belongs to HouseholdState; AgentState has no home_node field.
@@ -388,18 +388,18 @@ def settle_household_land_inheritance(
     With no eligible heir, private land returns to village collective ownership.
     Household-held use rights on collective land follow the heir, or are revoked.
     """
-    if deceased_household_id not in world.state.households:
+    if deceased_household_id not in world.state.human.households:
         raise KeyError(f"unknown deceased household: {deceased_household_id}")
-    if heir_household_id is not None and heir_household_id not in world.state.households:
+    if heir_household_id is not None and heir_household_id not in world.state.human.households:
         raise KeyError(f"unknown heir household: {heir_household_id}")
     if heir_household_id == deceased_household_id:
         return []
 
     changed_parcels: list[str] = []
-    for parcel in sorted(world.state.land_parcels.values(), key=lambda item: item.parcel_id):
+    for parcel in sorted(world.state.human.land_parcels.values(), key=lambda item: item.parcel_id):
         if parcel.owner_type == "household" and parcel.owner_id == deceased_household_id:
             building_ids = sorted(
-                building.building_id for building in world.state.buildings.values()
+                building.building_id for building in world.state.human.buildings.values()
                 if building.parcel_id == parcel.parcel_id
                 and building.owner_type == "household"
                 and building.owner_id == deceased_household_id
@@ -415,7 +415,7 @@ def settle_household_land_inheritance(
                 parcel.owner_type, parcel.owner_id = "household", heir_household_id
                 parcel.management_authority = None
                 for building_id in building_ids:
-                    building = world.state.buildings[building_id]
+                    building = world.state.human.buildings[building_id]
                     building.owner_type, building.owner_id = "household", heir_household_id
             else:
                 world.event_log.append(world.current_tick, "land_ownership_escheated", {
@@ -429,7 +429,7 @@ def settle_household_land_inheritance(
                 parcel.owner_type, parcel.owner_id = "collective", "village"
                 parcel.management_authority = "village_council"
                 for building_id in building_ids:
-                    building = world.state.buildings[building_id]
+                    building = world.state.human.buildings[building_id]
                     building.owner_type, building.owner_id = "collective", "village"
             changed_parcels.append(parcel.parcel_id)
 
@@ -464,7 +464,7 @@ def settle_household_land_inheritance(
 
     # Active lease contracts are household obligations/assets too. Preserve the
     # agreement when a party's household dissolves; do not silently erase rent.
-    for lease_id, lease in sorted(world.state.land_leases.items()):
+    for lease_id, lease in sorted(world.state.human.land_leases.items()):
         if lease.get("status") not in {"active", "arrears"}:
             continue
         after = dict(lease)
@@ -476,7 +476,7 @@ def settle_household_land_inheritance(
             if heir_household_id is None:
                 after.update(status="terminated", ended_tick=world.current_tick,
                              end_reason="lessee_household_dissolved_without_heir")
-                parcel = world.state.land_parcels.get(lease.get("parcel_id"))
+                parcel = world.state.human.land_parcels.get(lease.get("parcel_id"))
                 if parcel is not None:
                     parcel.use_rights = [r for r in parcel.use_rights if r.right_id != f"lease:{lease_id}"]
             else:
@@ -495,16 +495,16 @@ def settle_household_land_inheritance(
 def relinquish_household_parcel(world, parcel_id: str, *, household_id: str,
                                 reason: str = "unable_to_maintain") -> None:
     """Voluntarily return private non-homestead land to the village collective."""
-    parcel = world.state.land_parcels.get(parcel_id)
-    household = world.state.households.get(household_id)
+    parcel = world.state.human.land_parcels.get(parcel_id)
+    household = world.state.human.households.get(household_id)
     if parcel is None or household is None or parcel.owner_type != "household" or parcel.owner_id != household_id:
         raise ValueError("household must own the parcel being relinquished")
     if parcel.land_use == "residential" and household.home_node == parcel.spatial_node_id:
         raise ValueError("relocate before relinquishing the current homestead")
     if any(x.get("parcel_id") == parcel_id and x.get("status") in {"active", "arrears"}
-           for x in world.state.land_leases.values()):
+           for x in world.state.human.land_leases.values()):
         raise ValueError("settle or terminate active leases before relinquishing")
-    building_ids = sorted(b.building_id for b in world.state.buildings.values()
+    building_ids = sorted(b.building_id for b in world.state.human.buildings.values()
                           if b.parcel_id == parcel_id and b.owner_type == "household" and b.owner_id == household_id)
     world.event_log.append(world.current_tick, "land_ownership_relinquished", {
         "parcel_id": parcel_id, "previous_owner_household_id": household_id,
@@ -514,7 +514,7 @@ def relinquish_household_parcel(world, parcel_id: str, *, household_id: str,
     parcel.owner_type, parcel.owner_id = "collective", "village"
     parcel.management_authority = "village_council"
     for building_id in building_ids:
-        building = world.state.buildings[building_id]
+        building = world.state.human.buildings[building_id]
         building.owner_type, building.owner_id = "collective", "village"
     for right in list(parcel.use_rights):
         if right.holder_type == "household" and right.holder_id == household_id:

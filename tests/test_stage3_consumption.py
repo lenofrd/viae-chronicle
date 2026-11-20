@@ -36,7 +36,7 @@ def _module(world) -> AgentModule:
 
 def _add_minor(world, host_id: str = "zhao_cuilan", agent_id: str = "child_88") -> AgentState:
     """把一个 0 岁未成年加入 host_id 所在家庭（随户消费）。"""
-    host = world.state.agents[host_id]
+    host = world.state.human.agents[host_id]
     household = hh(world, host)
     household.member_ids.append(agent_id)
     child = AgentState(
@@ -47,7 +47,7 @@ def _add_minor(world, host_id: str = "zhao_cuilan", agent_id: str = "child_88") 
         mother_id=host_id if host.sex == AgentSex.FEMALE else None,
         father_id=host_id if host.sex == AgentSex.MALE else None,
     )
-    world.state.agents[agent_id] = child
+    world.state.human.agents[agent_id] = child
     return child
 
 
@@ -85,7 +85,7 @@ def test_adult_ration_unchanged():
     w = _build()
     mod = _module(w)
     tuning = w.config.agents.tuning
-    lin = w.state.agents["lin_yuan"]
+    lin = w.state.human.agents["lin_yuan"]
     household = hh(w, lin)
     household.grain = 10.0
     lin.hunger = 80.0
@@ -115,7 +115,7 @@ def test_consumption_conserves_household_stock():
     w = _build()
     mod = _module(w)
     tuning = w.config.agents.tuning
-    lin = w.state.agents["lin_yuan"]
+    lin = w.state.human.agents["lin_yuan"]
     child = _add_minor(w, host_id="lin_yuan")
     household = hh(w, lin)
     household.grain = 10.0

@@ -194,6 +194,53 @@ def _render_water_consumed(payload: dict) -> tuple[str, bool]:
     return f"家庭用水 {float(amount):g}（余 {float(after):g}）", False
 
 
+def _render_water_source_initialized(payload: dict) -> tuple[str, bool]:
+    node_id = payload.get("water_node")
+    source = payload.get("source") or {}
+    if not node_id or "current_stock" not in source or "capacity" not in source:
+        return "水源库存初始化（数据缺失）", True
+    return (
+        f"水源[{node_id}]就绪：存量 {float(source['current_stock']):g}"
+        f"/{float(source['capacity']):g}（再生 {float(source.get('regeneration_per_tick', 0)):g}/日，"
+        f"日抽上限 {float(source.get('extraction_limit_per_tick', 0)):g}）",
+        False,
+    )
+
+
+def _render_water_source_regenerated(payload: dict) -> tuple[str, bool]:
+    node_id = payload.get("water_node")
+    amount = payload.get("amount")
+    after = payload.get("stock_after")
+    if not node_id or amount is None or after is None:
+        return "水源补水（数据缺失）", True
+    return f"水源[{node_id}]补水 {float(amount):g}（存量 {float(after):g}）", False
+
+
+def _render_water_withdrawn(payload: dict) -> tuple[str, bool]:
+    node_id = payload.get("water_node")
+    amount = payload.get("amount")
+    after = payload.get("stock_after")
+    who = payload.get("requester_id") or "?"
+    if not node_id or amount is None or after is None:
+        return "取水（数据缺失）", True
+    return f"[{who}] 从水源[{node_id}]取水 {float(amount):g}（存量 {float(after):g}）", False
+
+
+def _render_water_withdrawal_refused(payload: dict) -> tuple[str, bool]:
+    node_id = payload.get("water_node")
+    requested = payload.get("requested")
+    granted = payload.get("granted")
+    if not node_id or requested is None or granted is None:
+        return "取水被拒（数据缺失）", True
+    who = payload.get("requester_id") or "?"
+    reason = payload.get("reason") or "?"
+    return (
+        f"[{who}] 从水源[{node_id}]取水被拒：请求 {float(requested):g}，"
+        f"实给 {float(granted):g}（{reason}）",
+        False,
+    )
+
+
 def _safe_diff(after: Any, before: Any) -> str:
     try:
         return _num(float(after) - float(before))
@@ -794,6 +841,18 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
             reason = "missing_water_field" if degraded else None
         elif event_type == "water_consumed":
             text, degraded = _render_water_consumed(payload)
+            reason = "missing_water_field" if degraded else None
+        elif event_type == "water_source_initialized":
+            text, degraded = _render_water_source_initialized(payload)
+            reason = "missing_water_field" if degraded else None
+        elif event_type == "water_source_regenerated":
+            text, degraded = _render_water_source_regenerated(payload)
+            reason = "missing_water_field" if degraded else None
+        elif event_type == "water_withdrawn":
+            text, degraded = _render_water_withdrawn(payload)
+            reason = "missing_water_field" if degraded else None
+        elif event_type == "water_withdrawal_refused":
+            text, degraded = _render_water_withdrawal_refused(payload)
             reason = "missing_water_field" if degraded else None
         elif event_type == "agent_action_taken":
             text, degraded = _render_action(payload, names)

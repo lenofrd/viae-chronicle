@@ -33,7 +33,7 @@ class World:
         self.modules: list[Module] = []
         # 加载好的配置聚合对象（含 .natural_params / .spatial / .world）
         self.config = config
-        # 结构化共享状态，气候模块负责初始化并写入 world.state.climate
+        # 结构化共享状态，气候模块负责初始化并写入 world.state.environment.climate
         self.state: WorldState = WorldState()
 
     def register(self, module: Module) -> None:

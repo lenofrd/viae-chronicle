@@ -59,7 +59,7 @@ def _window(world) -> int:
 
 def _record(world, observer_id: str, target_id: str, outcome: str, tick: int) -> None:
     social.record_memory(
-        world.state.agents[observer_id], target_id, "debt_dispute", outcome, tick,
+        world.state.human.agents[observer_id], target_id, "debt_dispute", outcome, tick,
         world.config.agents.tuning.social.memory_capacity,
     )
 
@@ -80,7 +80,7 @@ def test_impression_window_defaults_to_memory_capacity(world):
 
 
 def test_impressions_default_empty(world):
-    for agent in world.state.agents.values():
+    for agent in world.state.human.agents.values():
         assert agent.impressions == {}
     assert _bare_agent().impressions == {}
 
@@ -114,7 +114,7 @@ def test_synthesize_requires_threshold(world):
     assert social.synthesize_impression(world.state, OBSERVER, TARGET, _window(world)) is None
 
     # 单次违约：出现违约即合成
-    world.state.agents[OBSERVER].recent_interactions = []
+    world.state.human.agents[OBSERVER].recent_interactions = []
     _record(world, OBSERVER, TARGET, "broken", 2)
     entry = social.synthesize_impression(world.state, OBSERVER, TARGET, _window(world))
     assert entry is not None and entry.label == "defaulting"
@@ -122,7 +122,7 @@ def test_synthesize_requires_threshold(world):
     assert entry.last_outcome == "broken" and entry.last_tick == 2
 
     # 两次延期：够 2 次交互，合成 unknown
-    world.state.agents[OBSERVER].recent_interactions = []
+    world.state.human.agents[OBSERVER].recent_interactions = []
     _record(world, OBSERVER, TARGET, "deferred", 3)
     _record(world, OBSERVER, TARGET, "deferred", 4)
     entry = social.synthesize_impression(world.state, OBSERVER, TARGET, _window(world))
@@ -144,7 +144,7 @@ def test_synthesize_ignores_injected_counts(world):
     """counts 只由记忆窗口派生：注入不一致条目不影响重算（§5.4）。"""
     _record(world, OBSERVER, TARGET, "broken", 1)
     _record(world, OBSERVER, TARGET, "broken", 2)
-    world.state.agents[OBSERVER].impressions[TARGET] = ImpressionEntry(
+    world.state.human.agents[OBSERVER].impressions[TARGET] = ImpressionEntry(
         label="reliable", contracts=99, defaults=0, repays=99, last_tick=999,
     )
     derived = social.synthesize_impression(world.state, OBSERVER, TARGET, _window(world))
@@ -155,7 +155,7 @@ def test_synthesize_ignores_injected_counts(world):
 
     # label 翻转时写回，注入值被覆盖为派生值
     social.update_impression(world, OBSERVER, TARGET, _window(world))
-    stored = world.state.agents[OBSERVER].impressions[TARGET]
+    stored = world.state.human.agents[OBSERVER].impressions[TARGET]
     assert (stored.label, stored.contracts, stored.repays) == ("defaulting", 2, 0)
 
 
@@ -186,7 +186,7 @@ def test_events_only_on_label_change(world):
     assert changed["old_label"] == "unknown" and changed["label"] == "defaulting"
     assert (changed["contracts"], changed["defaults"], changed["repays"]) == (4, 2, 0)
 
-    stored = world.state.agents[OBSERVER].impressions[TARGET]
+    stored = world.state.human.agents[OBSERVER].impressions[TARGET]
     assert stored.label == "defaulting" and stored.contracts == 4
 
 
@@ -233,15 +233,15 @@ def test_runtime_replay_impressions_equal(world):
     social.apply_kin_defaults(world.state, final_tick)
 
     replayed = rebuild_state(events, world.config).state
-    assert set(replayed.agents) == set(world.state.agents)
-    for agent_id, rt in world.state.agents.items():
-        assert replayed.agents[agent_id].impressions == rt.impressions, agent_id
+    assert set(replayed.human.agents) == set(world.state.human.agents)
+    for agent_id, rt in world.state.human.agents.items():
+        assert replayed.human.agents[agent_id].impressions == rt.impressions, agent_id
 
     types = [e["event_type"] for e in events]
     assert "impression_formed" in types and "impression_changed" in types
     # 双方都被合成过
-    assert world.state.agents[OBSERVER].impressions[TARGET].label == "defaulting"
-    assert world.state.agents[TARGET].impressions[OBSERVER].label == "defaulting"
+    assert world.state.human.agents[OBSERVER].impressions[TARGET].label == "defaulting"
+    assert world.state.human.agents[TARGET].impressions[OBSERVER].label == "defaulting"
 
 
 # --------------------------------------------------------------------------- #
@@ -251,8 +251,8 @@ def test_legacy_replay_leaves_impressions_empty():
     cfg = load_config("brookvale-town-001")
     events = json.loads((FIXTURES / "legacy_events.json").read_text(encoding="utf-8"))
     state = rebuild_state(events, cfg).state
-    assert state.agents
-    for agent in state.agents.values():
+    assert state.human.agents
+    for agent in state.human.agents.values():
         assert agent.impressions == {}
 
 

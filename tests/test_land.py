@@ -37,39 +37,39 @@ def test_land_initialization_layers_cells_parcels_and_buildings_on_brookvale():
         residences = [n for n in world.config.spatial.nodes if n.attributes.get("residence")]
         fields = [n for n in world.config.spatial.nodes if n.type.value == "field" and not n.attributes.get("abstract_zone")]
         assert world.world_id == "brookvale-town-001"
-        assert len(world.state.terrain_cells) == len(world.config.terrain)
-        assert len(world.state.land_parcels) == len(world.config.spatial.nodes)
-        assert len(world.state.buildings) == len(residences) + 1
-        assert world.state.buildings["building:community_storehouse"].owner_type == "collective"
+        assert len(world.state.environment.terrain_cells) == len(world.config.terrain)
+        assert len(world.state.human.land_parcels) == len(world.config.spatial.nodes)
+        assert len(world.state.human.buildings) == len(residences) + 1
+        assert world.state.human.buildings["building:community_storehouse"].owner_type == "collective"
 
-        home_parcels = [world.state.land_parcels[f"parcel:{n.id}"] for n in residences]
+        home_parcels = [world.state.human.land_parcels[f"parcel:{n.id}"] for n in residences]
         owned = [p for p in home_parcels if p.owner_type == "household"]
         vacant = [p for p in home_parcels if p.attributes["vacant_home"]]
         assert len(owned) == 30
         assert len(vacant) == 10
-        assert all(p.owner_id in world.state.households for p in owned)
+        assert all(p.owner_id in world.state.human.households for p in owned)
         assert all(p.owner_type == "collective" and p.owner_id == "village" for p in vacant)
 
-        field_parcels = [world.state.land_parcels[f"parcel:{n.id}"] for n in fields]
+        field_parcels = [world.state.human.land_parcels[f"parcel:{n.id}"] for n in fields]
         assert len(field_parcels) == 21
-        sacred_oak = world.state.land_parcels["parcel:sacred_oak"]
+        sacred_oak = world.state.human.land_parcels["parcel:sacred_oak"]
         assert sacred_oak.land_use == "protected" and sacred_oak.owner_type == "protected"
-        li_quan_household = world.state.agents["li_quan"].household_id
+        li_quan_household = world.state.human.agents["li_quan"].household_id
         private_fields = [p for p in field_parcels if p.owner_type == "household"]
         assert len(private_fields) == 1
         assert private_fields[0].owner_id == li_quan_household
         assert all(p.owner_type == "collective" for p in field_parcels if p not in private_fields)
-        for household in world.state.households.values():
+        for household in world.state.human.households.values():
             for node_id in household.work_nodes:
-                parcel = world.state.land_parcels[f"parcel:{node_id}"]
+                parcel = world.state.human.land_parcels[f"parcel:{node_id}"]
                 assert any(
                     right.holder_id == household.household_id
                     and right.right_type == "cultivate"
                     for right in parcel.use_rights
                 )
-        assert len(log.by_type("land_parcel_created")) == len(world.state.land_parcels)
+        assert len(log.by_type("land_parcel_created")) == len(world.state.human.land_parcels)
         assert len(log.by_type("building_created")) == len(residences) + 1
-        assert "building:community_storehouse" in world.state.buildings
+        assert "building:community_storehouse" in world.state.human.buildings
     finally:
         log.close()
 
@@ -77,16 +77,16 @@ def test_land_initialization_layers_cells_parcels_and_buildings_on_brookvale():
 def test_household_can_transfer_owned_homestead_and_replay_it():
     world, log, config = make_world()
     try:
-        households = sorted(world.state.households)
+        households = sorted(world.state.human.households)
         parcel = next(
-            p for p in world.state.land_parcels.values()
+            p for p in world.state.human.land_parcels.values()
             if p.land_use == "residential" and p.owner_type == "household"
         )
         new_owner = next(h for h in households if h != parcel.owner_id)
         transfer_land_ownership(
             world, parcel.parcel_id,
             new_owner_household_id=new_owner,
-            actor_id=world.state.households[parcel.owner_id].head_id or "head",
+            actor_id=world.state.human.households[parcel.owner_id].head_id or "head",
         )
         assert parcel.owner_id == new_owner
 
@@ -96,8 +96,8 @@ def test_household_can_transfer_owned_homestead_and_replay_it():
             or event["event_type"].startswith("building_")
         ]
         replayed = rebuild_state(land_events, config).state
-        assert replayed.land_parcels[parcel.parcel_id].owner_id == new_owner
-        assert replayed.buildings[f"building:{parcel.spatial_node_id}"].owner_id == new_owner
+        assert replayed.human.land_parcels[parcel.parcel_id].owner_id == new_owner
+        assert replayed.human.buildings[f"building:{parcel.spatial_node_id}"].owner_id == new_owner
     finally:
         log.close()
 
@@ -105,7 +105,7 @@ def test_household_can_transfer_owned_homestead_and_replay_it():
 def test_collective_and_protected_land_cannot_be_sold_or_granted_private_cultivation():
     world, log, _ = make_world()
     try:
-        households = sorted(world.state.households)
+        households = sorted(world.state.human.households)
         with pytest.raises(ValueError, match="only household-owned"):
             transfer_land_ownership(
                 world, "parcel:deep_mountain",
@@ -124,7 +124,7 @@ def test_farmland_use_change_requires_council_decision_and_is_replayable():
     world, log, config = make_world()
     try:
         parcel = next(
-            p for p in world.state.land_parcels.values()
+            p for p in world.state.human.land_parcels.values()
             if p.land_use == "farmland_irrigated"
         )
         with pytest.raises(ValueError, match="household council decision"):
@@ -132,13 +132,13 @@ def test_farmland_use_change_requires_council_decision_and_is_replayable():
                 world, parcel.parcel_id, new_land_use="residential",
                 approved_by="headman", decision_id="",
             )
-        for household in world.state.households.values():
-            adult = next((world.state.agents[aid] for aid in household.member_ids
-                          if world.state.agents[aid].alive
-                          and (world.current_tick - world.state.agents[aid].birth_tick) // 365 >= 18), None)
+        for household in world.state.human.households.values():
+            adult = next((world.state.human.agents[aid] for aid in household.member_ids
+                          if world.state.human.agents[aid].alive
+                          and (world.current_tick - world.state.human.agents[aid].birth_tick) // 365 >= 18), None)
             if adult:
                 register_representative(world, household.household_id, adult.agent_id)
-        reps = list(world.state.representatives.values())
+        reps = list(world.state.human.representatives.values())
         decision = propose_council_decision(
             world, "council-0001",
             subject=f"land_use_change:{parcel.parcel_id}:residential",
@@ -158,7 +158,7 @@ def test_farmland_use_change_requires_council_decision_and_is_replayable():
             if event["event_type"].startswith("land_")
         ]
         replayed = rebuild_state(events, config).state
-        assert replayed.land_parcels[parcel.parcel_id].land_use == "residential"
+        assert replayed.human.land_parcels[parcel.parcel_id].land_use == "residential"
     finally:
         log.close()
 
@@ -167,22 +167,22 @@ def test_farmland_use_change_requires_council_decision_and_is_replayable():
 def test_household_can_relocate_to_vacant_reserved_dwelling_with_council_approval():
     world, log, config = make_world()
     try:
-        household = next(iter(world.state.households.values()))
+        household = next(iter(world.state.human.households.values()))
         destination = next(
-            building for building in world.state.buildings.values()
+            building for building in world.state.human.buildings.values()
             if building.building_type == "dwelling" and building.status == "vacant"
         )
-        new_parcel = world.state.land_parcels[destination.parcel_id]
+        new_parcel = world.state.human.land_parcels[destination.parcel_id]
         old_node = household.home_node
-        for candidate in world.state.households.values():
+        for candidate in world.state.human.households.values():
             adult = next((
-                world.state.agents[aid] for aid in candidate.member_ids
-                if world.state.agents[aid].alive
-                and (world.current_tick - world.state.agents[aid].birth_tick) // 365 >= 18
+                world.state.human.agents[aid] for aid in candidate.member_ids
+                if world.state.human.agents[aid].alive
+                and (world.current_tick - world.state.human.agents[aid].birth_tick) // 365 >= 18
             ), None)
             if adult:
                 register_representative(world, candidate.household_id, adult.agent_id)
-        reps = list(world.state.representatives.values())
+        reps = list(world.state.human.representatives.values())
         decision = propose_council_decision(
             world, "relocation-decision",
             subject=f"relocate:{household.household_id}:{new_parcel.parcel_id}",
@@ -202,10 +202,10 @@ def test_household_can_relocate_to_vacant_reserved_dwelling_with_council_approva
             new_parcel_id=new_parcel.parcel_id, decision_id=decision.decision_id,
         )
         assert household.home_node == new_parcel.spatial_node_id
-        assert world.state.land_parcels[f"parcel:{old_node}"].owner_type == "collective"
+        assert world.state.human.land_parcels[f"parcel:{old_node}"].owner_type == "collective"
         assert new_parcel.owner_id == household.household_id
         assert destination.status == "occupied"
-        assert world.state.buildings[f"building:{old_node}"].status == "vacant"
+        assert world.state.human.buildings[f"building:{old_node}"].status == "vacant"
 
         replay_events = [
             event for event in log.all()
@@ -219,9 +219,9 @@ def test_household_can_relocate_to_vacant_reserved_dwelling_with_council_approva
         })
         replay_events.sort(key=lambda event: event.get("id", 10**9))
         replayed = rebuild_state(replay_events, config).state
-        assert replayed.households[household.household_id].home_node == new_parcel.spatial_node_id
-        assert replayed.land_parcels[new_parcel.parcel_id].owner_id == household.household_id
-        assert replayed.buildings[destination.building_id].status == "occupied"
+        assert replayed.human.households[household.household_id].home_node == new_parcel.spatial_node_id
+        assert replayed.human.land_parcels[new_parcel.parcel_id].owner_id == household.household_id
+        assert replayed.human.buildings[destination.building_id].status == "occupied"
     finally:
         log.close()
 
@@ -230,18 +230,18 @@ def test_household_can_relocate_to_vacant_reserved_dwelling_with_council_approva
 def test_last_member_inherits_private_land_buildings_and_collective_use_rights_with_replay():
     world, log, config = make_world()
     try:
-        deceased_hh = next(iter(world.state.households.values()))
-        heir_hh = next(h for h in world.state.households.values()
+        deceased_hh = next(iter(world.state.human.households.values()))
+        heir_hh = next(h for h in world.state.human.households.values()
                        if h.household_id != deceased_hh.household_id)
         private_parcel = next(
-            p for p in world.state.land_parcels.values()
+            p for p in world.state.human.land_parcels.values()
             if p.owner_type == "household" and p.owner_id == deceased_hh.household_id
         )
         building = next(
-            b for b in world.state.buildings.values() if b.parcel_id == private_parcel.parcel_id
+            b for b in world.state.human.buildings.values() if b.parcel_id == private_parcel.parcel_id
         )
         collective_field = next(
-            p for p in world.state.land_parcels.values()
+            p for p in world.state.human.land_parcels.values()
             if p.land_use.startswith("farmland") and p.owner_type == "collective"
             and any(r.holder_id == deceased_hh.household_id for r in p.use_rights)
         )
@@ -264,9 +264,9 @@ def test_last_member_inherits_private_land_buildings_and_collective_use_rights_w
             }
         ]
         replayed = rebuild_state(events, config).state
-        assert replayed.land_parcels[private_parcel.parcel_id].owner_id == heir_hh.household_id
-        assert replayed.buildings[building.building_id].owner_id == heir_hh.household_id
-        replay_right = next(r for r in replayed.land_parcels[collective_field.parcel_id].use_rights
+        assert replayed.human.land_parcels[private_parcel.parcel_id].owner_id == heir_hh.household_id
+        assert replayed.human.buildings[building.building_id].owner_id == heir_hh.household_id
+        replay_right = next(r for r in replayed.human.land_parcels[collective_field.parcel_id].use_rights
                             if r.right_id == right.right_id)
         assert replay_right.holder_id == heir_hh.household_id
     finally:
@@ -276,13 +276,13 @@ def test_last_member_inherits_private_land_buildings_and_collective_use_rights_w
 def test_private_land_returns_to_village_when_household_has_no_heir():
     world, log, config = make_world()
     try:
-        deceased_hh = next(iter(world.state.households.values()))
+        deceased_hh = next(iter(world.state.human.households.values()))
         private_parcel = next(
-            p for p in world.state.land_parcels.values()
+            p for p in world.state.human.land_parcels.values()
             if p.owner_type == "household" and p.owner_id == deceased_hh.household_id
         )
         building = next(
-            b for b in world.state.buildings.values() if b.parcel_id == private_parcel.parcel_id
+            b for b in world.state.human.buildings.values() if b.parcel_id == private_parcel.parcel_id
         )
         changed = settle_household_land_inheritance(
             world, deceased_household_id=deceased_hh.household_id,
@@ -300,8 +300,8 @@ def test_private_land_returns_to_village_when_household_has_no_heir():
             }
         ]
         replayed = rebuild_state(events, config).state
-        assert replayed.land_parcels[private_parcel.parcel_id].owner_type == "collective"
-        assert replayed.buildings[building.building_id].owner_id == "village"
+        assert replayed.human.land_parcels[private_parcel.parcel_id].owner_type == "collective"
+        assert replayed.human.buildings[building.building_id].owner_id == "village"
     finally:
         log.close()
 
@@ -309,10 +309,10 @@ def test_household_inheritance_transfers_active_land_lease_party():
     from vale.modules.land import settle_household_land_inheritance
     world, log, config = make_world()
     try:
-        source = next(iter(world.state.households.values()))
-        heir = next(h for h in world.state.households.values() if h.household_id != source.household_id)
-        world.state.land_leases["lease-in"] = {
-            "lease_id": "lease-in", "parcel_id": next(iter(world.state.land_parcels)),
+        source = next(iter(world.state.human.households.values()))
+        heir = next(h for h in world.state.human.households.values() if h.household_id != source.household_id)
+        world.state.human.land_leases["lease-in"] = {
+            "lease_id": "lease-in", "parcel_id": next(iter(world.state.human.land_parcels)),
             "lessor_household_id": source.household_id,
             "lessee_household_id": heir.household_id, "status": "active",
             "rent_item": "coin", "rent_per_period": 1, "next_due_tick": 30,
@@ -322,7 +322,7 @@ def test_household_inheritance_transfers_active_land_lease_party():
             world, deceased_household_id=source.household_id,
             heir_household_id=heir.household_id, deceased_agent_id=source.head_id,
         )
-        assert world.state.land_leases["lease-in"]["lessor_household_id"] == heir.household_id
+        assert world.state.human.land_leases["lease-in"]["lessor_household_id"] == heir.household_id
     finally:
         log.close()
 
@@ -330,7 +330,7 @@ def test_household_can_relinquish_non_residential_land_to_collective():
     from vale.modules.land import relinquish_household_parcel
     world, log, _ = make_world()
     try:
-        parcel = next(p for p in world.state.land_parcels.values()
+        parcel = next(p for p in world.state.human.land_parcels.values()
                       if p.owner_type == "household" and p.land_use.startswith("farmland"))
         relinquish_household_parcel(world, parcel.parcel_id, household_id=parcel.owner_id)
         assert parcel.owner_type == "collective" and parcel.owner_id == "village"

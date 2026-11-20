@@ -21,16 +21,17 @@ def test_ecology_initializes_resource_pools_and_regenerates_with_caps():
     })
     world = SimpleNamespace(
         config=SimpleNamespace(spatial=SimpleNamespace(nodes=[node])),
-        state=SimpleNamespace(climate=SimpleNamespace(season=SimpleNamespace(value="winter")),
-                              ecological_resources={}),
+        state=SimpleNamespace(environment=SimpleNamespace(
+            climate=SimpleNamespace(season=SimpleNamespace(value="winter")),
+            ecological_resources={})),
         event_log=EventSink(), current_tick=0,
     )
     module = EcologyModule()
     module.step(world)
-    assert world.state.ecological_resources["river_town"]["current_stock"] == 9
+    assert world.state.environment.ecological_resources["river_town"]["current_stock"] == 9
     assert world.event_log.events[-1][1] == "resource_pool_initialized"
     world.current_tick = 1
     module.step(world)
-    assert world.state.ecological_resources["river_town"]["current_stock"] == 10
+    assert world.state.environment.ecological_resources["river_town"]["current_stock"] == 10
     assert world.event_log.events[-1][1] == "resource_regenerated"
-    assert world.state.ecological_resources["river_town"]["harvested_this_tick"] == 0
+    assert world.state.environment.ecological_resources["river_town"]["harvested_this_tick"] == 0

@@ -1,6 +1,7 @@
 """Council-authorized, resource-constrained household construction."""
 from __future__ import annotations
 
+from vale.contracts.queries import EnvironmentQuery
 from vale.core.state import BuildingNeedState, BuildingState, ConstructionProjectState
 from vale.modules.agents import age_years
 
@@ -17,13 +18,13 @@ BUILDING_RECIPES = {
 def request_building(world, project_id: str, *, parcel_id: str,
                      household_id: str, building_type: str,
                      footprint_area: float, decision_id: str):
-    if project_id in world.state.construction_projects or project_id in world.state.buildings:
+    if project_id in world.state.human.construction_projects or project_id in world.state.human.buildings:
         raise ValueError("project id already exists")
     recipe = BUILDING_RECIPES.get(building_type)
     if recipe is None:
         raise ValueError(f"unsupported building type: {building_type}")
-    household = world.state.households.get(household_id)
-    parcel = world.state.land_parcels.get(parcel_id)
+    household = world.state.human.households.get(household_id)
+    parcel = world.state.human.land_parcels.get(parcel_id)
     if household is None or parcel is None:
         raise ValueError("household and parcel must exist")
     if parcel.contested or parcel.land_use not in {"residential", "commercial"}:
@@ -36,13 +37,13 @@ def request_building(world, project_id: str, *, parcel_id: str,
         raise ValueError("parcel ownership does not permit household construction")
     if footprint_area <= 0:
         raise ValueError("building footprint must be positive")
-    occupied = sum(b.footprint_area for b in world.state.buildings.values()
+    occupied = sum(b.footprint_area for b in world.state.human.buildings.values()
                    if b.parcel_id == parcel_id and b.status != "demolished")
-    reserved = sum(p.footprint_area for p in world.state.construction_projects.values()
+    reserved = sum(p.footprint_area for p in world.state.human.construction_projects.values()
                    if p.parcel_id == parcel_id and p.status in {"under_construction", "paused"} and p.building_type in {"dwelling", "shed", "workshop", "storehouse", "expansion"})
     if occupied + reserved + footprint_area > parcel.buildable_area + 1e-9:
         raise ValueError("building footprint exceeds the parcel's remaining buildable area")
-    decision = world.state.council_decisions.get(decision_id)
+    decision = world.state.human.council_decisions.get(decision_id)
     if (decision is None or decision.status != "approved"
             or decision.subject != f"construction:{project_id}"
             or household_id not in decision.affected_household_ids):
@@ -62,7 +63,7 @@ def request_building(world, project_id: str, *, parcel_id: str,
         "project": project.model_dump(mode="json"),
         "coin_after": household.coin, "hardwood_after": household.hardwood,
     })
-    world.state.construction_projects[project_id] = project
+    world.state.human.construction_projects[project_id] = project
     return project
 
 
@@ -71,20 +72,20 @@ def request_repair(world, project_id: str, *, building_id: str,
     """Create a council-authorized repair project for a household-owned building."""
     import math
 
-    if project_id in world.state.construction_projects or project_id in world.state.buildings:
+    if project_id in world.state.human.construction_projects or project_id in world.state.human.buildings:
         raise ValueError("project id already exists")
-    building = world.state.buildings.get(building_id)
-    household = world.state.households.get(household_id)
+    building = world.state.human.buildings.get(building_id)
+    household = world.state.human.households.get(household_id)
     if building is None or household is None:
         raise ValueError("building and household must exist")
     if building.owner_type != "household" or building.owner_id != household_id:
         raise ValueError("household must own the building being repaired")
     if building.status in {"demolished", "abandoned"} or building.condition >= 100:
         raise ValueError("building does not require repair")
-    parcel = world.state.land_parcels.get(building.parcel_id)
+    parcel = world.state.human.land_parcels.get(building.parcel_id)
     if parcel is None or parcel.contested or parcel.owner_type == "protected" or parcel.attributes.get("restricted"):
         raise ValueError("repair site is unavailable or protected")
-    decision = world.state.council_decisions.get(decision_id)
+    decision = world.state.human.council_decisions.get(decision_id)
     if (decision is None or decision.status != "approved"
             or decision.subject != f"repair:{building_id}"
             or household_id not in decision.affected_household_ids):
@@ -107,7 +108,7 @@ def request_repair(world, project_id: str, *, building_id: str,
         "project": project.model_dump(mode="json"),
         "coin_after": household.coin, "hardwood_after": household.hardwood,
     })
-    world.state.construction_projects[project_id] = project
+    world.state.human.construction_projects[project_id] = project
     return project
 
 
@@ -116,26 +117,26 @@ def request_expansion(world, project_id: str, *, building_id: str,
     """Approve and schedule a bounded extension to an existing household building."""
     import math
 
-    if project_id in world.state.construction_projects or project_id in world.state.buildings:
+    if project_id in world.state.human.construction_projects or project_id in world.state.human.buildings:
         raise ValueError("project id already exists")
-    building = world.state.buildings.get(building_id)
-    household = world.state.households.get(household_id)
+    building = world.state.human.buildings.get(building_id)
+    household = world.state.human.households.get(household_id)
     if building is None or household is None or building.owner_type != "household" or building.owner_id != household_id:
         raise ValueError("household must own the building being expanded")
     if building.status in {"ruined", "demolished", "abandoned"} or footprint_area <= 0:
         raise ValueError("building or expansion area is invalid")
-    parcel = world.state.land_parcels.get(building.parcel_id)
+    parcel = world.state.human.land_parcels.get(building.parcel_id)
     if parcel is None or parcel.contested or parcel.owner_type == "protected" or parcel.attributes.get("restricted"):
         raise ValueError("expansion site is unavailable or protected")
-    decision = world.state.council_decisions.get(decision_id)
+    decision = world.state.human.council_decisions.get(decision_id)
     subject = f"expand:{building_id}:{footprint_area:g}"
     if (decision is None or decision.status != "approved"
             or decision.subject != subject
             or household_id not in decision.affected_household_ids):
         raise ValueError("expansion requires its matching approved council decision")
-    occupied = sum(b.footprint_area for b in world.state.buildings.values()
+    occupied = sum(b.footprint_area for b in world.state.human.buildings.values()
                    if b.parcel_id == parcel.parcel_id and b.status not in {"demolished", "ruined"})
-    reserved = sum(p.footprint_area for p in world.state.construction_projects.values()
+    reserved = sum(p.footprint_area for p in world.state.human.construction_projects.values()
                    if p.parcel_id == parcel.parcel_id and p.status in {"under_construction", "paused"} and p.building_type in {"dwelling", "shed", "workshop", "storehouse", "expansion"})
     if occupied + reserved + footprint_area > parcel.buildable_area + 1e-9:
         raise ValueError("expansion exceeds the parcel's remaining buildable area")
@@ -157,7 +158,7 @@ def request_expansion(world, project_id: str, *, building_id: str,
         "project": project.model_dump(mode="json"),
         "coin_after": household.coin, "hardwood_after": household.hardwood,
     })
-    world.state.construction_projects[project_id] = project
+    world.state.human.construction_projects[project_id] = project
     return project
 
 
@@ -165,9 +166,9 @@ def share_building_access(world, *, building_id: str,
                             owner_household_id: str, beneficiary_household_id: str,
                             decision_id: str):
     """Share a usable workshop/storehouse as an alternative to duplicate construction."""
-    building = world.state.buildings.get(building_id)
-    owner = world.state.households.get(owner_household_id)
-    beneficiary = world.state.households.get(beneficiary_household_id)
+    building = world.state.human.buildings.get(building_id)
+    owner = world.state.human.households.get(owner_household_id)
+    beneficiary = world.state.human.households.get(beneficiary_household_id)
     if building is None or owner is None or beneficiary is None:
         raise ValueError("building and both households must exist")
     if building.owner_type != "household" or building.owner_id != owner_household_id:
@@ -178,7 +179,7 @@ def share_building_access(world, *, building_id: str,
         raise ValueError("unusable buildings cannot be shared")
     if owner_household_id == beneficiary_household_id:
         raise ValueError("owner household does not need a shared access right")
-    decision = world.state.council_decisions.get(decision_id)
+    decision = world.state.human.council_decisions.get(decision_id)
     if (decision is None or decision.status != "approved"
             or decision.subject != f"share:{building_id}:{beneficiary_household_id}"
             or not {owner_household_id, beneficiary_household_id}.issubset(
@@ -203,17 +204,17 @@ def share_building_access(world, *, building_id: str,
 def request_demolition(world, project_id: str, *, building_id: str,
                        household_id: str, decision_id: str):
     """Schedule an approved one-day demolition and release the parcel footprint."""
-    if project_id in world.state.construction_projects or project_id in world.state.buildings:
+    if project_id in world.state.human.construction_projects or project_id in world.state.human.buildings:
         raise ValueError("project id already exists")
-    building = world.state.buildings.get(building_id)
+    building = world.state.human.buildings.get(building_id)
     if building is None or building.owner_type != "household" or building.owner_id != household_id:
         raise ValueError("household must own the building being demolished")
     if building.status in {"demolished", "abandoned"}:
         raise ValueError("building is already unavailable")
-    parcel = world.state.land_parcels.get(building.parcel_id)
+    parcel = world.state.human.land_parcels.get(building.parcel_id)
     if parcel is None or parcel.contested or parcel.owner_type == "protected" or parcel.attributes.get("restricted"):
         raise ValueError("protected or missing parcel cannot be demolished")
-    decision = world.state.council_decisions.get(decision_id)
+    decision = world.state.human.council_decisions.get(decision_id)
     if (decision is None or decision.status != "approved"
             or decision.subject != f"demolish:{building_id}"
             or household_id not in decision.affected_household_ids):
@@ -227,20 +228,20 @@ def request_demolition(world, project_id: str, *, building_id: str,
     )
     world.event_log.append(world.current_tick, "construction_project_created", {
         "project": project.model_dump(mode="json"),
-        "coin_after": world.state.households[household_id].coin,
-        "hardwood_after": world.state.households[household_id].hardwood,
+        "coin_after": world.state.human.households[household_id].coin,
+        "hardwood_after": world.state.human.households[household_id].hardwood,
     })
-    world.state.construction_projects[project_id] = project
+    world.state.human.construction_projects[project_id] = project
     return project
 
 
 def advance_construction(world, project_id: str, *, worker_id=None):
-    project = world.state.construction_projects.get(project_id)
+    project = world.state.human.construction_projects.get(project_id)
     if project is None or project.status not in {"under_construction", "paused"}:
         raise ValueError("construction project is not active")
     if world.current_tick <= project.created_tick:
         raise ValueError("construction work begins on a later tick than approval")
-    parcel = world.state.land_parcels.get(project.parcel_id)
+    parcel = world.state.human.land_parcels.get(project.parcel_id)
     valid_nodes = {node.id for node in world.config.spatial.nodes}
     if parcel is None or parcel.spatial_node_id not in valid_nodes:
         raise ValueError("construction parcel must resolve to an existing spatial node")
@@ -249,14 +250,14 @@ def advance_construction(world, project_id: str, *, worker_id=None):
         project.paused_tick = None
     if project.last_work_tick == world.current_tick:
         raise ValueError("a project can receive labor only once per tick")
-    household = world.state.households[project.household_id]
+    household = world.state.human.households[project.household_id]
     workers = [
-        world.state.agents[agent_id] for agent_id in household.member_ids
-        if agent_id in world.state.agents
-        and world.state.agents[agent_id].alive
-        and not world.state.agents[agent_id].incapacitated
-        and age_years(world.state.agents[agent_id].birth_tick, world.current_tick) >= 16
-        and world.state.agents[agent_id].stamina >= 5.0
+        world.state.human.agents[agent_id] for agent_id in household.member_ids
+        if agent_id in world.state.human.agents
+        and world.state.human.agents[agent_id].alive
+        and not world.state.human.agents[agent_id].incapacitated
+        and age_years(world.state.human.agents[agent_id].birth_tick, world.current_tick) >= 16
+        and world.state.human.agents[agent_id].stamina >= 5.0
     ]
     if not workers:
         raise ValueError("household has no available worker with sufficient stamina")
@@ -271,11 +272,10 @@ def advance_construction(world, project_id: str, *, worker_id=None):
     # Fatigue is already represented as additional action time by AgentModule.
     # Construction progress per completed work action remains constant.
     labor_factor = 1.0
-    climate = world.state.climate
-    weather = getattr(getattr(climate, "current_weather", None), "value", "")
+    weather = EnvironmentQuery.weather_name(world)
     if "rain" in str(weather).lower() or "雨" in str(weather):
         labor_factor *= environment.construction_bad_weather_multiplier
-    season = getattr(getattr(climate, "season", None), "value", "")
+    season = EnvironmentQuery.season_name(world)
     labor_factor *= environment.construction_season_multiplier.get(str(season), 1.0)
     labor_contribution = max(0.1, labor_factor)
     project.labor_completed = round(min(float(project.labor_required), project.labor_completed + labor_contribution), 3)
@@ -291,7 +291,7 @@ def advance_construction(world, project_id: str, *, worker_id=None):
     })
     if project.status == "completed":
         if project.target_building_id:
-            building = world.state.buildings.get(project.target_building_id)
+            building = world.state.human.buildings.get(project.target_building_id)
             if building is None:
                 raise ValueError("target building no longer exists")
             if project.building_type == "repair":
@@ -333,12 +333,12 @@ def advance_construction(world, project_id: str, *, worker_id=None):
             world.event_log.append(world.current_tick, "building_created", {
                 "building": building.model_dump(mode="json"),
             })
-            world.state.buildings[building.building_id] = building
+            world.state.human.buildings[building.building_id] = building
     return project
 
 
 def pause_construction(world, project_id: str, *, reason: str = "household_choice"):
-    project = world.state.construction_projects.get(project_id)
+    project = world.state.human.construction_projects.get(project_id)
     if project is None or project.status != "under_construction":
         raise ValueError("only active construction can be paused")
     project.status = "paused"
@@ -347,7 +347,7 @@ def pause_construction(world, project_id: str, *, reason: str = "household_choic
     return project
 
 def cancel_construction(world, project_id: str, *, reason: str = "household_choice"):
-    project = world.state.construction_projects.get(project_id)
+    project = world.state.human.construction_projects.get(project_id)
     if project is None or project.status not in {"under_construction", "paused"}:
         raise ValueError("construction project is not cancellable")
     project.status = "cancelled"
@@ -357,7 +357,7 @@ def cancel_construction(world, project_id: str, *, reason: str = "household_choi
     return project
 
 def abandon_construction(world, project_id: str, *, reason: str = "long_inactivity"):
-    project = world.state.construction_projects.get(project_id)
+    project = world.state.human.construction_projects.get(project_id)
     if project is None or project.status != "paused":
         raise ValueError("only paused construction can be abandoned")
     project.status = "abandoned"
@@ -367,20 +367,20 @@ def abandon_construction(world, project_id: str, *, reason: str = "long_inactivi
     return project
 
 def resume_construction(world, project_id: str):
-    project = world.state.construction_projects.get(project_id)
+    project = world.state.human.construction_projects.get(project_id)
     if project is None or project.status != "paused":
         raise ValueError("only paused construction can be resumed")
     return advance_construction(world, project_id)
 
 def resolve_building_need(world, need_id: str, *, alternative: str, reference_id: str | None = None):
     """Close a persistent building need only after a concrete alternative exists."""
-    need = world.state.building_needs.get(need_id)
+    need = world.state.human.building_needs.get(need_id)
     if need is None or need.status != "active":
         raise ValueError("building need is not active")
     if alternative not in need.alternatives and alternative not in {"rent", "defer"}:
         raise ValueError("alternative is not available for this need")
     if alternative in {"repair", "extend", "share"}:
-        building = world.state.buildings.get(reference_id or "")
+        building = world.state.human.buildings.get(reference_id or "")
         if building is None or building.status not in {"active", "occupied"}:
             raise ValueError("a usable building reference is required")
         if alternative == "repair" and building.condition >= 100:
@@ -393,13 +393,13 @@ def resolve_building_need(world, need_id: str, *, alternative: str, reference_id
         if not any(
             lease.get("status") == "active"
             and lease.get("lessee_household_id") == reference_id
-            and world.state.land_parcels.get(lease.get("parcel_id")) is not None
-            and world.state.land_parcels[lease["parcel_id"]].spatial_node_id == need.location_node_id
-            for lease in world.state.land_leases.values()
+            and world.state.human.land_parcels.get(lease.get("parcel_id")) is not None
+            and world.state.human.land_parcels[lease["parcel_id"]].spatial_node_id == need.location_node_id
+            for lease in world.state.human.land_leases.values()
         ):
             raise ValueError("an active lease at the needed location is required")
     elif alternative == "relocate":
-        household = world.state.households.get(reference_id or "")
+        household = world.state.human.households.get(reference_id or "")
         if household is None or household.home_node == need.location_node_id:
             raise ValueError("a household relocated away from the pressured location is required")
     elif alternative != "defer":
@@ -413,5 +413,5 @@ def resolve_building_need(world, need_id: str, *, alternative: str, reference_id
         "need": after.model_dump(mode="json"), "alternative": alternative,
         "reference_id": reference_id,
     })
-    world.state.building_needs[need_id] = after
+    world.state.human.building_needs[need_id] = after
     return after
