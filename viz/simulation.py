@@ -28,6 +28,7 @@ class SimulationController:
         self.db_path: str | None = None
         self.state = "stopped"
         self.current_tick = 0
+        self.rate: float | None = None
         self.last_error: str | None = None
         self.on_status = on_status
 
@@ -45,6 +46,7 @@ class SimulationController:
                 raise RuntimeError("模拟子进程已经在运行")
             self.db_path = None
             self.current_tick = 0
+            self.rate = None
             self.last_error = None
             self.state = "stopped"
             self._is_ready = False
@@ -130,8 +132,8 @@ class SimulationController:
         if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
             raise ValueError("seconds 必须是数字")
         value = float(seconds)
-        if not math.isfinite(value) or value <= 0:
-            raise ValueError("seconds 必须是大于 0 的有限秒数")
+        if not math.isfinite(value) or value < 0:
+            raise ValueError("seconds 必须是大于等于 0 的有限秒数（0 表示全速）")
         self._send("speed", seconds=value)
 
     def stop(self) -> None:
@@ -262,6 +264,9 @@ class SimulationController:
             tick = message.get("current_tick")
             if isinstance(tick, int) and not isinstance(tick, bool):
                 self.current_tick = tick
+            rate = message.get("rate")
+            if "rate" in message:
+                self.rate = float(rate) if isinstance(rate, (int, float)) and not isinstance(rate, bool) else None
             db_path = message.get("db_path")
             if isinstance(db_path, str):
                 self.db_path = db_path
@@ -276,6 +281,7 @@ class SimulationController:
             "type": message_type,
             "state": self.state,
             "current_tick": self.current_tick,
+            "rate": self.rate,
             "db_path": self.db_path,
             "last_error": self.last_error,
         }

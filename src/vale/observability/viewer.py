@@ -58,6 +58,13 @@ class ReadonlyEventStore:
         row = self.conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
         return self._row_to_event(row) if row else None
 
+    def after(self, event_id: int) -> list[dict[str, Any]]:
+        """读取 id 严格大于 event_id 的事件（增量跟随用），按 id 升序。"""
+        rows = self.conn.execute(
+            "SELECT * FROM events WHERE id > ? ORDER BY id", (event_id,)
+        ).fetchall()
+        return [self._row_to_event(r) for r in rows]
+
     def close(self) -> None:
         self.conn.close()
 

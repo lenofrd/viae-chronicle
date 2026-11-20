@@ -119,6 +119,35 @@ def test_speed_changes_tick_interval_without_advancing_paused_world(controller_f
     wait_for(lambda: controller.state == "paused", "speed 测试后的 pause 状态")
 
 
+def test_set_speed_validates_seconds(controller_factory):
+    controller = controller_factory()
+    controller.start()
+    controller.set_speed(0)  # 0 = 全速，合法
+    with pytest.raises(ValueError, match="大于等于 0"):
+        controller.set_speed(-0.1)
+    with pytest.raises(ValueError):
+        controller.set_speed(float("nan"))
+
+
+def test_full_speed_runs_back_to_back_and_reports_rate(controller_factory):
+    """speed=0 全速连跑：明显快于 1s/tick 的定速，且状态带实测速率。"""
+    controller = controller_factory()
+    controller.start()
+    controller.set_speed(0)
+    initial_tick = controller.current_tick
+
+    controller.run()
+    wait_for(
+        lambda: controller.current_tick >= initial_tick + 5,
+        "全速模式推进至少 5 个 tick",
+    )
+    assert controller.rate is not None and controller.rate > 1.0, (
+        f"全速应快于 1 tick/s，实测 {controller.rate}"
+    )
+    controller.pause()
+    wait_for(lambda: controller.state == "paused", "全速测试后的 pause 状态")
+
+
 def test_stop_exits_process_preserves_db_and_close_is_idempotent(controller_factory):
     controller = controller_factory()
     controller.start()

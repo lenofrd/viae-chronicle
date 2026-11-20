@@ -12,7 +12,7 @@ from typing import Any, Iterable, Optional
 
 from vale.core.config_loader import load_config
 from vale.observability.query import EventFilter, apply_filter
-from vale.observability.render import payload_preview, render_event
+from vale.observability.render import ACTION_VERB, GATHER_DESC, payload_preview, render_event
 from vale.observability.viewer import ReadonlyEventStore, date_str
 
 WORLD_ID = "brookvale-town-001"
@@ -31,6 +31,12 @@ _MEMBER_FIELDS = ("members", "members_after", "members_before")
 # conflict_negotiation_round 用裸 id（initiator/responder），无 _id/_name 后缀，单独提取；
 # 不并入 _PERSON_PREFIXES 循环，以免给前缀循环加裸字段兜底时误伤 season_changed 的裸 from/to。
 _PERSON_BARE_ID_FIELDS = ("initiator", "responder")
+# 人物索引键字段：payload.items() 一次遍历 + 集合成员检查即可提取，比 event_people 逐前缀 get 快
+_PERSON_KEY_FIELDS = frozenset(
+    ["agent_id", "agent_name", "participants", *_MEMBER_FIELDS]
+    + [f"{prefix}_{suffix}" for prefix in _PERSON_PREFIXES for suffix in ("id", "name")]
+    + list(_PERSON_BARE_ID_FIELDS)
+)
 _FOCUS_WORK = {"gather_success", "gather_fail", "gather_injury", "weave_success", "weave_fail"}
 _FOCUS_SOCIAL = {
     "agent_born", "agent_married", "agent_died", "agent_incapacitated",
@@ -50,6 +56,8 @@ _FOCUS_ECONOMY = {
 }
 _WORK_ACTIONS = {"farm", "harvest", "collect_water", "hunt", "fish", "gather", "weave"}
 _ECONOMY_ACTIONS = {"eat", "harvest", "borrow_grain", "trade", "buy", "sell"}
+# 活动区间聚合：同一活动两次出现间隔 <= 该 tick 数则合并为一段（约一周）
+DEFAULT_SPAN_GAP = 20
 _TURNING_POINTS = {
     "agent_born": "出生 / 生育",
     "agent_married": "婚配",
@@ -89,16 +97,20 @@ class EventSource:
     def label(self) -> str:
         return f"{'事件库' if self.kind == 'db' else '样本'}：{self.path}"
 
-    def load(self) -> list[dict[str, Any]]:
+    def load(self, since_id: Optional[int] = None) -> list[dict[str, Any]]:
+        """加载全部事件；db 源可传 since_id 只取 id 更大的新增事件（增量跟随）。"""
         if self.kind == "db":
             store = ReadonlyEventStore(str(self.path))
             try:
-                return store.all()
+                return store.after(since_id) if since_id is not None else store.all()
             finally:
                 store.close()
         if self.kind != "fixture":
             raise ValueError(f"未知数据源类型：{self.kind}")
-        return _load_fixture(self.path)
+        events = _load_fixture(self.path)
+        if since_id is not None:
+            events = [event for event in events if int(event["id"]) > since_id]
+        return events
 
 
 @dataclass
@@ -111,6 +123,23 @@ class EventGroup:
     @property
     def event_ids(self) -> list[int]:
         return [int(e["id"]) for e in self.events]
+
+
+@dataclass
+class ActivitySpan:
+    """同一主体同一活动的连续区间：「从 X 到 Y 一直在做某事」。"""
+
+    subject: str
+    subject_label: str
+    label: str
+    from_tick: int
+    to_tick: int
+    count: int
+    events: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def first_event_id(self) -> int:
+        return int(self.events[0]["id"])
 
 
 @dataclass
@@ -278,6 +307,54 @@ def event_households(event: dict[str, Any]) -> list[str]:
     ]
 
 
+def person_keys(event: dict[str, Any]) -> set[str]:
+    """人物索引键：只收集 id/name 字符串，不构造 event_people 的字典列表（性能路径）。
+
+    键覆盖 _matches_person 的匹配语义（人物 id 与 name 均作键）；供人物索引与增量追加使用。
+    """
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return set()
+    keys: set[str] = set()
+    for key, value in payload.items():
+        if key not in _PERSON_KEY_FIELDS:
+            continue
+        if isinstance(value, (str, int)):
+            if str(value):
+                keys.add(str(value))
+        elif isinstance(value, dict):
+            for nested in (value.get("id") or value.get("agent_id"),
+                           value.get("name") or value.get("agent_name")):
+                if nested:
+                    keys.add(str(nested))
+        elif isinstance(value, list):
+            for item in value:
+                if isinstance(item, (str, int)) and str(item):
+                    keys.add(str(item))
+                elif isinstance(item, dict):
+                    for nested in (item.get("id") or item.get("agent_id"),
+                                   item.get("name") or item.get("agent_name")):
+                        if nested:
+                            keys.add(str(nested))
+    return keys
+
+
+def build_person_index(events: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """一次遍历建「人物键 → 事件列表」索引；键为人物 id 或 name，覆盖 _matches_person 的匹配语义。
+
+    供角色档案查询替代全库逐事件人物匹配；列表保持传入顺序（即事件 id 升序）。
+    """
+    index: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        for key in person_keys(event):
+            bucket = index.get(key)
+            if bucket is None:
+                index[key] = [event]
+            else:
+                bucket.append(event)
+    return index
+
+
 def event_locations(event: dict[str, Any]) -> list[str]:
     payload = event.get("payload")
     if not isinstance(payload, dict):
@@ -333,10 +410,20 @@ def filter_events(
 
 
 def group_events(
-    events: list[dict[str, Any]], granularity: str = "event", cfg=None
+    events: list[dict[str, Any]], granularity: str = "event", cfg=None, gap: int = DEFAULT_SPAN_GAP
 ) -> list[EventGroup]:
-    """按逐事件、按天（tick）或按 tick/类型/主体事件簇分组。"""
-    groups: dict[Any, EventGroup] = {}
+    """按逐事件、按天（tick）、按 tick/类型/主体事件簇或按主体活动区间分组。"""
+    if granularity == "activity":
+        groups: list[EventGroup] = []
+        for index, span in enumerate(activity_spans(events, gap=gap)):
+            label = (
+                f"{span.subject_label} · {span.label} · "
+                f"{calendar_label(span.from_tick, cfg)} – {calendar_label(span.to_tick, cfg)}"
+            )
+            groups.append(EventGroup(f"span:{index}", label, span.from_tick, span.events))
+        return groups
+
+    groups_by_key: dict[Any, EventGroup] = {}
     for event in sorted(events, key=lambda item: item.get("id", 0)):
         tick = int(event.get("tick", 0))
         event_type = str(event.get("event_type", "unknown"))
@@ -357,14 +444,167 @@ def group_events(
         else:
             raise ValueError(f"未知时间粒度：{granularity}")
         group_key = key if granularity == "cluster" else str(key)
-        if group_key not in groups:
-            groups[group_key] = EventGroup(str(group_key), label, tick)
-        groups[group_key].events.append(event)
-    return list(groups.values())
+        if group_key not in groups_by_key:
+            groups_by_key[group_key] = EventGroup(str(group_key), label, tick)
+        groups_by_key[group_key].events.append(event)
+    return list(groups_by_key.values())
+
+
+# 活动区间聚合 ------------------------------------------------------------
+# 非 agent_action_taken 事件的中文活动标签；未列出的类型直接用事件类型名。
+_EVENT_ACTIVITY_LABELS = {
+    "agent_born": "出生",
+    "agent_died": "去世",
+    "agent_married": "婚配",
+    "agent_incapacitated": "失能",
+    "agent_aged": "年长一阶",
+    "health_recovered": "康复",
+    "market_day_summary": "集市日",
+    "weave_success": "织布",
+    "weave_fail": "织布",
+    "debt_formed": "举债",
+    "debt_collected": "被催收",
+    "debt_repaid": "还债",
+    "debt_defaulted": "债务违约",
+    "debt_deferred": "债务延期",
+    "debt_collection_attempt": "被催收",
+    "trade_executed": "交易",
+    "acquaintance_changed": "结识",
+    "impression_formed": "印象",
+    "household_merged": "合户",
+    "household_split": "分家",
+    "household_head_changed": "换户主",
+    "household_dissolved": "户绝",
+    "conflict_started": "债务交涉",
+    "conflict_negotiation_round": "债务交涉",
+    "conflict_resolved": "债务议和",
+    "conflict_broken": "交涉破裂",
+}
+# gather_* 事件按 payload.action 借用采集动词，与 agent_action_taken 的同动词合并成同一段
+_GATHER_EVENT_TYPES = {"gather_success", "gather_fail", "gather_injury"}
+
+
+def activity_label(event: dict[str, Any]) -> str:
+    """事件的活动标签：动作走渲染层 ACTION_VERB，其余用事件类型映射。"""
+    event_type = str(event.get("event_type", ""))
+    payload = event.get("payload")
+    if event_type == "agent_action_taken" and isinstance(payload, dict):
+        action = str(payload.get("action", "") or "")
+        return ACTION_VERB.get(action, action or "动作")
+    if event_type in _GATHER_EVENT_TYPES and isinstance(payload, dict):
+        gather = GATHER_DESC.get(str(payload.get("action", "") or ""))
+        if gather:
+            return gather[0]
+    return _EVENT_ACTIVITY_LABELS.get(event_type, event_type or "未知")
+
+
+def activity_spans(
+    events: list[dict[str, Any]],
+    subject: Optional[str] = None,
+    gap: int = DEFAULT_SPAN_GAP,
+) -> list[ActivitySpan]:
+    """把时间线聚合成活动区间：同主体同活动、间隔 <= gap tick 合并为一段。
+
+    - subject 给定：只聚合该人物的事件（人物档案「生平阶段」用）。
+    - subject 为空：所有事件按首要人物（无人物则家庭，两者皆无则跳过）混排聚合。
+    - 穿插的其他活动（如 rest/eat）不会打断一段；间隔超过 gap 才断段。
+    """
+    spans: list[ActivitySpan] = []
+    open_spans: dict[tuple[str, str], ActivitySpan] = {}
+    last_tick: dict[tuple[str, str], int] = {}
+    for event in sorted(events, key=lambda item: item.get("id", 0)):
+        people = event_people(event)
+        if subject is not None:
+            if not _matches_person(event, subject):
+                continue
+            person = _selector_person(event, subject)
+            who = person.get("id") or subject
+            display = person_label(person) if person else subject
+        else:
+            if people:
+                who = people[0].get("id") or people[0].get("name", "")
+                display = person_label(people[0])
+            else:
+                households = event_households(event)
+                if not households:
+                    continue  # 世界级事件（如天气）不进活动时间线，避免刷屏
+                who = f"hh:{households[0]}"
+                display = households[0]
+            if not who:
+                continue
+        key = (str(who), activity_label(event))
+        tick = int(event.get("tick", 0))
+        previous = last_tick.get(key)
+        if previous is not None and tick - previous <= gap:
+            span = open_spans[key]
+            span.to_tick = tick
+            span.count += 1
+            span.events.append(event)
+        else:
+            span = ActivitySpan(
+                subject=str(who), subject_label=display, label=key[1],
+                from_tick=tick, to_tick=tick, count=1, events=[event],
+            )
+            spans.append(span)
+            open_spans[key] = span
+        last_tick[key] = tick
+    spans.sort(key=lambda span: (span.from_tick, span.to_tick, span.subject))
+    return spans
+
+
+def agent_activity_spans(
+    events: list[dict[str, Any]], selector: str, gap: int = DEFAULT_SPAN_GAP
+) -> list[ActivitySpan]:
+    """单个人物的活动区间（角色档案「生平阶段」数据源）。"""
+    return activity_spans(events, subject=selector, gap=gap)
 
 
 def turning_point(event: dict[str, Any]) -> str:
     return _TURNING_POINTS.get(str(event.get("event_type", "")), "")
+
+
+@dataclass
+class BiographyEntry:
+    """传记条目：人物一生的一件大事（关键转折或子女出生）。"""
+
+    tick: int
+    label: str
+    text: str
+    event_id: int
+
+
+def biography(
+    profile: AgentProfile, names: Optional[dict[str, str]] = None
+) -> list[BiographyEntry]:
+    """从人物时间线提取传记：关键转折 + 子女出生，按 tick、事件 id 排序。
+
+    - 本人出生记为「出生」；timeline 中子女的出生事件记为「生育」。
+    - 其余条目类别沿用 turning_point 映射（婚配/死亡/迁徙/继承/债务违约/交涉等）。
+    """
+    entries: list[BiographyEntry] = []
+    agent_id = profile.agent_id or (profile.selector if not profile.selector.startswith("name:") else "")
+    for event in profile.timeline:
+        event_type = str(event.get("event_type", ""))
+        label = turning_point(event)
+        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        if event_type == "agent_born":
+            child_id = str(payload.get("child_id", "") or "")
+            if agent_id and child_id == agent_id:
+                label = "出生"
+            else:
+                label = "生育"
+        if not label:
+            continue
+        entries.append(
+            BiographyEntry(
+                tick=int(event.get("tick", 0)),
+                label=label,
+                text=event_summary(event, names),
+                event_id=int(event.get("id", 0)),
+            )
+        )
+    entries.sort(key=lambda entry: (entry.tick, entry.event_id))
+    return entries
 
 
 def focus_category(event: dict[str, Any]) -> str:
@@ -408,13 +648,23 @@ def _members(payload: dict[str, Any], field_name: str) -> list[dict[str, str]]:
     return people
 
 
-def agent_profile(events: list[dict[str, Any]], selector: str) -> AgentProfile:
-    timeline = [event for event in sorted(events, key=lambda e: e.get("id", 0)) if _matches_person(event, selector)]
+def agent_profile(
+    events: list[dict[str, Any]],
+    selector: str,
+    index: Optional[dict[str, list[dict[str, Any]]]] = None,
+) -> AgentProfile:
+    """人物档案。index 为 build_person_index 产物时直接查索引，免去全库逐事件人物匹配。"""
+    if index is not None:
+        timeline = sorted(index.get(selector, []), key=lambda e: e.get("id", 0))
+    else:
+        timeline = [event for event in sorted(events, key=lambda e: e.get("id", 0)) if _matches_person(event, selector)]
     profile = AgentProfile(selector=selector, timeline=timeline)
     for event in timeline:
-        person = _selector_person(event, selector)
-        profile.agent_id = profile.agent_id or person.get("id", "")
-        profile.name = profile.name or person.get("name", "")
+        if not profile.agent_id or not profile.name:
+            # 仅头部信息未定时才做完整人物提取；时间线主体是十万条级，逐条提取代价高
+            person = _selector_person(event, selector)
+            profile.agent_id = profile.agent_id or person.get("id", "")
+            profile.name = profile.name or person.get("name", "")
         payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
         event_type = event.get("event_type")
         if event_type == "agent_born" and profile.birth_tick is None:
