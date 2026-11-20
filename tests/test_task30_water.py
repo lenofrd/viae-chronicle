@@ -58,22 +58,22 @@ def test_hydrology_initialized_from_config():
     """开局水文取 natural-params.hydrology_initial：0.60 / low（首次 step 前初始化）。"""
     w = _build(0)
     _climate(w)._ensure_initialized(w)  # noqa: SLF001
-    assert w.state.water_level_ratio == pytest.approx(0.60)
-    assert w.state.irrigation_gear == "low"
+    assert w.state.environment.water_level_ratio == pytest.approx(0.60)
+    assert w.state.environment.irrigation_gear == "low"
 
 
 def test_rain_raises_and_dry_lowers_water(world):
     mod = _climate(world)
     cfg = world.config.natural_params
     recharge = cfg.hydrology_evolution.recharge_per_mm
-    world.state.water_level_ratio = 0.50
+    world.state.environment.water_level_ratio = 0.50
 
     mod._evolve_hydrology(world, cfg, 20.0)  # 按剩余空间补水：0.5 + k×20×(1−0.5)
-    assert world.state.water_level_ratio == pytest.approx(0.50 + recharge * 20.0 * 0.5)
+    assert world.state.environment.water_level_ratio == pytest.approx(0.50 + recharge * 20.0 * 0.5)
 
-    mid = world.state.water_level_ratio
+    mid = world.state.environment.water_level_ratio
     mod._evolve_hydrology(world, cfg, 0.0)  # 无雨：−dry_loss_per_day
-    assert world.state.water_level_ratio == pytest.approx(
+    assert world.state.environment.water_level_ratio == pytest.approx(
         mid - cfg.hydrology_evolution.dry_loss_per_day
     )
 
@@ -81,15 +81,15 @@ def test_rain_raises_and_dry_lowers_water(world):
 def test_water_level_stays_in_unit_interval(world):
     mod = _climate(world)
     cfg = world.config.natural_params
-    world.state.water_level_ratio = 0.90
+    world.state.environment.water_level_ratio = 0.90
     for _ in range(200):  # 持续暴雨：渐近 1.0，但绝不越界
         mod._evolve_hydrology(world, cfg, 100.0)
-        assert 0.0 <= world.state.water_level_ratio <= 1.0
-    assert world.state.water_level_ratio > 0.99
+        assert 0.0 <= world.state.environment.water_level_ratio <= 1.0
+    assert world.state.environment.water_level_ratio > 0.99
 
-    world.state.water_level_ratio = 0.001
+    world.state.environment.water_level_ratio = 0.001
     mod._evolve_hydrology(world, cfg, 0.0)
-    assert world.state.water_level_ratio == pytest.approx(0.0)
+    assert world.state.environment.water_level_ratio == pytest.approx(0.0)
 
 
 def test_gear_maps_to_four_levels(world):
@@ -105,8 +105,8 @@ def test_gear_event_only_when_level_crosses_threshold(world):
     """水位每变必写 water_level_changed；灌溉档仅在跨档时写事件。"""
     mod = _climate(world)
     cfg = world.config.natural_params
-    world.state.water_level_ratio = 0.54
-    world.state.irrigation_gear = "scarce"
+    world.state.environment.water_level_ratio = 0.54
+    world.state.environment.irrigation_gear = "scarce"
     before = len(world.event_log.by_type("irrigation_gear_changed"))
 
     mod._evolve_hydrology(world, cfg, 20.0)  # 0.54 + 0.20 = 0.74 → low
@@ -125,11 +125,11 @@ def test_gear_event_only_when_level_crosses_threshold(world):
 def test_collect_water_produces_configured_amount(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.stamina = 100.0
     household = hh(world, lin)
     household.water = 0.0
-    world.state.water_level_ratio = 0.0  # 河流水位不是地下水位；不改变井水取水量
+    world.state.environment.water_level_ratio = 0.0  # 河流水位不是地下水位；不改变井水取水量
     p = mod._perceive(world, lin)  # noqa: SLF001
 
     mod._execute(world, lin, "collect_water", p, tuning)  # noqa: SLF001
@@ -145,7 +145,7 @@ def test_collect_water_produces_configured_amount(world):
 def test_collect_water_returns_carrier_home_after_fetch(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     household = hh(world, lin)
     lin.location = household.home_node
     p = mod._perceive(world, lin)  # noqa: SLF001
@@ -162,7 +162,7 @@ def test_collect_water_returns_carrier_home_after_fetch(world):
 def test_seasonal_water_reserve_targets_cover_unreachable_periods(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     p = mod._perceive(world, lin)  # noqa: SLF001
     daily_need = p.household_daily_water_need
 
@@ -186,7 +186,7 @@ def test_seasonal_water_reserve_targets_cover_unreachable_periods(world):
 def test_water_shortage_is_recorded_without_health_penalty(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     household = hh(world, lin)
     household.water = 0.0
     health_before = lin.health
@@ -206,11 +206,11 @@ def test_water_shortage_is_recorded_without_health_penalty(world):
 def test_daily_water_consumption_per_member(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     household = hh(world, lin)
     household.water = 10.0
     living = [m for m in household.member_ids
-              if world.state.agents.get(m) and world.state.agents[m].alive]
+              if world.state.human.agents.get(m) and world.state.human.agents[m].alive]
 
     mod._settle_water(world, tuning)  # noqa: SLF001
 
@@ -227,7 +227,7 @@ def test_daily_water_consumption_per_member(world):
 def test_daily_consumption_floors_at_zero(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    household = hh(world, world.state.agents["lin_yuan"])
+    household = hh(world, world.state.human.agents["lin_yuan"])
     household.water = 0.5
     before_events = len(world.event_log.by_type("water_consumed"))
 
@@ -246,7 +246,7 @@ def test_water_conservation_production_minus_consumption_equals_stock(world):
     """产出 − 日耗 = 存量增量（逐事件可对账）。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     household = hh(world, lin)
     household.water = 0.0
     lin.stamina = 100.0
@@ -271,13 +271,13 @@ def test_water_conservation_production_minus_consumption_equals_stock(world):
 def test_moisture_scales_expected_yield(world):
     tuning = world.config.agents.tuning
     table = world.config.natural_params.hydrology_evolution.moisture_by_gear
-    world.state.field_fertility["east_field"] = 1.0
+    world.state.environment.fertility_factor["east_field"] = 1.0
 
-    world.state.irrigation_gear = "abundant"
+    world.state.environment.irrigation_gear = "abundant"
     assert expected_yield(world, "east_field", "grain", tuning) == pytest.approx(
         tuning.agriculture.base_yield["grain"] * table["abundant"]
     )
-    world.state.irrigation_gear = "dry"
+    world.state.environment.irrigation_gear = "dry"
     assert expected_yield(world, "east_field", "grain", tuning) == pytest.approx(
         tuning.agriculture.base_yield["grain"] * table["dry"]
     )
@@ -286,11 +286,11 @@ def test_moisture_scales_expected_yield(world):
 def test_harvest_payload_carries_moisture(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    zhao = world.state.agents["zhao_cuilan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     zhao.stamina = 100.0
-    world.state.climate.season = Season.AUTUMN
-    world.state.field_growth[work_node_of(world, zhao)] = 90.0
-    world.state.irrigation_gear = "scarce"
+    world.state.environment.climate.season = Season.AUTUMN
+    world.state.environment.field_growth[work_node_of(world, zhao)] = 90.0
+    world.state.environment.irrigation_gear = "scarce"
     p = mod._perceive(world, zhao)  # noqa: SLF001
 
     mod._execute(world, zhao, "harvest", p, tuning)  # noqa: SLF001
@@ -307,7 +307,7 @@ def test_harvest_payload_carries_moisture(world):
 def test_eat_infeasible_without_cooking_water(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     household = hh(world, lin)
     household.grain = 5.0
     for f in tuning.physiology.food_fields:
@@ -331,7 +331,7 @@ def test_survival_gate_fetches_water_before_eating(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
     phys = tuning.physiology
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     household = hh(world, lin)
     household.grain = 5.0
     for f in phys.food_fields:
@@ -347,7 +347,7 @@ def test_survival_gate_fetches_water_before_eating(world):
 def test_eat_consumes_cooking_water(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     household = hh(world, lin)
     household.water = 2.0
     lin.hunger = 70.0
@@ -366,7 +366,7 @@ def test_collect_water_scarcity_bonus(world):
     """家庭存水低于目标时，打水得分随缺水程度上升。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     household = hh(world, lin)
     lin.stamina = 100.0
     household.water = 0.0
@@ -403,16 +403,16 @@ def test_replay_restores_hydrology_and_household_water():
     events = w.event_log.all()
 
     state = rebuild_state(events, cfg).state
-    assert state.water_level_ratio == pytest.approx(w.state.water_level_ratio)
-    assert state.irrigation_gear == w.state.irrigation_gear
-    for hid, household in w.state.households.items():
-        if hid in state.households:
+    assert state.environment.water_level_ratio == pytest.approx(w.state.environment.water_level_ratio)
+    assert state.environment.irrigation_gear == w.state.environment.irrigation_gear
+    for hid, household in w.state.human.households.items():
+        if hid in state.human.households:
             water_events = [
                 event for event in events
                 if event.get("payload", {}).get("household_id") == hid
                 and ("water" in event.get("event_type", "") or "water_" in event.get("event_type", ""))
             ]
-            assert state.households[hid].water == pytest.approx(household.water), (
+            assert state.human.households[hid].water == pytest.approx(household.water), (
                 f"water replay mismatch for {hid}: runtime={household.water}, "
-                f"replay={state.households[hid].water}; events={water_events}"
+                f"replay={state.human.households[hid].water}; events={water_events}"
             )

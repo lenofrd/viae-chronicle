@@ -20,7 +20,8 @@
 ```text
 src/vale/              模拟核心
   core/                事件库、世界状态、调度器、日历、回放、快照、世界注册
-  modules/             可插拔模拟模块（climate 气候、agents 人物/家庭/经济、environment 环境、
+  contracts/           跨领域只读查询契约（environment / spatial / wildlife）
+  modules/             可插拔模拟模块（climate 气候、agents 人物/家庭/经济、community 社区设施、
                        land 土地、construction 建造、governance 治理、tenancy_economy 租佃经济、
                        ecology 生态、xigu_events 西谷事件）
   worldgen/            世界生成（xigu：按种子生成西谷镇住户、田块与地理）

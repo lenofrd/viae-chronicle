@@ -103,7 +103,7 @@ inventory_of(world, agent) -> dict[str, float]   # 家庭资产快照（按 mark
 3. 测试 helper 收敛：
 
 ```python
-def hh(world, agent): return world.state.households[agent.household_id]
+def hh(world, agent): return world.state.human.households[agent.household_id]
 def inv(world, agent): return inventory_of(world, agent)
 ```
 

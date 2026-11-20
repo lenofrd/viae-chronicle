@@ -22,10 +22,12 @@ def test_seasonal_ritual_and_flood_damage_are_emergent_events():
             agents=SimpleNamespace(tuning=SimpleNamespace(market=SimpleNamespace(
                 market_day_interval=10, market_day_offset=0, market_node="market")))),
         state=SimpleNamespace(
-            climate=SimpleNamespace(season=SimpleNamespace(value="spring"),season_progress=.01,
-                year=1,day=1,precipitation_mm=30,drought_state=SimpleNamespace(value="none")),
-            field_growth={"irrigated_field_01":50},field_fertility={},
-            ecological_resources={},agents={}),
+            environment=SimpleNamespace(
+                climate=SimpleNamespace(season=SimpleNamespace(value="spring"),season_progress=.01,
+                    year=1,day=1,precipitation_mm=30,drought_state=SimpleNamespace(value="none")),
+                field_growth={"irrigated_field_01":50},fertility_factor={},
+                ecological_resources={}),
+            human=SimpleNamespace(agents={})),
         event_log=EventSink(),
     )
     module=XiguEventsModule()
@@ -34,4 +36,4 @@ def test_seasonal_ritual_and_flood_damage_are_emergent_events():
     assert "market_day_opened" in kinds
     assert "seasonal_ritual" in kinds
     assert "field_flood_damage" in kinds
-    assert world.state.field_growth["irrigated_field_01"] < 50
+    assert world.state.environment.field_growth["irrigated_field_01"] < 50

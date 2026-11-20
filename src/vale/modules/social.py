@@ -46,7 +46,7 @@ def apply_kin_defaults(state: WorldState, now: int) -> None:
     保证两者认知集合逐项相等。不写事件（避免开局刷屏）。
     刷新 last_seen_tick 使 kin 关系不受 TTL 遗忘——亲属不该互相遗忘。
     """
-    agents = list(state.agents.values())
+    agents = list(state.human.agents.values())
     for i, a in enumerate(agents):
         for b in agents[i + 1:]:
             if a.household_id == b.household_id or _are_kin(a, b):
@@ -75,8 +75,8 @@ def upgrade_acquaintance(
     返回 False，且不刷新 last_seen_tick —— 保持运行时与 replay 逐项一致）。
     观察者侧单向：被观察者默认无感。
     """
-    observer = world.state.agents.get(observer_id)
-    target = world.state.agents.get(target_id)
+    observer = world.state.human.agents.get(observer_id)
+    target = world.state.human.agents.get(target_id)
     if observer is None or target is None or observer_id == target_id:
         return False
     entry = observer.acquaintances.get(target_id)
@@ -110,7 +110,7 @@ def record_interaction(
     """
     upgrade_acquaintance(world, observer_id, target_id, tick,
                          cause="interaction", location_source=location_source)
-    observer = world.state.agents.get(observer_id)
+    observer = world.state.human.agents.get(observer_id)
     if observer is not None:
         record_memory(observer, target_id, event_type, outcome, tick, capacity)
 
@@ -151,7 +151,7 @@ def get_social_view(state: WorldState, observer_id: str, target_id: str,
     返回 ``{"known": bool, "level": int, "memories": list[MemoryEntry],
     "impression": Optional[ImpressionEntry]}``（任务 18 P1 追加 impression 键，旧调用不读）。
     """
-    observer = state.agents.get(observer_id)
+    observer = state.human.agents.get(observer_id)
     if observer is None:
         return {
             "known": False,
@@ -188,13 +188,13 @@ def cleanup_forgotten(world, now: int, ttl: int) -> int:
     每 ``cleanup_interval`` tick 调一次（由 step 触发）。返回清理条目数。
     """
     count = 0
-    for observer in world.state.agents.values():
+    for observer in world.state.human.agents.values():
         for target_id in list(observer.acquaintances.keys()):
             entry = observer.acquaintances[target_id]
             if not is_forgotten(entry, now, ttl):
                 continue
             del observer.acquaintances[target_id]
-            target = world.state.agents.get(target_id)
+            target = world.state.human.agents.get(target_id)
             world.event_log.append(now, "acquaintance_changed", {
                 "observer_id": observer.agent_id,
                 "observer_name": observer.name,
@@ -276,7 +276,7 @@ def synthesize_impression(
     可能滞后。P1 不接决策，不影响行为；P2/trust 层若需精确 counts，应从事件流
     实时重算（只查特定 target 的事件，成本可控），不依赖存储值。
     """
-    observer = state.agents.get(observer_id)
+    observer = state.human.agents.get(observer_id)
     if observer is None or observer_id == target_id:
         return None
     memories = _impression_memories(observer, target_id, window)
@@ -304,12 +304,12 @@ def update_impression(
     entry = synthesize_impression(world.state, observer_id, target_id, window)
     if entry is None:
         return None
-    observer = world.state.agents[observer_id]
+    observer = world.state.human.agents[observer_id]
     old = observer.impressions.get(target_id)
     if old is not None and old.label == entry.label:
         return entry.label
     observer.impressions[target_id] = entry
-    target = world.state.agents.get(target_id)
+    target = world.state.human.agents.get(target_id)
     payload = {
         "observer_id": observer_id,
         "observer_name": observer.name,
@@ -333,7 +333,7 @@ def update_impression(
 def get_impression(state: "WorldState", observer_id: str,
                    target_id: str) -> Optional[ImpressionEntry]:
     """只读查询印象（裁决 §4.1.6）。无印象返回 None，不写事件。"""
-    observer = state.agents.get(observer_id)
+    observer = state.human.agents.get(observer_id)
     if observer is None:
         return None
     return observer.impressions.get(target_id)

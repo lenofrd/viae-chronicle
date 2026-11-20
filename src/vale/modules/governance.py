@@ -19,7 +19,7 @@ from vale.modules.agents import age_years
 
 
 def _adult_alive(world, agent_id: str) -> bool:
-    agent = world.state.agents.get(agent_id)
+    agent = world.state.human.agents.get(agent_id)
     return bool(agent and agent.alive and not agent.incapacitated
                 and age_years(agent.birth_tick, world.current_tick) >= 18)
 
@@ -27,18 +27,18 @@ def _adult_alive(world, agent_id: str) -> bool:
 def _active_representatives(world):
     return {
         household_id: rep
-        for household_id, rep in world.state.representatives.items()
-        if rep.active and household_id in world.state.households
-        and rep.agent_id in world.state.households[household_id].member_ids
+        for household_id, rep in world.state.human.representatives.items()
+        if rep.active and household_id in world.state.human.households
+        and rep.agent_id in world.state.human.households[household_id].member_ids
         and _adult_alive(world, rep.agent_id)
     }
 
 
 def register_representative(world, household_id: str, agent_id: str):
-    household = world.state.households.get(household_id)
+    household = world.state.human.households.get(household_id)
     if household is None or agent_id not in household.member_ids:
         raise ValueError("representative must belong to the household")
-    existing = world.state.representatives.get(household_id)
+    existing = world.state.human.representatives.get(household_id)
     if existing is not None and existing.active:
         raise ValueError("household already has an active representative")
     if not _adult_alive(world, agent_id):
@@ -50,12 +50,12 @@ def register_representative(world, household_id: str, agent_id: str):
     world.event_log.append(world.current_tick, "representative_registered", {
         "representative": rep.model_dump(mode="json"),
     })
-    world.state.representatives[household_id] = rep
+    world.state.human.representatives[household_id] = rep
     return rep
 
 
 def revoke_representative(world, household_id: str, *, reason: str):
-    rep = world.state.representatives.get(household_id)
+    rep = world.state.human.representatives.get(household_id)
     if rep is None or not rep.active:
         raise ValueError("household has no active representative")
     world.event_log.append(world.current_tick, "representative_revoked", {
@@ -65,24 +65,24 @@ def revoke_representative(world, household_id: str, *, reason: str):
 
 
 def open_election(world, election_id: str):
-    if election_id in world.state.elections:
+    if election_id in world.state.human.elections:
         raise ValueError("election id already exists")
-    if world.state.headman_id:
+    if world.state.human.headman_id:
         raise ValueError("a recognized headman is still in office")
     reps = _active_representatives(world)
-    required = math.ceil(2 * len(world.state.households) / 3)
+    required = math.ceil(2 * len(world.state.human.households) / 3)
     if len(reps) < required:
         raise ValueError("election requires two-thirds household representation")
     election = VillageElectionState(election_id=election_id)
     world.event_log.append(world.current_tick, "election_opened", {
         "election": election.model_dump(mode="json"),
     })
-    world.state.elections[election_id] = election
+    world.state.human.elections[election_id] = election
     return election
 
 
 def nominate_candidate(world, election_id: str, candidate_id: str, nominating_household_id: str):
-    election = world.state.elections.get(election_id)
+    election = world.state.human.elections.get(election_id)
     if election is None or election.status != "nominating":
         raise ValueError("election is not accepting nominations")
     reps = _active_representatives(world)
@@ -90,7 +90,7 @@ def nominate_candidate(world, election_id: str, candidate_id: str, nominating_ho
         raise ValueError("candidate must be nominated by an active household representative")
     if not _adult_alive(world, candidate_id):
         raise ValueError("candidate must be a living, capable adult")
-    if candidate_id not in {a.agent_id for a in world.state.agents.values()
+    if candidate_id not in {a.agent_id for a in world.state.human.agents.values()
                             if a.alive and not a.incapacitated}:
         raise ValueError("candidate must be a village resident")
     if candidate_id in election.candidates:
@@ -105,7 +105,7 @@ def nominate_candidate(world, election_id: str, candidate_id: str, nominating_ho
 
 
 def close_nominations(world, election_id: str):
-    election = world.state.elections[election_id]
+    election = world.state.human.elections[election_id]
     if election.status != "nominating" or len(election.candidates) < 2:
         raise ValueError("at least two candidates are required")
     election.status = "voting"
@@ -116,7 +116,7 @@ def close_nominations(world, election_id: str):
 
 def cast_election_vote(world, election_id: str, representative_agent_id: str,
                        candidate_id: str, *, round_no: int | None = None):
-    election = world.state.elections.get(election_id)
+    election = world.state.human.elections.get(election_id)
     round_no = round_no or (election.current_round if election else 0)
     if election is None or election.status != "voting" or round_no != election.current_round:
         raise ValueError("election is not accepting votes for this round")
@@ -138,7 +138,7 @@ def cast_election_vote(world, election_id: str, representative_agent_id: str,
 
 
 def tally_election(world, election_id: str):
-    election = world.state.elections[election_id]
+    election = world.state.human.elections[election_id]
     if election.status != "voting":
         raise ValueError("election is not in voting state")
     votes = election.votes_by_round.get(str(election.current_round), {})
@@ -188,7 +188,7 @@ def tally_election(world, election_id: str):
 
 def recognize_election(world, election_id: str, *, approved: bool,
                        county_reason: str = "", deputy_id: str | None = None):
-    election = world.state.elections.get(election_id)
+    election = world.state.human.elections.get(election_id)
     if election is None or election.status != "awaiting_recognition" or not election.winner_id:
         raise ValueError("election has no result awaiting county recognition")
     if not approved:
@@ -208,8 +208,8 @@ def recognize_election(world, election_id: str, *, approved: bool,
     election.recognized_tick = world.current_tick
     election.term_start_tick = world.current_tick
     election.term_end_tick = term_end
-    world.state.headman_id = election.winner_id
-    world.state.acting_headman_id = None
+    world.state.human.headman_id = election.winner_id
+    world.state.human.acting_headman_id = None
     world.event_log.append(world.current_tick, "election_recognized", {
         "election_id": election_id, "headman_id": election.winner_id,
         "deputy_id": deputy_id, "term_end_tick": term_end,
@@ -218,10 +218,10 @@ def recognize_election(world, election_id: str, *, approved: bool,
 
 
 def expire_headman_term(world):
-    headman_id = world.state.headman_id
+    headman_id = world.state.human.headman_id
     if not headman_id:
         return False
-    current = next((e for e in world.state.elections.values()
+    current = next((e for e in world.state.human.elections.values()
                     if e.status == "recognized" and e.winner_id == headman_id
                     and e.term_end_tick is not None), None)
     if current is None or world.current_tick < current.term_end_tick:
@@ -229,14 +229,14 @@ def expire_headman_term(world):
     world.event_log.append(world.current_tick, "headman_term_expired", {
         "headman_id": headman_id, "election_id": current.election_id,
     })
-    world.state.headman_id = None
-    world.state.acting_headman_id = None
+    world.state.human.headman_id = None
+    world.state.human.acting_headman_id = None
     return True
 
 
 def activate_deputy(world, *, reason: str):
-    headman_id = world.state.headman_id
-    election = next((e for e in world.state.elections.values()
+    headman_id = world.state.human.headman_id
+    election = next((e for e in world.state.human.elections.values()
                     if e.status == "recognized" and e.winner_id == headman_id), None)
     if election is None or not election.deputy_id or _adult_alive(world, headman_id):
         raise ValueError("deputy activation requires an unavailable headman")
@@ -245,14 +245,14 @@ def activate_deputy(world, *, reason: str):
     world.event_log.append(world.current_tick, "deputy_activated", {
         "headman_id": headman_id, "deputy_id": election.deputy_id, "reason": reason,
     })
-    world.state.acting_headman_id = election.deputy_id
+    world.state.human.acting_headman_id = election.deputy_id
     return election.deputy_id
 
 
 def propose_council_decision(world, decision_id: str, *, subject: str,
                              proposer_agent_id: str, affected_household_ids=(),
                              major: bool = False, appeal_id: str | None = None):
-    if decision_id in world.state.council_decisions:
+    if decision_id in world.state.human.council_decisions:
         raise ValueError("decision id already exists")
     reps = _active_representatives(world)
     recused = sorted(set(affected_household_ids) & set(reps))
@@ -273,12 +273,12 @@ def propose_council_decision(world, decision_id: str, *, subject: str,
     world.event_log.append(world.current_tick, "council_decision_proposed", {
         "decision": decision.model_dump(mode="json"),
     })
-    world.state.council_decisions[decision_id] = decision
+    world.state.human.council_decisions[decision_id] = decision
     return decision
 
 
 def cast_council_vote(world, decision_id: str, representative_agent_id: str, approve: bool):
-    decision = world.state.council_decisions.get(decision_id)
+    decision = world.state.human.council_decisions.get(decision_id)
     if decision is None or decision.status != "voting":
         raise ValueError("council decision is not open for voting")
     household_id = next((hid for hid, rep in _active_representatives(world).items()
@@ -309,10 +309,10 @@ def cast_council_vote(world, decision_id: str, representative_agent_id: str, app
 
 def submit_appeal(world, appeal_id: str, *, applicant_agent_id: str,
                   original_decision_id: str, grounds: str):
-    original = world.state.council_decisions.get(original_decision_id)
+    original = world.state.human.council_decisions.get(original_decision_id)
     if original is None or original.status not in {"approved", "rejected"}:
         raise ValueError("appeal requires a resolved original council decision")
-    if appeal_id in world.state.appeals or not grounds.strip():
+    if appeal_id in world.state.human.appeals or not grounds.strip():
         raise ValueError("appeal id must be new and grounds must be stated")
     appeal = AppealState(
         appeal_id=appeal_id, applicant_agent_id=applicant_agent_id,
@@ -322,13 +322,13 @@ def submit_appeal(world, appeal_id: str, *, applicant_agent_id: str,
     world.event_log.append(world.current_tick, "appeal_submitted", {
         "appeal": appeal.model_dump(mode="json"),
     })
-    world.state.appeals[appeal_id] = appeal
+    world.state.human.appeals[appeal_id] = appeal
     return appeal
 
 
 def resolve_appeal(world, appeal_id: str, *, review_decision_id: str, outcome: str):
-    appeal = world.state.appeals.get(appeal_id)
-    decision = world.state.council_decisions.get(review_decision_id)
+    appeal = world.state.human.appeals.get(appeal_id)
+    decision = world.state.human.council_decisions.get(review_decision_id)
     if appeal is None or appeal.status != "pending":
         raise ValueError("appeal is not pending")
     if decision is None or decision.status != "approved" or decision.appeal_id != appeal_id:

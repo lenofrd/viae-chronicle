@@ -15,7 +15,7 @@ class XiguEventsModule:
 
     def step(self, world) -> None:
         tick = world.current_tick
-        climate = world.state.climate
+        climate = world.state.environment.climate
         if climate is None:
             return
         tuning = world.config.agents.tuning
@@ -54,13 +54,13 @@ class XiguEventsModule:
             threshold = float(attrs.get("flood_damage_threshold_mm", 18.0))
             if climate.precipitation_mm < threshold:
                 continue
-            before = float(world.state.field_growth.get(node.id, 0.0))
+            before = float(world.state.environment.field_growth.get(node.id, 0.0))
             ratio = float(attrs.get("flood_damage_ratio", .12))
             damage = min(before, before * ratio * max(.1, float(attrs.get("flood_risk", .5))))
             if damage <= 0:
                 continue
             after = round(max(0.0, before - damage), 4)
-            world.state.field_growth[node.id] = after
+            world.state.environment.field_growth[node.id] = after
             world.event_log.append(world.current_tick, "field_flood_damage", {
                 "field_node": node.id, "before": round(before, 4),
                 "damage": round(damage, 4), "after": after,
@@ -73,12 +73,12 @@ class XiguEventsModule:
         for node in world.config.spatial.nodes:
             if node.type.value != "field":
                 continue
-            before = float(world.state.field_growth.get(node.id, 0.0))
+            before = float(world.state.environment.field_growth.get(node.id, 0.0))
             damage = min(before, max(.1, before * .025))
             if damage <= 0:
                 continue
             after = round(max(0.0, before - damage), 4)
-            world.state.field_growth[node.id] = after
+            world.state.environment.field_growth[node.id] = after
             world.event_log.append(world.current_tick, "field_drought_damage", {
                 "field_node": node.id, "before": round(before, 4),
                 "damage": round(damage, 4), "after": after,
@@ -88,7 +88,7 @@ class XiguEventsModule:
     def _apply_landslide(self, world, climate) -> None:
         if climate.precipitation_mm < 18 or climate.year in self._landslide_years:
             return
-        pool = world.state.ecological_resources.get("low_mountain")
+        pool = world.state.environment.ecological_resources.get("low_mountain")
         if not pool or pool.get("restricted"):
             return
         maximum = max(1.0, float(pool.get("max_stock", 1.0)))
@@ -99,9 +99,9 @@ class XiguEventsModule:
         if not candidates:
             return
         target = max(candidates, key=lambda n: (float(n.attributes.get("x", 0)), n.id))
-        before = float(world.state.field_fertility.get(target.id, 1.0))
+        before = float(world.state.environment.fertility_factor.get(target.id, 1.0))
         after = round(max(.1, before - .08), 4)
-        world.state.field_fertility[target.id] = after
+        world.state.environment.fertility_factor[target.id] = after
         self._landslide_years.add(climate.year)
         world.event_log.append(world.current_tick, "landslide_damage", {
             "source_node": "low_mountain", "field_node": target.id,
@@ -129,7 +129,7 @@ class XiguEventsModule:
         if rng.random() >= .025:
             return
         source = rng.choice(todays)["payload"]
-        agent = world.state.agents.get(source.get("agent_id"))
+        agent = world.state.human.agents.get(source.get("agent_id"))
         if agent is None or not agent.alive:
             return
         before = agent.health

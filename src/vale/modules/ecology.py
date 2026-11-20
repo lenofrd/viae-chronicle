@@ -1,18 +1,20 @@
 """Event-sourced renewable-resource projection for spatial resource nodes."""
 from __future__ import annotations
 
+from vale.contracts.queries import EnvironmentQuery
+
 
 class EcologyModule:
     name = "ecology"
     depends_on = ["climate"]
 
     def step(self, world) -> None:
-        season = world.state.climate.season.value if world.state.climate else "spring"
+        season = EnvironmentQuery.season(world).value
         for node in world.config.spatial.nodes:
             attrs = node.attributes or {}
             if "resource_stock" not in attrs:
                 continue
-            pool = world.state.ecological_resources.get(node.id)
+            pool = world.state.environment.ecological_resources.get(node.id)
             if pool is None:
                 pool = {
                     "resource_type": attrs.get("resource_type", "generic"),
@@ -26,7 +28,7 @@ class EcologyModule:
                     "harvested_this_tick": 0.0,
                     "harvest_tick": world.current_tick,
                 }
-                world.state.ecological_resources[node.id] = pool
+                world.state.environment.ecological_resources[node.id] = pool
                 world.event_log.append(world.current_tick, "resource_pool_initialized", {
                     "resource_node": node.id, "pool": dict(pool),
                 })

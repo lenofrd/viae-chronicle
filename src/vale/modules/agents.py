@@ -26,9 +26,11 @@ from vale.core.household import (
     living_households,
     work_node_of,
 )
+from vale.contracts.queries import EnvironmentQuery, SpatialQuery
+from vale.contracts.water import withdraw_water
 from vale.core.state import AgentState, DebtRecord, HouseholdState
 from vale.modules import social
-from vale.modules.environment import (
+from vale.modules.community import (
     environmental_injury_multiplier,
     fatigue_efficiency,
     production_efficiency_at_node,
@@ -233,7 +235,7 @@ def select_food_creditor(
 
 def _food_lender_node(world, agent: AgentState, spatial=None) -> str:
     tuning = world.config.agents.tuning.borrow
-    household = world.state.households.get(agent.household_id)
+    household = world.state.human.households.get(agent.household_id)
     debtor_home = household.home_node if household is not None else home_node_of(world, agent)
     creditor = select_food_creditor(
         world, agent.household_id, tuning.borrow_food_amount,
@@ -246,7 +248,7 @@ def _food_lender_node(world, agent: AgentState, spatial=None) -> str:
 def _lender_node(world, agent: AgentState, spatial=None) -> str:
     """借粮目标与可行性选择共用同一个最近足额债主。"""
     amount = world.config.agents.tuning.borrow.borrow_grain_amount
-    household = world.state.households.get(agent.household_id)
+    household = world.state.human.households.get(agent.household_id)
     debtor_home = household.home_node if household is not None else home_node_of(world, agent)
     creditor = select_creditor(
         world, agent.household_id, amount,
@@ -276,13 +278,13 @@ def _target_node(action: str, agent: AgentState, world, spatial=None) -> str:
         return _food_lender_node(world, agent, spatial)
     if action == "construct":
         project = next((
-            item for item in world.state.construction_projects.values()
+            item for item in world.state.human.construction_projects.values()
             if item.household_id == agent.household_id
             and item.status == "under_construction"
         ), None)
         if project is None:
             return ""
-        parcel = world.state.land_parcels.get(project.parcel_id)
+        parcel = world.state.human.land_parcels.get(project.parcel_id)
         if parcel is None:
             return ""
         node_id = parcel.spatial_node_id
@@ -303,30 +305,10 @@ def _node_crop_type(world, node_id: str) -> str:
 
 
 # crops.md §4.5 产量公式的中性因子：病虫害/灾害尚未接入，取值等价既有产出。
-# moisture 已由灌溉档派生（任务30，见 _moisture_factor）。
+# moisture 已由灌溉档派生（任务30，见 EnvironmentQuery.moisture_factor）。
 YIELD_GROWTH_HEALTH = 1.0
 YIELD_DISASTER_DAMAGE = 0.0
 DEFAULT_FIELD_FERTILITY = 1.0
-
-
-def _field_area(world, node_id: str) -> float:
-    """田块面积乘数（spatial 节点 ``area``，非田/未知节点按 1.0）。"""
-    for n in world.config.spatial.nodes:
-        if n.id == node_id:
-            return float(getattr(n, "area", 1.0))
-    return 1.0
-
-
-def _moisture_factor(world) -> float:
-    """灌溉档 → moisture 系数（任务30；004 §2.7）。
-
-    档位由 ClimateModule 按水位派生；未知/旧库档位按 1.0 降级（不改变旧行为）。
-    """
-    gear = getattr(world.state, "irrigation_gear", None)
-    if not gear:
-        return 1.0
-    table = world.config.natural_params.hydrology_evolution.moisture_by_gear
-    return float(table.get(gear, 1.0))
 
 
 def expected_yield(world, node_id: str, crop: str, tuning: AgentTuning) -> float:
@@ -338,20 +320,12 @@ def expected_yield(world, node_id: str, crop: str, tuning: AgentTuning) -> float
     """
     return (
         tuning.agriculture.base_yield.get(crop, 0.0)
-        * _field_area(world, node_id)
-        * world.state.field_fertility.get(node_id, DEFAULT_FIELD_FERTILITY)
-        * _moisture_factor(world)
+        * SpatialQuery.area(world, node_id)
+        * world.state.environment.fertility_factor.get(node_id, DEFAULT_FIELD_FERTILITY)
+        * EnvironmentQuery.moisture_factor(world)
         * YIELD_GROWTH_HEALTH
         * (1.0 - YIELD_DISASTER_DAMAGE)
     )
-
-
-def _is_field_node(world, node_id: str) -> bool:
-    """该节点是否为田地（只有田地能 farm/harvest）。"""
-    for n in world.config.spatial.nodes:
-        if n.id == node_id:
-            return getattr(n.type, "value", n.type) == "field" and not n.attributes.get("abstract_zone")
-    return False
 
 
 def _floor_to_step(value: float, step: float) -> float:
@@ -398,8 +372,8 @@ class AgentModule:
         self._daily_task_assignments = self._plan_household_work(world, tuning)
         # A1：主循环以 WorldState.agents 为唯一真相源；cfg.agents 只用于开局播种，
         # 运行时新增的新生儿下一 tick 即参与决策/结算/查询。
-        for agent_id in list(world.state.agents.keys()):
-            agent = world.state.agents[agent_id]
+        for agent_id in list(world.state.human.agents.keys()):
+            agent = world.state.human.agents[agent_id]
             try:
                 self._process_one(world, agent, tuning)
             except Exception as exc:  # noqa: BLE001 — 模块隔离：单个人物失败不拖垮世界
@@ -410,7 +384,7 @@ class AgentModule:
         self._settle(world, tuning)
         # 004 C1：日末回家——日内 location 已真实化（停在最后动作目标），结算后统一归位，
         # 使次日从家出发。集市结算先于归位，故仍能识别「当日是否在场 market」。
-        for agent in living_agents(world.state.agents):
+        for agent in living_agents(world.state.human.agents):
             agent.location = home_node_of(world, agent)
         self._settle_fatigue(world, tuning)
         settle_building_maintenance(world, tuning.environment)
@@ -424,7 +398,7 @@ class AgentModule:
     def _record_shared_location_interactions(self, world, tuning: AgentTuning) -> None:
         """共同居住或工作节点视为有日常接触；只更新双向认知，不污染短期互动记忆。"""
         groups: dict[str, list[AgentState]] = {}
-        for agent in living_agents(world.state.agents):
+        for agent in living_agents(world.state.human.agents):
             meeting_nodes = {
                 node for node in (work_node_of(world, agent), home_node_of(world, agent))
                 if node
@@ -472,7 +446,7 @@ class AgentModule:
         家庭模型第 1 步：每个配置人物建单人家庭 `hh_{id}`，资产/债务/住所/工作节点搬入家庭；
         `AgentConfig.assets/home_node/work_node` 仅作开局输入。
         """
-        if world.state.agents:
+        if world.state.human.agents:
             return
         phys = cfg.tuning.physiology
         aging = cfg.tuning.aging
@@ -481,7 +455,7 @@ class AgentModule:
         registry_node = "elder_house" if "elder_house" in node_ids else ("village_head_house" if "village_head_house" in node_ids else None)
         for a in cfg.agents:
             household_id = a.household_id or f"hh_{a.id}"
-            household = world.state.households.get(household_id)
+            household = world.state.human.households.get(household_id)
             if household is None:
                 household = HouseholdState(
                     household_id=household_id,
@@ -497,7 +471,7 @@ class AgentModule:
                     registered_tick=start_tick if registry_node else None,
                     formed_tick=start_tick,
                 )
-                world.state.households[household_id] = household
+                world.state.human.households[household_id] = household
                 if registry_node:
                     world.event_log.append(start_tick, "household_registered", {
                         "household_id": household_id, "head_id": a.id,
@@ -515,7 +489,7 @@ class AgentModule:
                             "household_id": household_id, "agent_id": a.id,
                             "home_node": household.home_node, "registry_node": registry_node,
                         })
-            world.state.agents[a.id] = AgentState(
+            world.state.human.agents[a.id] = AgentState(
                 agent_id=a.id,
                 name=a.name,
                 surname=a.surname or "",
@@ -531,16 +505,24 @@ class AgentModule:
                 fatigue=phys.initial_fatigue,
             )
         # 初始化所有 FIELD 节点的长势为 0、地力为中性值（内容来自 spatial 配置，不写死节点 id）
-        if not world.state.field_growth:
+        if not world.state.environment.field_growth:
             for n in world.config.spatial.nodes:
                 if getattr(n.type, "value", n.type) == "field" and not n.attributes.get("abstract_zone"):
-                    world.state.field_growth[n.id] = 0.0
-        if not world.state.field_fertility:
+                    world.state.environment.field_growth[n.id] = 0.0
+        if not world.state.environment.fertility_factor:
             for n in world.config.spatial.nodes:
                 if getattr(n.type, "value", n.type) == "field" and not n.attributes.get("abstract_zone"):
-                    world.state.field_fertility[n.id] = DEFAULT_FIELD_FERTILITY
+                    world.state.environment.fertility_factor[n.id] = DEFAULT_FIELD_FERTILITY
+        # 静态地力：抄自地形生成输入，仅供未来地力平衡任务使用，不参与产量。
+        if not world.state.environment.soil_quality:
+            for n in world.config.spatial.nodes:
+                quality = n.attributes.get("soil_fertility")
+                if (getattr(n.type, "value", n.type) == "field"
+                        and not n.attributes.get("abstract_zone")
+                        and quality is not None):
+                    world.state.environment.soil_quality[n.id] = float(quality)
         # 阶段二 C：播种家庭可分配田块（单人户 = [默认田]，与既有 work_node_of 等价；不写事件）
-        for household in world.state.households.values():
+        for household in world.state.human.households.values():
             household.work_nodes = self._desired_work_nodes(world, household, cfg.tuning)
         # Land parcels are projected only after households and their deterministic field rights exist.
         from vale.modules.land import initialize_land
@@ -552,7 +534,7 @@ class AgentModule:
         """户内可劳作存活成员数（年龄分段 work_allowed；确定性计数，不依赖 life_stage 投影）。"""
         count = 0
         for member_id in household.member_ids:
-            member = world.state.agents.get(member_id)
+            member = world.state.human.agents.get(member_id)
             if member is None or not member.alive:
                 continue
             stage = tuning.aging.stage_for(age_years(member.birth_tick, world.current_tick))
@@ -568,10 +550,7 @@ class AgentModule:
         「家→田距离升序、节点 id 升序」补足；列表长度取可劳作成员数（至少 1）。
         家庭默认劳作点不是田（如集市）时返回空表，保持既有语义、不做田块分配。
         """
-        field_ids = [
-            n.id for n in world.config.spatial.nodes
-            if getattr(n.type, "value", n.type) == "field" and not n.attributes.get("abstract_zone")
-        ]
+        field_ids = list(SpatialQuery.field_ids(world))
         if household.work_node not in field_ids:
             return []
         if self._spatial is None:
@@ -620,7 +599,7 @@ class AgentModule:
                 },
             )
         node_ids = {n.id for n in world.config.spatial.nodes}
-        for agent in living_agents(world.state.agents):
+        for agent in living_agents(world.state.human.agents):
             if not agent.work_node:
                 continue
             if agent.work_node in node_ids and (
@@ -654,7 +633,7 @@ class AgentModule:
         for household in living_households(world):
             workers = []
             for member_id in household.member_ids:
-                member = world.state.agents.get(member_id)
+                member = world.state.human.agents.get(member_id)
                 if member is None or not member.alive or member.incapacitated:
                     continue
                 stage = tuning.aging.stage_for(age_years(member.birth_tick, world.current_tick))
@@ -728,8 +707,7 @@ class AgentModule:
     # -- 004 M5：日内 TU 预算与体力分级 ------------------------------------ #
     def _work_window_tu(self, world) -> float:
         """当日工作窗（TU），随季节取值（natural-params.seasons.*.work_window_tu）。"""
-        climate = world.state.climate
-        season = climate.season if climate is not None else Season.SPRING
+        season = EnvironmentQuery.season(world)
         sparams = world.config.natural_params.climate_evolution.seasons.get(season.value)
         if sparams is None:
             return 10.0
@@ -882,7 +860,7 @@ class AgentModule:
         for pid in (agent.mother_id, agent.father_id):
             if not pid:
                 continue
-            parent = world.state.agents.get(pid)
+            parent = world.state.human.agents.get(pid)
             if parent is not None and parent.alive:
                 parents.append(parent)
         if not parents:
@@ -919,8 +897,7 @@ class AgentModule:
             agent.health = max(0.0, agent.health - phys.hunger_health_damage)
 
         # 1b. 冬季保暖（任务11）：无布御寒扣健康，每人每日至多一条 cold_exposure
-        climate = world.state.climate
-        season = climate.season if climate is not None else Season.SPRING
+        season = EnvironmentQuery.season(world)
         self._apply_cold_exposure(world, agent, tuning, season)
 
         # 2. 生命状态门控（任务10）：health 触底 → 失能，停止一切主动动作；事件只写一次
@@ -1027,10 +1004,10 @@ class AgentModule:
         home_node = home_node_of(world, agent)
         dwelling = None
         has_home_dwelling = False
-        for building in world.state.buildings.values():
+        for building in world.state.human.buildings.values():
             if building.building_type != "dwelling":
                 continue
-            parcel = world.state.land_parcels.get(building.parcel_id)
+            parcel = world.state.human.land_parcels.get(building.parcel_id)
             if parcel is None or parcel.spatial_node_id != home_node:
                 continue
             has_home_dwelling = True
@@ -1092,10 +1069,9 @@ class AgentModule:
         if self._spatial is None:
             self._spatial = SpatialIndex(world.config.spatial)
         tuning = world.config.agents.tuning
-        climate = world.state.climate
-        weather = climate.current_weather if climate is not None else WeatherType.SUNNY
-        temp = climate.temperature_c if climate is not None else 0.0
-        season = climate.season if climate is not None else Season.SPRING
+        weather = EnvironmentQuery.weather(world)
+        temp = EnvironmentQuery.temperature_c(world)
+        season = EnvironmentQuery.season(world)
         household = household_of(world, agent)
         work_node = work_node_of(world, agent)
         # 004：日内计距基点 = 人物当前位置（location 真实化），不再固定从家起算
@@ -1116,14 +1092,14 @@ class AgentModule:
         guardian = self._guardian(world, agent, tuning)
         construction_project = next(
             (
-                p for p in world.state.construction_projects.values()
+                p for p in world.state.human.construction_projects.values()
                 if p.household_id == agent.household_id
                 and p.status == "under_construction"
             ),
             None,
         )
         if construction_project is not None:
-            parcel = world.state.land_parcels.get(construction_project.parcel_id)
+            parcel = world.state.human.land_parcels.get(construction_project.parcel_id)
             valid_nodes = {node.id for node in world.config.spatial.nodes}
             construction_target = (
                 parcel.spatial_node_id
@@ -1140,7 +1116,7 @@ class AgentModule:
         daily_food_need = 0.0
         daily_water_need = 0.0
         for member_id in household.member_ids:
-            member = world.state.agents.get(member_id)
+            member = world.state.human.agents.get(member_id)
             if member is None or not member.alive:
                 continue
             member_age = age_years(member.birth_tick, world.current_tick)
@@ -1162,14 +1138,14 @@ class AgentModule:
             building.building_type == "workshop"
             and building.status in {"active", "occupied"}
             and building.condition > 0
-            and (parcel := world.state.land_parcels.get(building.parcel_id)) is not None
+            and (parcel := world.state.human.land_parcels.get(building.parcel_id)) is not None
             and parcel.spatial_node_id == work_node
-            for building in world.state.buildings.values()
+            for building in world.state.human.buildings.values()
         )
         season_key = season.value if hasattr(season, "value") else str(season)
         season_labor_required = tuning.agriculture.field_labor_required_by_season.get(season_key)
-        season_year = climate.year if climate is not None else 1
-        labor_record = world.state.field_season_labor.get(work_node, {})
+        season_year = EnvironmentQuery.year(world)
+        labor_record = world.state.environment.field_season_labor.get(work_node, {})
         labor_completed = (
             float(labor_record.get("labor_completed", 0.0))
             if labor_record.get("year") == season_year and labor_record.get("season") == season_key
@@ -1185,7 +1161,7 @@ class AgentModule:
             self._find_courtship_target(world, agent, tuning)
             if self._marriage_eligible(world, agent, tuning) else None
         )
-        spouse = world.state.agents.get(agent.spouse_id) if agent.spouse_id else None
+        spouse = world.state.human.agents.get(agent.spouse_id) if agent.spouse_id else None
         can_conceive = bool(
             agent.sex == AgentSex.FEMALE
             and spouse is not None and spouse.alive
@@ -1201,7 +1177,7 @@ class AgentModule:
             temperature_c=temp,
             is_raining=weather in RAIN_WEATHERS,
             season=season,
-            work_field_growth=world.state.field_growth.get(work_node, 0.0),
+            work_field_growth=world.state.environment.field_growth.get(work_node, 0.0),
             work_field_season_labor_remaining=season_labor_remaining,
             lender_node=_lender_node(world, agent, self._spatial),
             creditor_household_id=creditor.household_id if creditor else None,
@@ -1209,7 +1185,7 @@ class AgentModule:
             food_creditor_resource=food_creditor[1] if food_creditor else None,
             food_lender_node=food_creditor[0].home_node if food_creditor else household.home_node,
             distance_from_location=dist,
-            work_node_is_field=_is_field_node(world, work_node),
+            work_node_is_field=SpatialQuery.is_field(world, work_node),
             can_eat=self._has_food(world, agent),
             feeder_id=guardian.agent_id if guardian else None,
             home_node=household.home_node,
@@ -1572,7 +1548,7 @@ class AgentModule:
         cloth_before = household.cloth
         water_before = household.water
         debt_before = household.debt
-        fg = world.state.field_growth
+        fg = world.state.environment.field_growth
         field_growth_before = fg.get(work_node, 0.0)
         harvest_detail: dict = {}
 
@@ -1615,19 +1591,18 @@ class AgentModule:
             agent.stamina = self._stamina_cap(agent, tuning)
         elif action == "farm":
             # 每季每块田有显式劳动预算；效率低的人仍完成相同工作单元，但占用更多 TU。
-            climate = world.state.climate
             season_key = p.season.value if hasattr(p.season, "value") else str(p.season)
-            season_year = climate.year if climate is not None else 1
+            season_year = EnvironmentQuery.year(world)
             required_labor = agr.field_labor_required_by_season.get(season_key)
             if required_labor is not None:
-                previous = world.state.field_season_labor.get(work_node, {})
+                previous = world.state.environment.field_season_labor.get(work_node, {})
                 completed = (
                     float(previous.get("labor_completed", 0.0))
                     if previous.get("year") == season_year and previous.get("season") == season_key
                     else 0.0
                 )
                 after_labor = min(float(required_labor), completed + agr.field_labor_per_farm)
-                world.state.field_season_labor[work_node] = {
+                world.state.environment.field_season_labor[work_node] = {
                     "year": season_year, "season": season_key,
                     "labor_completed": round(after_labor, 3),
                 }
@@ -1650,12 +1625,12 @@ class AgentModule:
             harvest_detail = {
                 "crop": crop,
                 "base_yield": tuning.agriculture.base_yield.get(crop, 0.0),
-                "field_area": _field_area(world, work_node),
-                "field_fertility": world.state.field_fertility.get(
+                "field_area": SpatialQuery.area(world, work_node),
+                "field_fertility": world.state.environment.fertility_factor.get(
                     work_node, DEFAULT_FIELD_FERTILITY
                 ),
                 # 任务30：moisture 由灌溉档派生（旧库缺失时观察层按 1.0 降级）
-                "moisture": _moisture_factor(world),
+                "moisture": EnvironmentQuery.moisture_factor(world),
                 "base_expected_yield": round(base_gain, 2),
                 "expected_yield": round(gain, 2),
             }
@@ -1681,7 +1656,7 @@ class AgentModule:
                         due_tick=due_tick,
                     )
                 )
-                creditor_head = world.state.agents.get(creditor_hh.head_id or "")
+                creditor_head = world.state.human.agents.get(creditor_hh.head_id or "")
                 creditor_name = creditor_head.name if creditor_head else creditor_hh.household_id
                 world.event_log.append(
                     world.current_tick,
@@ -1733,7 +1708,7 @@ class AgentModule:
                             resource=resource,
                         )
                     )
-                    creditor_head = world.state.agents.get(creditor_hh.head_id or "")
+                    creditor_head = world.state.human.agents.get(creditor_hh.head_id or "")
                     world.event_log.append(
                         world.current_tick,
                         "debt_formed",
@@ -1770,8 +1745,12 @@ class AgentModule:
                 raise ValueError("construction action selected without an active household project")
             advance_construction(world, project_id, worker_id=agent.agent_id)
         elif action == "collect_water":
-            # 任务30：生活用水最小切片——每次打水按配置产水（无上限，日耗在结算扣减）
-            household.water = round(household.water + tuning.water.collect_amount, 2)
+            # 任务30：生活用水最小切片——取水按水源库存结算（P3a），日耗在结算扣减
+            collected = withdraw_water(
+                world, "well", tuning.water.collect_amount,
+                requester_id=household.household_id,
+            )
+            household.water = round(household.water + collected, 2)
         elif action == "court":
             self._execute_court(world, agent, p, tuning)
         elif action == "try_for_child":
@@ -1862,7 +1841,7 @@ class AgentModule:
     def _execute_try_for_child(self, world, agent: AgentState, p: Perception,
                                tuning: AgentTuning) -> None:
         """女方主动求子；是否怀上仍由 chance_per_day × 资源系数决定（生理不确定）。"""
-        father = world.state.agents.get(agent.spouse_id or "")
+        father = world.state.human.agents.get(agent.spouse_id or "")
         if father is None or not father.alive:
             raise ValueError("try_for_child selected without a living spouse")
         b = tuning.birth
@@ -1888,7 +1867,7 @@ class AgentModule:
         success_rate = min(1.0, cfg.base_success_rate * season_mult * weather_mult)
         success = self.rng.random() < success_rate
         amount = cfg.output_amount
-        pool = world.state.ecological_resources.get(cfg.target_node)
+        pool = world.state.environment.ecological_resources.get(cfg.target_node)
         if success and pool is not None:
             used_this_tick = (float(pool.get("harvested_this_tick", 0.0))
                               if pool.get("harvest_tick") == world.current_tick else 0.0)
@@ -2036,7 +2015,7 @@ class AgentModule:
             pay = min(rec.amount, budget, debtor_stock)
             if pay <= 0:
                 continue
-            creditor_hh = world.state.households.get(rec.creditor_household_id)
+            creditor_hh = world.state.human.households.get(rec.creditor_household_id)
             if creditor_hh is None:
                 continue
             creditor_stock = float(getattr(creditor_hh, resource, 0.0))
@@ -2044,7 +2023,7 @@ class AgentModule:
             setattr(creditor_hh, resource, round(creditor_stock + pay, 2))
             rec.amount = round(rec.amount - pay, 2)
             budget = budget - pay
-            creditor_head = world.state.agents.get(creditor_hh.head_id or "")
+            creditor_head = world.state.human.agents.get(creditor_hh.head_id or "")
             world.event_log.append(
                 world.current_tick,
                 "debt_repaid",
@@ -2092,15 +2071,15 @@ class AgentModule:
             travel_tu += max(0.0, float(payload.get("round_trip_tu", 0.0)))
             by_agent[agent_id] = (labor_tu, travel_tu)
 
-        for agent in living_agents(world.state.agents):
+        for agent in living_agents(world.state.human.agents):
             labor_tu, travel_tu = by_agent.get(agent.agent_id, (0.0, 0.0))
             home_node = home_node_of(world, agent)
             dwelling = None
             has_home_dwelling = False
-            for building in world.state.buildings.values():
+            for building in world.state.human.buildings.values():
                 if building.building_type != "dwelling":
                     continue
-                parcel = world.state.land_parcels.get(building.parcel_id)
+                parcel = world.state.human.land_parcels.get(building.parcel_id)
                 if parcel is None or parcel.spatial_node_id != home_node:
                     continue
                 has_home_dwelling = True
@@ -2115,7 +2094,7 @@ class AgentModule:
                 household = household_of(world, agent)
                 residents = sum(
                     1 for member_id in household.member_ids
-                    if member_id in world.state.agents and world.state.agents[member_id].alive
+                    if member_id in world.state.human.agents and world.state.human.agents[member_id].alive
                 )
                 capacity = max(1.0, float(dwelling.attributes.get(
                     "resident_capacity", cfg.dwelling_resident_capacity
@@ -2170,7 +2149,7 @@ class AgentModule:
         否则库存会被 _collect_debts 先扣走。死者/失能者不参与催收、集市、婚配、生育与回血。
         """
         dead_now: list[AgentState] = []
-        for agent in list(world.state.agents.values()):
+        for agent in list(world.state.human.agents.values()):
             try:
                 was_alive = agent.alive
                 self._process_death(world, agent, tuning)
@@ -2202,7 +2181,7 @@ class AgentModule:
                 },
             )
 
-        for agent in list(world.state.agents.values()):
+        for agent in list(world.state.human.agents.values()):
             try:
                 if not agent.alive:
                     continue
@@ -2276,7 +2255,7 @@ class AgentModule:
                 },
             )
 
-        for agent in list(world.state.agents.values()):
+        for agent in list(world.state.human.agents.values()):
             try:
                 if not agent.alive or agent.incapacitated:
                     continue
@@ -2308,12 +2287,12 @@ class AgentModule:
         min_age = tuning.marriage.min_age
         min_stamina = tuning.market.market_min_stamina
         members = [
-            world.state.agents[mid]
+            world.state.human.agents[mid]
             for mid in household.member_ids
-            if mid in world.state.agents
-            and world.state.agents[mid].alive
-            and not world.state.agents[mid].incapacitated
-            and age_years(world.state.agents[mid].birth_tick, world.current_tick) >= min_age
+            if mid in world.state.human.agents
+            and world.state.human.agents[mid].alive
+            and not world.state.human.agents[mid].incapacitated
+            and age_years(world.state.human.agents[mid].birth_tick, world.current_tick) >= min_age
         ]
         if not members:
             return None, "dead_or_incap"
@@ -2328,10 +2307,10 @@ class AgentModule:
         per_member = tuning.water.daily_consumption_per_member
         if per_member <= 0:
             return
-        for household in world.state.households.values():
+        for household in world.state.human.households.values():
             members = [
                 m for m in household.member_ids
-                if m in world.state.agents and world.state.agents[m].alive
+                if m in world.state.human.agents and world.state.human.agents[m].alive
             ]
             if not members:
                 continue
@@ -2610,8 +2589,8 @@ class AgentModule:
                         resource=item,
                     )
                 )
-                debtor_head = world.state.agents.get(buyer_hh.head_id or "")
-                creditor_head = world.state.agents.get(seller.head_id or "")
+                debtor_head = world.state.human.agents.get(buyer_hh.head_id or "")
+                creditor_head = world.state.human.agents.get(seller.head_id or "")
                 world.event_log.append(
                     tick,
                     "debt_formed",
@@ -2733,14 +2712,14 @@ class AgentModule:
         for kind in tuning.inheritance.priority:
             if kind == "spouse":
                 if deceased.spouse_id:
-                    spouse = world.state.agents.get(deceased.spouse_id)
+                    spouse = world.state.human.agents.get(deceased.spouse_id)
                     if spouse is not None and spouse.alive:
                         return spouse
             elif kind == "children":
                 alive_children = [
-                    world.state.agents[cid]
+                    world.state.human.agents[cid]
                     for cid in deceased.children_ids
-                    if cid in world.state.agents and world.state.agents[cid].alive
+                    if cid in world.state.human.agents and world.state.human.agents[cid].alive
                 ]
                 if alive_children:
                     # 最长者（birth_tick 最小）优先
@@ -2749,7 +2728,7 @@ class AgentModule:
                 for pid in (deceased.mother_id, deceased.father_id):
                     if not pid:
                         continue
-                    parent = world.state.agents.get(pid)
+                    parent = world.state.human.agents.get(pid)
                     if parent is not None and parent.alive:
                         return parent
         return None
@@ -2826,9 +2805,9 @@ class AgentModule:
             return None
 
         for rec in list(deceased_hh.debts):
-            creditor_hh = world.state.households.get(rec.creditor_household_id)
+            creditor_hh = world.state.human.households.get(rec.creditor_household_id)
             creditor_head = (
-                world.state.agents.get(creditor_hh.head_id or "") if creditor_hh is not None else None
+                world.state.human.agents.get(creditor_hh.head_id or "") if creditor_hh is not None else None
             )
             creditor_name = (
                 creditor_head.name if creditor_head is not None else rec.creditor_household_id
@@ -2921,9 +2900,9 @@ class AgentModule:
         世界总粮不变，世界总债减少并由事件完整记录。
         """
         for rec in list(household.debts):
-            creditor_hh = world.state.households.get(rec.creditor_household_id)
+            creditor_hh = world.state.human.households.get(rec.creditor_household_id)
             creditor_head = (
-                world.state.agents.get(creditor_hh.head_id or "") if creditor_hh is not None else None
+                world.state.human.agents.get(creditor_hh.head_id or "") if creditor_hh is not None else None
             )
             creditor_name = (
                 creditor_head.name if creditor_head is not None else rec.creditor_household_id
@@ -2931,7 +2910,7 @@ class AgentModule:
             creditor_agent_id = (
                 creditor_head.agent_id if creditor_head is not None else rec.creditor_household_id
             )
-            debtor_head = world.state.agents.get(household.head_id or "")
+            debtor_head = world.state.human.agents.get(household.head_id or "")
             debtor_name = (
                 debtor_head.name if debtor_head is not None
                 else (household.head_id or household.household_id)
@@ -2967,9 +2946,9 @@ class AgentModule:
         if deceased.agent_id in household.member_ids:
             household.member_ids.remove(deceased.agent_id)
         living_members = [
-            world.state.agents[mid]
+            world.state.human.agents[mid]
             for mid in household.member_ids
-            if mid in world.state.agents and world.state.agents[mid].alive
+            if mid in world.state.human.agents and world.state.human.agents[mid].alive
         ]
         if living_members:
             if household.head_id in (None, deceased.agent_id):
@@ -3025,7 +3004,7 @@ class AgentModule:
         if new_head is None:
             return
         old_head_id = household.head_id
-        old_head = world.state.agents.get(old_head_id or "")
+        old_head = world.state.human.agents.get(old_head_id or "")
         household.head_id = new_head.agent_id
         world.event_log.append(
             world.current_tick,
@@ -3045,7 +3024,7 @@ class AgentModule:
                                      deceased: AgentState,
                                      heir_hh: Optional[HouseholdState]) -> None:
         """债权家庭消亡（Q5）：应收债务由继承家庭承接，否则逐笔核销。"""
-        for other in world.state.households.values():
+        for other in world.state.human.households.values():
             if other.household_id == dissolved.household_id:
                 continue
             kept: list[DebtRecord] = []
@@ -3053,9 +3032,9 @@ class AgentModule:
                 if rec.creditor_household_id != dissolved.household_id:
                     kept.append(rec)
                     continue
-                debtor_head = world.state.agents.get(other.head_id or "")
+                debtor_head = world.state.human.agents.get(other.head_id or "")
                 if heir_hh is not None:
-                    heir_head = world.state.agents.get(heir_hh.head_id or "")
+                    heir_head = world.state.human.agents.get(heir_hh.head_id or "")
                     rec.creditor_household_id = heir_hh.household_id
                     kept.append(rec)
                     world.event_log.append(
@@ -3120,7 +3099,7 @@ class AgentModule:
         if agent.spouse_id is None:
             return True
         # 鳏寡再婚：配偶已死且允许再婚
-        spouse = world.state.agents.get(agent.spouse_id)
+        spouse = world.state.human.agents.get(agent.spouse_id)
         return m.remarriage_allowed and (spouse is None or not spouse.alive)
 
     def _is_close_kin(self, a: AgentState, b: AgentState) -> bool:
@@ -3145,7 +3124,7 @@ class AgentModule:
             return None
         home = home_node_of(world, agent)
         best: Optional[tuple[float, str, AgentState]] = None
-        for other in living_agents(world.state.agents):
+        for other in living_agents(world.state.human.agents):
             if other.agent_id == agent.agent_id:
                 continue
             if not m.allow_same_sex and other.sex == agent.sex:
@@ -3167,7 +3146,7 @@ class AgentModule:
         if self._spatial is None:
             return
         eligible = [
-            a for a in living_agents(world.state.agents)
+            a for a in living_agents(world.state.human.agents)
             if self._marriage_eligible(world, a, tuning)
         ]
         eligible.sort(key=lambda a: a.agent_id)
@@ -3254,7 +3233,7 @@ class AgentModule:
         # 只迁移女方本人；既有子女、原家庭资产和债务均留在原家庭。
         self._move_wife_to_husband_household(world, wife, husband)
         target = household_of(world, husband)
-        source = world.state.households[source_household_id]
+        source = world.state.human.households[source_household_id]
         self._transfer_marriage_assets(
             world, target, source, m.bride_price_surplus_ratio,
             transfer_type="bride_price", wife=wife, husband=husband, tuning=tuning,
@@ -3280,8 +3259,8 @@ class AgentModule:
             b_id = offers[a_id]
             if offers.get(b_id) != a_id:
                 continue
-            a = world.state.agents.get(a_id)
-            b = world.state.agents.get(b_id)
+            a = world.state.human.agents.get(a_id)
+            b = world.state.human.agents.get(b_id)
             if a is None or b is None or not a.alive or not b.alive:
                 continue
             if not self._marriage_eligible(world, a, tuning):
@@ -3320,8 +3299,8 @@ class AgentModule:
         wife.work_node = None
         if source.head_id == wife.agent_id:
             remaining = [
-                world.state.agents[mid] for mid in source.member_ids
-                if mid in world.state.agents and world.state.agents[mid].alive
+                world.state.human.agents[mid] for mid in source.member_ids
+                if mid in world.state.human.agents and world.state.human.agents[mid].alive
             ]
             source.head_id = remaining[0].agent_id if remaining else None
         if target.head_id is None:
@@ -3369,7 +3348,7 @@ class AgentModule:
         daily_water_need = 0.0
         living_members = 0
         for member_id in household.member_ids:
-            member = world.state.agents.get(member_id)
+            member = world.state.human.agents.get(member_id)
             if member is None or not member.alive:
                 continue
             living_members += 1
@@ -3474,7 +3453,7 @@ class AgentModule:
         for member in members:
             if not member.spouse_id:
                 continue
-            spouse = world.state.agents.get(member.spouse_id)
+            spouse = world.state.human.agents.get(member.spouse_id)
             if spouse is None or not spouse.alive:
                 continue
             if spouse.household_id != household.household_id:
@@ -3513,7 +3492,7 @@ class AgentModule:
         candidates = split.home_node_candidates
         if candidates:
             occupied = {
-                hh.home_node for hh in world.state.households.values()
+                hh.home_node for hh in world.state.human.households.values()
                 if hh.household_id != source.household_id
                 and any(m.alive for m in household_members(world, hh))
             }
@@ -3576,7 +3555,7 @@ class AgentModule:
             member.household_id = new_id
             member.location = home
             member.work_node = None  # 迁入新户后取新户默认劳作点
-        world.state.households[new_id] = new_household
+        world.state.human.households[new_id] = new_household
         if new_household.registry_node:
             world.event_log.append(world.current_tick, "household_registered", {
                 "household_id": new_id, "head_id": husband.agent_id,
@@ -3615,7 +3594,7 @@ class AgentModule:
         n = 1
         while True:
             candidate = f"hh_{source_id}_{n}"
-            if candidate not in world.state.households:
+            if candidate not in world.state.human.households:
                 return candidate
             n += 1
 
@@ -3623,7 +3602,7 @@ class AgentModule:
     def _fertility_boost(self, world, tuning: AgentTuning) -> float:
         """A5 低人口保护：存活成年 ≤ 阈值且无未成年子女时提升婚育概率。"""
         b = tuning.birth
-        living = living_agents(world.state.agents)
+        living = living_agents(world.state.human.agents)
         adults = [
             a for a in living
             if age_years(a.birth_tick, world.current_tick) >= tuning.marriage.min_age
@@ -3664,7 +3643,7 @@ class AgentModule:
         daily_food_need = 0.0
         daily_water_need = 0.0
         for member_id in household.member_ids:
-            member = world.state.agents.get(member_id)
+            member = world.state.human.agents.get(member_id)
             if member is None or not member.alive:
                 continue
             member_age = age_years(member.birth_tick, world.current_tick)
@@ -3700,12 +3679,12 @@ class AgentModule:
         boost = self._fertility_boost(world, tuning)
         base_chance = min(1.0, b.chance_per_day * boost)
         mothers = [
-            a for a in living_agents(world.state.agents)
+            a for a in living_agents(world.state.human.agents)
             if a.sex == AgentSex.FEMALE and not a.incapacitated
         ]
         mothers.sort(key=lambda a: a.agent_id)
         for mother in mothers:
-            father = world.state.agents.get(mother.spouse_id) if mother.spouse_id else None
+            father = world.state.human.agents.get(mother.spouse_id) if mother.spouse_id else None
             if father is None or not father.alive or father.spouse_id != mother.agent_id:
                 continue
             if not self._birth_eligible(world, mother, father, tuning):
@@ -3720,7 +3699,7 @@ class AgentModule:
 
     def _child_id(self, world) -> str:
         n = 1
-        while f"child_{n}" in world.state.agents:
+        while f"child_{n}" in world.state.human.agents:
             n += 1
         return f"child_{n}"
 
@@ -3730,7 +3709,7 @@ class AgentModule:
         b = tuning.birth
         surname_src = father if b.surname_from == "father" else mother
         surname = surname_src.surname or b.default_surname
-        used = {a.name for a in world.state.agents.values()}
+        used = {a.name for a in world.state.human.agents.values()}
         for given in b.given_names:
             name = f"{surname}{given}"
             if name not in used:
@@ -3779,7 +3758,7 @@ class AgentModule:
             mother_id=mother.agent_id,
             father_id=father.agent_id,
         )
-        world.state.agents[child_id] = child
+        world.state.human.agents[child_id] = child
         household.member_ids.append(child_id)
         mother.children_ids.append(child_id)
         father.children_ids.append(child_id)
@@ -3813,7 +3792,7 @@ class AgentModule:
                 "work_node_source": work_source,
                 "mother_health_before": round(mother_health_before, 2),
                 "mother_health_after": round(mother.health, 2),
-                "population_after": len(living_agents(world.state.agents)),
+                "population_after": len(living_agents(world.state.human.agents)),
                 "fertility_resource_factor": round(resource_factor, 4),
             },
         )
@@ -3825,9 +3804,9 @@ class AgentModule:
         世界总粮不变，世界总债减少并由事件完整记录。
         """
         for rec in list(household.debts):
-            creditor_hh = world.state.households.get(rec.creditor_household_id)
+            creditor_hh = world.state.human.households.get(rec.creditor_household_id)
             creditor_head = (
-                world.state.agents.get(creditor_hh.head_id or "") if creditor_hh is not None else None
+                world.state.human.agents.get(creditor_hh.head_id or "") if creditor_hh is not None else None
             )
             creditor_name = (
                 creditor_head.name if creditor_head is not None else rec.creditor_household_id
@@ -3835,7 +3814,7 @@ class AgentModule:
             creditor_agent_id = (
                 creditor_head.agent_id if creditor_head is not None else rec.creditor_household_id
             )
-            debtor_head = world.state.agents.get(household.head_id or "")
+            debtor_head = world.state.human.agents.get(household.head_id or "")
             debtor_name = (
                 debtor_head.name if debtor_head is not None
                 else (household.head_id or household.household_id)
@@ -3874,9 +3853,9 @@ class AgentModule:
         守恒说明与 _forgive_debts 相同：账面坏账核销，债权家庭承担损失，
         世界总粮不变，世界总债减少并由事件完整记录。
         """
-        creditor_hh = world.state.households.get(rec.creditor_household_id)
+        creditor_hh = world.state.human.households.get(rec.creditor_household_id)
         creditor_head = (
-            world.state.agents.get(creditor_hh.head_id or "") if creditor_hh is not None else None
+            world.state.human.agents.get(creditor_hh.head_id or "") if creditor_hh is not None else None
         )
         creditor_name = (
             creditor_head.name if creditor_head is not None else rec.creditor_household_id
@@ -3884,7 +3863,7 @@ class AgentModule:
         creditor_agent_id = (
             creditor_head.agent_id if creditor_head is not None else rec.creditor_household_id
         )
-        debtor_head = world.state.agents.get(household.head_id or "")
+        debtor_head = world.state.human.agents.get(household.head_id or "")
         debtor_name = (
             debtor_head.name if debtor_head is not None
             else (household.head_id or household.household_id)
@@ -3929,10 +3908,10 @@ class AgentModule:
             if last is not None and tick - last < interval:
                 continue
             rec.last_collected_tick = tick
-            creditor_hh = world.state.households.get(rec.creditor_household_id)
+            creditor_hh = world.state.human.households.get(rec.creditor_household_id)
             if creditor_hh is None:
                 continue
-            creditor_head = world.state.agents.get(creditor_hh.head_id or "")
+            creditor_head = world.state.human.agents.get(creditor_hh.head_id or "")
             creditor_agent_id = (
                 creditor_head.agent_id if creditor_head is not None else creditor_hh.household_id
             )
@@ -4031,7 +4010,7 @@ class AgentModule:
         tick = world.current_tick
         living_ids = {h.household_id for h in living_households(world)}
         candidates: list[tuple[HouseholdState, DebtRecord]] = []
-        for household in sorted(world.state.households.values(), key=lambda h: h.household_id):
+        for household in sorted(world.state.human.households.values(), key=lambda h: h.household_id):
             if household.household_id not in living_ids:
                 continue
             for rec in household.debts:
@@ -4056,7 +4035,7 @@ class AgentModule:
         defaulted, repaid = self._debt_history_sets(world)
         count = 0
         for index, (debtor_hh, rec) in enumerate(candidates):
-            creditor_hh = world.state.households.get(rec.creditor_household_id)
+            creditor_hh = world.state.human.households.get(rec.creditor_household_id)
             if creditor_hh is None:
                 continue
             self._negotiate_debt(
@@ -4350,7 +4329,7 @@ class AgentModule:
     @staticmethod
     def _head_name(world, household: HouseholdState) -> str:
         """家庭对外称谓：存活户主名 → 户主 id → 家庭 id。"""
-        head = world.state.agents.get(household.head_id or "")
+        head = world.state.human.agents.get(household.head_id or "")
         if head is not None and head.alive:
             return head.name
         return household.head_id or household.household_id
@@ -4361,7 +4340,7 @@ class AgentModule:
         a_ids = set(a.member_ids)
         b_ids = set(b.member_ids)
         for member_id in a_ids:
-            agent = world.state.agents.get(member_id)
+            agent = world.state.human.agents.get(member_id)
             if agent is None:
                 continue
             if agent.spouse_id in b_ids:

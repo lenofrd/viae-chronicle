@@ -164,7 +164,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     for day in range(1, args.days + 1):
         run_tick(world)
         climate_by_day[day] = (
-            world.state.climate.model_dump() if world.state.climate else {}
+            world.state.environment.climate.model_dump() if world.state.environment.climate else {}
         )
 
     # 事件溯源：先按 tick 分组，再映射到第几天（day = tick - start_tick + 1）

@@ -173,8 +173,33 @@ class HydrologyEvolutionParams(BaseModel):
         return self
 
 
+class WaterSupplyParams(BaseModel):
+    """单个水源（水井/河段）的库存与再生参数（P3a）。
+
+    机制固定为：水库存量 0–capacity；每 tick 按 ``regeneration_per_tick × 水位比例``
+    补水且不越容量；同一 tick 内所有取水合计不超过 ``extraction_limit_per_tick``。
+    具体数值由地点配置提供（[调参]），缺省值保证旧世界能跑且两年基线不触顶。
+    """
+
+    capacity: float = Field(6000.0, gt=0, description="水源最大存量")
+    initial_ratio: Optional[float] = Field(
+        None, ge=0, le=1,
+        description="开局存量占容量比例；None = 取开局 water_level_ratio",
+    )
+    regeneration_per_tick: float = Field(
+        240.0, ge=0, description="水位比例 1.0 时每 tick 的补水量（实际按水位缩放）"
+    )
+    extraction_limit_per_tick: float = Field(
+        2880.0, ge=0, description="同一 tick 内该水源允许被抽取的总量上限"
+    )
+
+
 class NaturalConfig(BaseModel):
     climate_initial: ClimateInitialState
     hydrology_initial: HydrologyInitialState = Field(default_factory=HydrologyInitialState)
     hydrology_evolution: HydrologyEvolutionParams = Field(default_factory=HydrologyEvolutionParams)
     climate_evolution: ClimateEvolutionParams = Field(default_factory=ClimateEvolutionParams)
+    # P3a 水源库存：key 为空间节点 id；未列出的节点不设库存（取水保持旧行为）。
+    water_supply: dict[str, WaterSupplyParams] = Field(
+        default_factory=lambda: {"well": WaterSupplyParams()}
+    )

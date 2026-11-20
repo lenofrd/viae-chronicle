@@ -56,7 +56,7 @@ def _module(world) -> AgentModule:
 def _moisture(world) -> float:
     """任务30：当前灌溉档对应的 moisture 系数（初始 low=0.85）。"""
     return world.config.natural_params.hydrology_evolution.moisture_by_gear[
-        world.state.irrigation_gear
+        world.state.environment.irrigation_gear
     ]
 
 
@@ -69,7 +69,7 @@ def _add_agent(world, agent_id: str, *, sex: AgentSex, age: int, household_id: s
         life_stage="青年", household_id=household_id, location=home,
         work_node=None, health=health, hunger=hunger, stamina=stamina,
     )
-    world.state.agents[agent_id] = agent
+    world.state.human.agents[agent_id] = agent
     return agent
 
 
@@ -79,13 +79,13 @@ def _add_household(world, household_id: str, member_ids: list[str], *,
         household_id=household_id, member_ids=list(member_ids), head_id=member_ids[0],
         home_node=home, work_node=work, formed_tick=world.current_tick,
     )
-    world.state.households[household_id] = household
+    world.state.human.households[household_id] = household
     return household
 
 
 def _isolated_couple(world, fillers: int) -> tuple[AgentState, AgentState, HouseholdState]:
     """清场后建一户：母亲 m1 + 父亲 f1 + 若干未成年填充，便于精确控制户容量。"""
-    for agent in world.state.agents.values():
+    for agent in world.state.human.agents.values():
         agent.alive = False
     home, work = "rich_district", "south_field"
     members = ["m1", "f1"] + [f"k{i}" for i in range(1, fillers + 1)]
@@ -108,7 +108,7 @@ def test_c_invalid_preference_is_released(world):
     """个人偏好指向不存在的节点 → 置 None，写 agent_work_node_changed(preference_invalid)。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.work_node = "ghost_field"
 
     mod._reconcile_work_nodes(world, tuning)  # noqa: SLF001
@@ -162,14 +162,14 @@ def test_c_capable_members_get_distinct_fields(world):
     assert work_node_of(world, mother) == "south_field"   # 可劳作序 0
     assert work_node_of(world, father) == "east_field"    # 可劳作序 1，不再撞车
     # 不可劳作成员不占劳作位，取默认田
-    assert work_node_of(world, world.state.agents["k9"]) == "south_field"
+    assert work_node_of(world, world.state.human.agents["k9"]) == "south_field"
 
 
 def test_c_single_member_household_keeps_default_field(world):
     """单人户列表只有默认田，work_node_of 与既有语义逐项相等。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
-    for agent in world.state.agents.values():
+    for agent in world.state.human.agents.values():
         agent.alive = False
     _add_household(world, "hh_solo", ["solo"], home="common_district", work="west_field")
     solo = _add_agent(world, "solo", sex=AgentSex.MALE, age=20,
@@ -190,7 +190,7 @@ def test_c_newborn_takes_household_allocation(world):
 
     mod._give_birth(world, mother, father, tuning)  # noqa: SLF001
 
-    child = world.state.agents["child_1"]
+    child = world.state.human.agents["child_1"]
     assert child.work_node is None
     assert household.work_nodes == ["south_field", "east_field"]
     assert work_node_of(world, child) == "south_field"  # 不可劳作不占位 → 默认田
@@ -243,7 +243,7 @@ def test_a_area_and_fertility_scale_yield(world):
     assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(base * 2.0 * moisture)
     node.area = 1.0
 
-    world.state.field_fertility["south_field"] = 0.5
+    world.state.environment.fertility_factor["south_field"] = 0.5
     assert expected_yield(world, "south_field", "grain", tuning) == pytest.approx(base * 0.5 * moisture)
 
 
@@ -251,9 +251,9 @@ def test_a_harvest_uses_formula_and_conserves(world):
     """harvest 产出入家庭库存 = 公式值；事件载荷带公式因子；无债务时逐项守恒。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    world.state.climate.season = Season.AUTUMN
-    world.state.field_growth["west_field"] = 90.0
+    lin = world.state.human.agents["lin_yuan"]
+    world.state.environment.climate.season = Season.AUTUMN
+    world.state.environment.field_growth["west_field"] = 90.0
     grain_before = hh(world, lin).grain
     vegetable_before = hh(world, lin).vegetable
 

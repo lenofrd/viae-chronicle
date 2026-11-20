@@ -128,11 +128,11 @@ def test_initial_households_register_at_head_house_and_keep_vacant_split_homes()
     world = World(config.world.world_id, log, config.world.start_tick, config)
     AgentModule()._ensure_agents(world, config.agents)
     assert world.world_id == "brookvale-town-001"
-    assert len(world.state.agents) == 40
-    assert {"lin_yuan", "zhao_cuilan", "li_quan", "zhou_qiaoniang"} <= set(world.state.agents)
-    assert len(world.state.households) == 30
-    assert len({h.home_node for h in world.state.households.values()}) == 30
-    assert all(h.registry_node == "elder_house" for h in world.state.households.values())
+    assert len(world.state.human.agents) == 40
+    assert {"lin_yuan", "zhao_cuilan", "li_quan", "zhou_qiaoniang"} <= set(world.state.human.agents)
+    assert len(world.state.human.households) == 30
+    assert len({h.home_node for h in world.state.human.households.values()}) == 30
+    assert all(h.registry_node == "elder_house" for h in world.state.human.households.values())
     assert len(log.by_type("household_registered")) == 30
     assert len(log.by_type("household_member_registered")) == 10
     log.close()

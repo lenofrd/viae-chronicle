@@ -33,10 +33,10 @@ def make_world():
 
 
 def register_all(world):
-    for household in world.state.households.values():
-        adult = next((world.state.agents[aid] for aid in household.member_ids
-                      if world.state.agents[aid].alive
-                      and (world.current_tick - world.state.agents[aid].birth_tick) // 365 >= 18), None)
+    for household in world.state.human.households.values():
+        adult = next((world.state.human.agents[aid] for aid in household.member_ids
+                      if world.state.human.agents[aid].alive
+                      and (world.current_tick - world.state.human.agents[aid].birth_tick) // 365 >= 18), None)
         if adult:
             register_representative(world, household.household_id, adult.agent_id)
 
@@ -45,7 +45,7 @@ def test_election_requires_quorum_two_rounds_and_county_recognition():
     world, log, config = make_world()
     try:
         register_all(world)
-        reps = list(world.state.representatives.values())
+        reps = list(world.state.human.representatives.values())
         assert len(reps) >= 20
         with pytest.raises(ValueError, match="already has an active representative"):
             register_representative(world, reps[0].household_id, reps[0].agent_id)
@@ -70,8 +70,8 @@ def test_election_requires_quorum_two_rounds_and_county_recognition():
         assert result["status"] == "awaiting_recognition"
         recognize_election(world, election.election_id, approved=True,
                            deputy_id=candidates[1])
-        assert world.state.headman_id == result["winner_id"]
-        election_state = world.state.elections[election.election_id]
+        assert world.state.human.headman_id == result["winner_id"]
+        election_state = world.state.human.elections[election.election_id]
         assert election_state.term_end_tick - election_state.term_start_tick == 3 * DAYS_PER_YEAR
         governance_types = {
             "representative_registered", "election_opened", "candidate_nominated",
@@ -82,7 +82,7 @@ def test_election_requires_quorum_two_rounds_and_county_recognition():
             [event for event in log.all() if event["event_type"] in governance_types],
             config,
         ).state
-        assert replayed.headman_id == world.state.headman_id
+        assert replayed.human.headman_id == world.state.human.headman_id
     finally:
         log.close()
 
@@ -91,7 +91,7 @@ def test_council_majority_recusal_and_appeal_review_replay():
     world, log, config = make_world()
     try:
         register_all(world)
-        reps = list(world.state.representatives.values())
+        reps = list(world.state.human.representatives.values())
         affected = reps[0].household_id
         decision = propose_council_decision(
             world, "decision-001", subject="land_use_change",
@@ -130,6 +130,6 @@ def test_council_majority_recusal_and_appeal_review_replay():
             [event for event in log.all() if event["event_type"] in governance_types],
             config,
         ).state
-        assert replayed.appeals["appeal-001"].outcome == "remanded"
+        assert replayed.human.appeals["appeal-001"].outcome == "remanded"
     finally:
         log.close()

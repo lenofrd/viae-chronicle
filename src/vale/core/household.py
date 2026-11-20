@@ -11,7 +11,7 @@ from vale.core.state import AgentState, HouseholdState
 
 def household_of(world, agent: AgentState) -> HouseholdState:
     """返回 agent 所属家庭；家庭缺失视为状态损坏，直接抛错（不静默兜底）。"""
-    household = world.state.households.get(agent.household_id)
+    household = world.state.human.households.get(agent.household_id)
     if household is None:
         raise KeyError(f"household not found for agent {agent.agent_id}: {agent.household_id}")
     return household
@@ -20,20 +20,20 @@ def household_of(world, agent: AgentState) -> HouseholdState:
 def household_members(world, household: HouseholdState) -> list[AgentState]:
     """家庭成员（按 member_ids 顺序；缺失成员跳过，便于重放容错）。"""
     return [
-        world.state.agents[aid]
+        world.state.human.agents[aid]
         for aid in household.member_ids
-        if aid in world.state.agents
+        if aid in world.state.human.agents
     ]
 
 
 def living_households(world) -> list[HouseholdState]:
     """经济池统一入口：家庭仍有存活成员即参与经济（A2 扩展）。"""
     return [
-        h for h in world.state.households.values()
+        h for h in world.state.human.households.values()
         if any(
-            world.state.agents[aid].alive
+            world.state.human.agents[aid].alive
             for aid in h.member_ids
-            if aid in world.state.agents
+            if aid in world.state.human.agents
         )
     ]
 
@@ -66,7 +66,7 @@ def work_node_of(world, agent: AgentState) -> str:
         for member_id in household.member_ids:
             if member_id == agent.agent_id:
                 break
-            member = world.state.agents.get(member_id)
+            member = world.state.human.agents.get(member_id)
             if member is not None and member.alive and capable(member):
                 rank += 1
         return nodes[rank % len(nodes)]

@@ -60,7 +60,7 @@ def _module(world) -> AgentModule:
 
 def _pair(world):
     """非亲缘的 (债务方家庭, 债权方家庭)。"""
-    return hh(world, world.state.agents["lin_yuan"]), hh(world, world.state.agents["li_quan"])
+    return hh(world, world.state.human.agents["lin_yuan"]), hh(world, world.state.human.agents["li_quan"])
 
 
 def _dispute_debt(world, debtor_hh, creditor_hh, amount=6.0) -> DebtRecord:
@@ -80,8 +80,8 @@ def _dispute_debt(world, debtor_hh, creditor_hh, amount=6.0) -> DebtRecord:
 
 def _seed_impression(world, outcomes: list[str]) -> str:
     """按给定 outcome 序列写债权方记忆，再用 P1 规则派生印象；返回 label。"""
-    creditor = world.state.agents["li_quan"]
-    debtor = world.state.agents["lin_yuan"]
+    creditor = world.state.human.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
     creditor.acquaintances[debtor.agent_id] = AcquaintanceEntry(
         level=int(AcquaintanceLevel.KNOWN), last_seen_tick=1,
     )
