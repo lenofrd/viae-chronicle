@@ -1,9 +1,9 @@
-# 生命历程与代际：家庭经济模型（任务 12 修订版设计）
+# 生命历程与代际：家庭经济模型（任务 12 实现记录）
 
-> **状态**：**任务 12 家庭模型迁移已完成**（2026-11-15，第 1–3 步全落地）。已完成：Household 状态层与访问器、单人家庭初始化、家庭口径经济流转、只读重放与旧库 fixture、婚配合并与从夫居、容量、户主接任、家庭继承/归公/债权家庭消亡、每户一次集市、分家（`split` + `household_split`）。未实现：劳动分配、外部监护、其他居所制（见 §18 G2/G5）。未调参、未提交、未 push。
-> **裁决依据**：`12-verdict-household-design.md`（Q1–Q10 / P1–P5）、`12-verdict-household-migration-step1.md`、`12-verdict-household-migration-step2.md`、`12-verdict-household-step2-close.md`、`12-verdict-household-step3-split.md`、`12-verdict-task12-close.md`。
-> **基线**：`225 passed` → 任务 12 完成 `251 passed`（新增家庭迁移/重放/生命周期/分家专项）。
-> **实现入口**：[state.py](file:///f:/viae-chronicle/src/vale/core/state.py)、[household.py](file:///f:/viae-chronicle/src/vale/core/household.py)、[replay.py](file:///f:/viae-chronicle/src/vale/core/replay.py)、[agents.py](file:///f:/viae-chronicle/src/vale/modules/agents.py)、[test_task12_household_migration.py](file:///f:/viae-chronicle/tests/test_task12_household_migration.py)、[test_task12_household_split.py](file:///f:/viae-chronicle/tests/test_task12_household_split.py)、[test_task12_life_course.py](file:///f:/viae-chronicle/tests/test_task12_life_course.py)、[legacy fixture](file:///f:/viae-chronicle/tests/fixtures/legacy_events.json)。
+> **文档定位**：本文件保留任务 12 家庭模型迁移的实现记录、数据结构、事件载荷、Replay 兼容和历史测试结论。它不是婚姻与人口承载规则的最新规范。
+> **历史基线**：任务 12 于 2026-11-15 完成家庭状态迁移、家庭经济流转、婚配合并、继承和分家等阶段；本文件中的“已落地”均指当时记录的代码状态，不能自动视为 ADR 007 后的目标行为。
+> **当前设计规范**：人口不设全镇人数上限或家庭成员硬上限；婚姻认知门槛、从夫居、彩礼、陪嫁和家庭资产边界以 [人口承载与婚姻形成](12-population-and-marriage.md) 与 [ADR 007](../../decisions/007-population-and-marriage.md) 为准。
+> **实现状态注意**：本文件保留的旧婚姻结算、家庭容量与资产合并逻辑，是需要按新决策调整的旧实现行为；不得将其作为新增代码的设计依据。
 
 ## 0. 落地进度
 
@@ -16,7 +16,7 @@
 | 出生：加入母亲家庭、不转移资产、不再产生 `birth_asset_transfer` | 已落地 |
 | 消费/生产/借粮/还债/催收/集市/保暖改家庭库存 | 已落地 |
 | 旧事件流只读重放 + `legacy_events.json` fixture + 4 条回放一致性测试 | 已落地 |
-| 婚配合并、从夫居、容量、分家、户主接任、家庭继承/归公、债权家庭消亡 | 已落地（第 2–3 步） |
+| 婚配合并、从夫居、容量、分家、户主接任、家庭继承/归公、债权家庭消亡 | 已落地（第 2–3 步；其中婚配合并与容量为 ADR 007 前的旧规则） |
 | 每户每日一次集市、同户禁自交易 | 已落地（第 2 步） |
 | 新生儿随迁（分家在生育后结算） | 已落地（第 3 步） |
 
@@ -118,27 +118,30 @@ def inv(world, agent): return inventory_of(world, agent)
 4. 校验 `marriage.residence` 只能是 `patrilocal`（Q1），非法值启动即报错；其他枚举只预留、不实现。
 5. 不写“开局家庭创建”事件（种子状态）。
 
-## 6. 婚配与家庭合并
+## 6. 婚配与家庭合并（旧实现快照；目标规则见 12-population-and-marriage.md）
 
-### 6.1 资格（D5/D15/D6 保留）
+> 本节记录 ADR 007 前代码的实际行为，供迁移和旧事件 Replay 对照。容量限制、自动配对、女方原家庭成年成员限制、婚后资产/债务整体合并均已被新决策取代，不得作为新增代码的设计依据。
+
+### 6.1 旧资格条件（D5/D15/D6）
 
 - 双方存活、未失能；
-- 年龄/健康/家庭存粮（`household_of(...).grain`）达标；未婚或配偶已死且允许再婚；
+- 年龄、健康和家庭存粮达到配置门槛；未婚或配偶已死且允许再婚；
 - 异性（配置）；
 - 非亲子/同父/同母（D15）；
-- 两家 `home_node` 距离 ≤ `marriage.max_distance_tu`；
-- **容量**：`target.member_ids + incoming <= household.house_max_members`；超限**静默跳过本 tick，不写事件**（Q6），可在统计中计数。
+- 两家 `home_node` 距离不超过 `marriage.max_distance_tu`；
+- 女方原家庭除女方本人外不得有其他在世成年成员（当前代码的额外限制）；
+- **容量**：`target.member_ids + incoming <= household.house_max_members`；超限静默跳过（Q6）。
+- 旧实现没有认知关系门槛，陌生人也可能进入自动配对候选。
 
-### 6.2 合并规则（Q1：默认从夫居 `patrilocal`）
+### 6.2 旧合并规则（Q1：从夫居 `patrilocal`）
 
-1. 女方加入男方家庭：`target = 男方 household_id`，`source = 女方 household_id`；
-2. 女方**未成年子女**（age < `dependency.max_age`）随母迁入；女方成年成员留原家庭，原家庭按 §9 重选户主（若仍有成员）；
-3. 双方资产逐项相加、债务列表拼接（`debtor_household_id` 改为 target），**守恒**；
-4. 家庭住所取男方；家庭默认 `work_node` 取男方；**女方个人 `work_node` 偏好保留**，仍可在原田劳作（Q2）；
-5. 女方原单人家庭成员清空后删除，不写 `household_dissolved`（由 `household_merged` 覆盖）；
-6. 事件：一条 `agent_married` + 一条 `household_merged`。
+1. 女方本人及其在世未成年子女随母迁入男方家庭；
+2. 女方原家庭全部资产逐项并入男方家庭，债务列表拼接并改写债务家庭 ID；
+3. 家庭住所和默认 `work_node` 取男方；女方个人劳作点偏好按旧代码规则重置；
+4. 旧资格要求女方原家庭没有其他成年成员，因此迁移后来源家庭通常被清空；
+5. 旧事件为 `agent_married` + `household_merged(reason="marriage")`。新婚姻不得继续用家庭合并事件表达。
 
-### 6.3 `agent_married` 载荷
+### 6.3 旧 `agent_married` 载荷
 
 ```text
 {tick, agent_id, agent_name, spouse_id, spouse_name, distance_tu,
@@ -146,7 +149,7 @@ def inv(world, agent): return inventory_of(world, agent)
  participants:[{id,name}, ...]}
 ```
 
-### 6.4 `household_merged` 载荷
+### 6.4 旧 `household_merged` 载荷
 
 ```text
 {tick, target_household_id, source_household_id, head_id,
@@ -175,10 +178,11 @@ def inv(world, agent): return inventory_of(world, agent)
 - 未成年人直接消费家庭库存，**不做资产转账**；`fed_by` 保留为叙事字段（照料者姓名），无经济语义；
 - 生存门控：家庭任一可食库存 > 0 即可 `eat`；家庭无粮才不可行。
 
-## 8. 住所、容量与迁移
+## 8. 住所与迁移（旧容量规则）
 
 - `Household.home_node` 为唯一住所真相源；个人 `location` 不参与经济计距。
-- `household.house_max_members`：婚配并入前检查（Q6 静默跳过）。
+- 旧实现使用 `household.house_max_members` 限制婚姻迁入，并在生育时使用同一容量值跳过出生；这两项都是 ADR 007 明确取消的硬上限，不再是目标规则。
+- 新规则不因家庭人数达到固定值而拒绝婚姻迁入或出生；住房拥挤只有在存在真实的建筑容量/居住质量模型时才作为生活条件反馈。
 - `household.default_home_node`：不得为 None；非法/缺失时回退并写 `household_moved(reason="default_home")`。
 - 赶集按 `Household.home_node` 计距。
 - 住所变化写 `household_moved`：
@@ -410,7 +414,9 @@ def rebuild_state(events: list[dict], config) -> WorldState
 | Q9 | 不新增遗属家庭审计事件 | §10.1 |
 | Q10 | 新增 `events timeline --household <id>` 过滤参数 | §13 |
 
-## 18. 已知缺口（第 2 步收尾登记，未实现）
+## 18. 历史已知缺口（任务 12/阶段三记录，约 2026-11-15）
+
+> 本表是当时的技术债快照，不是当前 CI 状态。后续 PR #12 长程模拟与 ADR 006/007 已更新相关问题的诊断口径；不要把表中的 seed 结果、测试状态或解除条件当作当前结论。
 
 | # | 缺口 | 现象/证据 | 影响 | 解除条件 |
 |---|---|---|---|---|
@@ -422,7 +428,7 @@ def rebuild_state(events: list[dict], config) -> WorldState
 | G6 | 生育代价缺数值（阶段二 §3.0 登记） | **设计有框架**（[01-physical-state.md §4.4](01-physical-state.md)：孕期分段、晚期 `max_stamina −50%`、普通分娩 health −10、难产 −40 可能死亡、产后休养 1–2 月），**缺**难产概率 / 孕期时长 / 产后休养数值 | 当前仅落地「普通分娩 health −10」 | 阶段三前补数值即可实现，**不需重新设计** |
 | G7 | **债务链路在盈余经济下休眠** | 2 种子 × 2600 tick 无 `debt_formed`；借粮要求家庭存粮 <2 且有存粮 ≥5 的债主，盈余改善后两者不同时出现；受控 A–F 六场景 6/6 守恒（债权侧转移已补 `debtor_household_id`） | 非缺陷，是盈余经济的副作用：无人断粮是正面效果，但债务/催收/纠纷系统在正常年景无素材 | **已缓解（最小切片）**：阶段二以集市赊账（`market.credit`）恢复债务素材，阶段三以「有粮赖账」2 轮私下催收恢复冲突素材；5 种子 × 3600 实测 34 次会话、全额 13/延期 11/拒绝 8。完整冲突系统（调解/村规/公开惩罚/信任恩怨）仍后置 |
 | G8 | **位置跟踪缺失（任务 16 阶段二登记）** | `agent.location` 仅每日结束时置回 `home_node`（agents.py 日终结算），白天劳作/集市位置不落状态；无地点→在场 agent 反向索引 | 「进入/离开地点」感知触发无法实现；同地点判定不可靠，任务 16 社会认知层以「交互即升级 KNOWN」规避（裁决 16 §3.2/§3.3） | 未来做感知/在场系统前先补位置跟踪，独立立项。**004 已裁决（2026-11-17，待实现）**：日内位置真实化（当前位置→目标计距、集市按实际位置计距），见 [decisions/004](../../decisions/004-intraday-time-and-production-base.md) §2.4；感知/在场系统仍后置 |
-| G9 | **饮水系统未建模、`collect_water` 为空动作（任务 23 登记）** | `collect_water` 只扣 10 体力，饮水资产未进入状态/事件；少年白名单因此不开放该动作（裁决 23 §3.1） | 旱灾/水权/水质等设计缺少承载对象；当前不影响食物与存活 | **004 已裁决（2026-11-17，待实现）**：水模型最小切片（水位/灌溉档进状态、`collect_water` 产水、moisture 接线），见 [decisions/004](../../decisions/004-intraday-time-and-production-base.md) §2.7；旱灾/水权/水质仍后置 |
+| G9 | ~~饮水系统未建模、`collect_water` 为空动作（任务 23 历史登记）~~ **已由任务 30 最小切片解决** | 当前 Household 已有 water 库存；`collect_water` 通过水井服务产水，每餐消耗用水，before/after 进入行动事件 | 人体脱水健康后果、水质与旱灾/水权冲突仍未完整建模 | 已落地的家庭水库存、取水和佐餐用水以当前代码为准；剩余水文扩展另行设计，不再沿用本行旧的“未建模”结论 |
 | G10 | **「1 动作/日」架构假设（任务 24 登记）** | 每人每日只做一次决策、只执行一个动作（[agents.py L544-580](file:///f:/viae-chronicle/src/vale/modules/agents.py#L544-L580) `_process_one`；移动按「一天一次往返」计 [L773-780](file:///f:/viae-chronicle/src/vale/modules/agents.py#L773-L780)）；体力节奏调整只能改恢复量/门槛，无法表达「早干、午歇、下午再干」。裁决 24 §2.3：体力上限（代码常数 `100×分段乘数`、打分体力紧缺度除数硬编码 100）一并归入本项 | 单日动作粒度粗，体力曲线只能靠跨日恢复近似；休息与劳作互斥，无法表达半日劳动；体力上限无法作为单一配置杠杆调整 | **004 已裁决（2026-11-17，待实现）**：日内多动作（工作窗 TU 预算 + 体力分级 + 贪心重规划）落地，见 [decisions/004](../../decisions/004-intraday-time-and-production-base.md)；**上限与除数两处硬编码维持不动**（004 §2.2 不动项） |
 
 > G1–G3 为第 2 步收尾的显式技术债，代码中所有降级测试以 `_tech_debt` 后缀标记，解除条件写在测试 docstring 与本表。
@@ -451,3 +457,4 @@ def rebuild_state(events: list[dict], config) -> WorldState
 3. G2 需先给出“明确搭便车数据”再决定是否实现劳动分配；无数据不实现。
 4. 分家长程触发依赖人口回升（出现第二对“丈夫非户主”夫妻）；此前以专项测试覆盖，不以冒烟 0 次判失效。
 5. 旧库 4 条回放保持绿；守恒、非负断言不得放松。
+

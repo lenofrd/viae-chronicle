@@ -33,6 +33,8 @@ class EventLog:
             )
             """
         )
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type_tick ON events (event_type, tick)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_tick ON events (tick)")
         self.conn.commit()
 
     # ------------------------------------------------------------------
@@ -81,6 +83,32 @@ class EventLog:
             "SELECT * FROM events WHERE event_type = ? ORDER BY id", (event_type,)
         ).fetchall()
         return [self._row_to_event(r) for r in rows]
+
+    def by_type_at_tick(self, event_type: str, tick: int) -> list[dict[str, Any]]:
+        """Read one event type for one tick using the composite index."""
+        rows = self.conn.execute(
+            "SELECT * FROM events WHERE event_type = ? AND tick = ? ORDER BY id",
+            (event_type, tick),
+        ).fetchall()
+        return [self._row_to_event(row) for row in rows]
+
+    def by_type_between_ticks(
+        self, event_type: str, start_exclusive: int, end_inclusive: int
+    ) -> list[dict[str, Any]]:
+        """Read a bounded event window without scanning the complete event history."""
+        rows = self.conn.execute(
+            "SELECT * FROM events WHERE event_type = ? AND tick > ? AND tick <= ? ORDER BY id",
+            (event_type, start_exclusive, end_inclusive),
+        ).fetchall()
+        return [self._row_to_event(row) for row in rows]
+
+    def between_ticks(self, start_exclusive: int, end_inclusive: int) -> list[dict[str, Any]]:
+        """Read all event types in a bounded tick window."""
+        rows = self.conn.execute(
+            "SELECT * FROM events WHERE tick > ? AND tick <= ? ORDER BY id",
+            (start_exclusive, end_inclusive),
+        ).fetchall()
+        return [self._row_to_event(row) for row in rows]
 
     def close(self) -> None:
         self.conn.close()

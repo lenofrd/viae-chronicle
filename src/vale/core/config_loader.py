@@ -25,11 +25,13 @@ class LoadedConfig:
         natural_params: NaturalConfig,
         spatial: SpatialConfig,
         agents: AgentsConfig,
+        terrain: list | None = None,
     ) -> None:
         self.world = world
         self.natural_params = natural_params
         self.spatial = spatial
         self.agents = agents
+        self.terrain = list(terrain or [])
 
 
 def load_config(world_id: str, config_root: str = "config/worlds") -> LoadedConfig:

@@ -27,6 +27,7 @@ from vale.core.scheduler import run_tick  # noqa: E402
 from vale.core.world import World  # noqa: E402
 from vale.modules.agents import AgentModule  # noqa: E402
 from vale.modules.climate import ClimateModule  # noqa: E402
+from vale.modules.ecology import EcologyModule  # noqa: E402
 from vale.observability.export import EXPORT_FORMATS  # noqa: E402
 from vale.observability.query import EventFilter, apply_filter  # noqa: E402
 from vale.observability.render import payload_preview, render_event  # noqa: E402
@@ -106,6 +107,7 @@ def _bootstrap(run_db: bool = True) -> World:
         config=cfg,
     )
     world.register(ClimateModule())
+    world.register(EcologyModule())
     world.register(AgentModule())
     return world
 

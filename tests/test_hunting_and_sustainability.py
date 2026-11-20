@@ -7,6 +7,8 @@ eat 多食物优先级、受伤不致死、季节/天气修正、无负不变量
 """
 from __future__ import annotations
 
+from collections import Counter
+
 from household_helpers import hh
 from vale.core.household import home_node_of, work_node_of
 
@@ -42,6 +44,7 @@ def world():
     for m in w.modules:
         if m.name == "agents":
             m._settle_marriage = lambda *a, **k: None  # noqa: SLF001
+            m._settle_courtship = lambda *a, **k: None  # noqa: SLF001 婚配已下沉为 court 动作
     run_tick(w)  # 初始化 agents / climate
     return w
 
@@ -264,7 +267,24 @@ def test_1080_ticks_not_all_extinct(seed):
         if tick % 200 == 0:
             curve.append(sum(1 for a in w.state.agents.values() if a.alive))
     survivors = [a for a in w.state.agents.values() if a.alive]
-    assert survivors, f"seed={seed} 全员灭绝，违反可持续性下限"
+    if not survivors:
+        events = w.event_log.all()
+        deaths = [e for e in events if e["event_type"] == "agent_died"]
+        actions = [e for e in events if e["event_type"] == "agent_action_taken"]
+        first_death = min(deaths, key=lambda e: e["tick"]) if deaths else None
+        action_counts = Counter(
+            e["payload"].get("action", "unknown") for e in actions
+            if int(e.get("tick", -1)) <= 60
+        )
+        stocks = {
+            field: round(sum(float(getattr(h, field)) for h in w.state.households.values()), 2)
+            for field in ("grain", "fish", "meat", "vegetable")
+        }
+        pytest.fail(
+            f"seed={seed} 全员灭绝；first_death={first_death}; "
+            f"actions_first_60_ticks={dict(action_counts)}; final_food={stocks}; "
+            f"population_curve={curve}"
+        )
     assert len(curve) == 5  # 每 200 tick 采样一次
     assert all(count >= 0 for count in curve)
     # 不变量（任务10：fish 加入守恒集合）

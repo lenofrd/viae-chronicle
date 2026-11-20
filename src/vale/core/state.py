@@ -64,6 +64,7 @@ class DebtRecord(BaseModel):
     # 任务15 阶段二：债务来源（None = 旧借粮；"market_credit" = 集市赊账）。
     # 只有赊账走 2 轮私下催收；借粮逻辑保持不变。
     origin: Optional[str] = Field(default=None)
+    resource: str = Field(default="grain", min_length=1, description="实物债务的偿还物资")
     # 该笔债务是否已发起过催收会话；拒绝后不再重复发起（延期时清零，进入下一周期）
     dispute_started_tick: Optional[int] = Field(default=None, ge=0)
 
@@ -80,10 +81,14 @@ class HouseholdState(BaseModel):
     head_id: Optional[str] = None
     guardian_id: Optional[str] = Field(default=None, description="Q7 预留，本任务不实现外部监护")
     grain: float = Field(default=0.0, ge=0)
+    coin: float = Field(default=0.0, ge=0)
     meat: float = Field(default=0.0, ge=0)
     fish: float = Field(default=0.0, ge=0)
     vegetable: float = Field(default=0.0, ge=0)
     cloth: float = Field(default=0.0, ge=0)
+    firewood: float = Field(default=0.0, ge=0)
+    herbs: float = Field(default=0.0, ge=0)
+    hardwood: float = Field(default=0.0, ge=0)
     # 任务30：生活用水（水缸存量）；collect_water 产水，每日按成员数扣减
     water: float = Field(default=0.0, ge=0)
     debts: list[DebtRecord] = Field(default_factory=list)
@@ -92,6 +97,8 @@ class HouseholdState(BaseModel):
     # 阶段二 C：家庭可分配田块（默认田优先，其余按距离/id 确定性排序；空 = 沿用 work_node）。
     # 户内按可劳作成员序对位接田（未成年/高龄不占劳作位），见 vale.core.household.work_node_of。
     work_nodes: list[str] = Field(default_factory=list)
+    registry_node: Optional[str] = None
+    registered_tick: Optional[int] = Field(default=None, ge=0)
     formed_tick: int = Field(..., ge=0)
 
     @computed_field  # type: ignore[misc]
@@ -172,6 +179,7 @@ class AgentState(BaseModel):
     hunger: float = Field(..., ge=0, le=100)
     stamina: float = Field(..., ge=0, le=100)
     fatigue: float = Field(default=0.0, ge=0, le=100)
+    fatigue_high_days: int = Field(default=0, ge=0, description="连续处于疲劳阈值以上的日数；达到宽限期后才降低劳动效率")
     last_action: Optional[str] = None
     recent_actions: list[str] = Field(default_factory=list)
     # 生命状态（任务10）：alive=False 表示已死亡；incapacitated=True 表示失能（health 触底，
@@ -201,10 +209,173 @@ class AgentState(BaseModel):
     impressions: dict[str, ImpressionEntry] = Field(default_factory=dict)
 
 
+class TerrainCellState(BaseModel):
+    """Immutable terrain-cell data copied from the deterministic location generator."""
+
+    cell_id: str
+    x: int
+    y: int
+    terrain: str
+    elevation: float
+    slope: float
+    flood_risk: float = Field(..., ge=0, le=1)
+    soil_fertility: float = Field(..., ge=0, le=1)
+
+
+class LandRightState(BaseModel):
+    """A use/access right distinct from parcel ownership."""
+
+    right_id: str
+    holder_type: str
+    holder_id: Optional[str] = None
+    right_type: str
+    purpose: Optional[str] = None
+    granted_tick: int = Field(..., ge=0)
+    expires_tick: Optional[int] = Field(default=None, ge=0)
+
+
+class LandParcelState(BaseModel):
+    """A legal parcel layered over existing spatial nodes, not a replacement map."""
+
+    parcel_id: str
+    spatial_node_id: str
+    land_use: str
+    area: float = Field(..., gt=0)
+    owner_type: str
+    owner_id: Optional[str] = None
+    management_authority: Optional[str] = None
+    buildable_area: float = Field(default=0.0, ge=0)
+    access_rights: list[str] = Field(default_factory=list)
+    use_rights: list[LandRightState] = Field(default_factory=list)
+    contested: bool = False
+    created_tick: int = Field(..., ge=0)
+    attributes: dict = Field(default_factory=dict)
+
+
+class BuildingState(BaseModel):
+    """A physical building footprint contained by exactly one land parcel."""
+
+    building_id: str
+    parcel_id: str
+    building_type: str
+    owner_type: str
+    owner_id: Optional[str] = None
+    footprint_area: float = Field(..., gt=0)
+    condition: float = Field(default=100.0, ge=0, le=100)
+    status: str = "active"
+    created_tick: int = Field(..., ge=0)
+    completed_tick: Optional[int] = Field(default=None, ge=0)
+    attributes: dict = Field(default_factory=dict)
+
+
+class HouseholdRepresentativeState(BaseModel):
+    household_id: str
+    agent_id: str
+    appointed_tick: int = Field(..., ge=0)
+    active: bool = True
+
+
+class VillageElectionState(BaseModel):
+    election_id: str
+    status: str = "nominating"
+    candidates: list[str] = Field(default_factory=list)
+    nominations: dict[str, str] = Field(default_factory=dict)
+    votes_by_round: dict[str, dict[str, str]] = Field(default_factory=dict)
+    current_round: int = 1
+    winner_id: Optional[str] = None
+    deputy_id: Optional[str] = None
+    recognized_tick: Optional[int] = Field(default=None, ge=0)
+    term_start_tick: Optional[int] = Field(default=None, ge=0)
+    term_end_tick: Optional[int] = Field(default=None, ge=0)
+    rejection_reason: Optional[str] = None
+
+
+class CouncilDecisionState(BaseModel):
+    decision_id: str
+    subject: str
+    proposer_agent_id: str
+    affected_household_ids: list[str] = Field(default_factory=list)
+    major: bool = False
+    appeal_id: Optional[str] = None
+    status: str = "voting"
+    votes: dict[str, bool] = Field(default_factory=dict)
+    recused_household_ids: list[str] = Field(default_factory=list)
+    quorum_required: int = 0
+    approval_required: int = 0
+    created_tick: int = Field(..., ge=0)
+    resolved_tick: Optional[int] = Field(default=None, ge=0)
+
+
+class AppealState(BaseModel):
+    appeal_id: str
+    applicant_agent_id: str
+    original_decision_id: str
+    grounds: str
+    status: str = "pending"
+    review_decision_id: Optional[str] = None
+    outcome: Optional[str] = None
+    created_tick: int = Field(..., ge=0)
+    resolved_tick: Optional[int] = Field(default=None, ge=0)
+
+
+
+class BuildingNeedState(BaseModel):
+    """Buffered, replayable demand signal; it never creates a building by itself."""
+
+    need_id: str
+    need_type: str
+    location_node_id: str
+    target_building_type: str
+    demand: float = Field(default=0.0, ge=0)
+    capacity: float = Field(default=0.0, ge=0)
+    pressure_days: int = Field(default=0, ge=0)
+    stage: str = "latent"
+    status: str = "active"
+    first_seen_tick: int = Field(..., ge=0)
+    last_updated_tick: int = Field(..., ge=0)
+    alternatives: list[str] = Field(default_factory=lambda: ["repair", "extend", "share", "relocate"])
+
+
+class ConstructionProjectState(BaseModel):
+    project_id: str
+    parcel_id: str
+    household_id: str
+    building_type: str
+    footprint_area: float = Field(..., gt=0)
+    materials_required: dict[str, float] = Field(default_factory=dict)
+    labor_required: int = Field(..., gt=0)
+    labor_completed: float = Field(default=0.0, ge=0)
+    status: str = "under_construction"
+    council_decision_id: str
+    target_building_id: Optional[str] = None
+    created_tick: int = Field(..., ge=0)
+    last_work_tick: Optional[int] = Field(default=None, ge=0)
+    paused_tick: Optional[int] = Field(default=None, ge=0)
+    cancelled_tick: Optional[int] = Field(default=None, ge=0)
+    cancel_reason: Optional[str] = None
+    abandoned_tick: Optional[int] = Field(default=None, ge=0)
+
 class WorldState(BaseModel):
     """跨模块共享状态。climate 由气候模块写入，其余子系统后续扩展。"""
 
     climate: Optional[ClimateSnapshot] = None
+    terrain_cells: dict[str, TerrainCellState] = Field(default_factory=dict)
+    land_parcels: dict[str, LandParcelState] = Field(default_factory=dict)
+    buildings: dict[str, BuildingState] = Field(default_factory=dict)
+    construction_projects: dict[str, ConstructionProjectState] = Field(default_factory=dict)
+    land_leases: dict[str, dict] = Field(default_factory=dict)
+    resource_loans: dict[str, dict] = Field(default_factory=dict)
+    service_queues: dict[str, dict] = Field(default_factory=dict)
+    public_treasury: dict[str, float] = Field(default_factory=dict)
+    # Village granary/cistern stock, keyed by food item plus water.
+    community_reserves: dict[str, float] = Field(default_factory=dict)
+    building_needs: dict[str, BuildingNeedState] = Field(default_factory=dict)
+    representatives: dict[str, HouseholdRepresentativeState] = Field(default_factory=dict)
+    elections: dict[str, VillageElectionState] = Field(default_factory=dict)
+    headman_id: Optional[str] = None
+    acting_headman_id: Optional[str] = None
+    council_decisions: dict[str, CouncilDecisionState] = Field(default_factory=dict)
+    appeals: dict[str, AppealState] = Field(default_factory=dict)
     # 任务30：水文单点状态（004 §2.7）。水位比例 0–1（1 = 基准）；
     # 灌溉档取 abundant/low/scarce/dry，由 ClimateModule 按配置阈值派生。
     water_level_ratio: float = Field(default=0.6, ge=0, le=1)
@@ -213,5 +384,9 @@ class WorldState(BaseModel):
     households: dict[str, HouseholdState] = Field(default_factory=dict)
     # 田地长势：node_id -> 0-100；由 AgentModule 为 FIELD 节点初始化为 0
     field_growth: dict[str, float] = Field(default_factory=dict)
+    # node_id -> {year, season, labor_completed}; each season has an explicit labor budget.
+    field_season_labor: dict[str, dict] = Field(default_factory=dict)
     # 田块地力（crops.md §4.5 fertility）：node_id -> 乘数；阶段二恒 1.0，衰减/恢复未启用
     field_fertility: dict[str, float] = Field(default_factory=dict)
+    # 生态资源库存由 EcologyModule 写事件、WorldState 保存可重放投影。
+    ecological_resources: dict[str, dict] = Field(default_factory=dict)

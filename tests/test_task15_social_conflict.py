@@ -21,7 +21,7 @@ from vale.core.replay import rebuild_state
 from vale.core.scheduler import run_tick
 from vale.core.state import DebtRecord
 from vale.core.world import World
-from vale.modules.agents import AgentModule
+from vale.modules.agents import AgentModule, _floor_to_step
 from vale.modules.climate import ClimateModule
 from vale.observability.render import render_event
 
@@ -36,6 +36,7 @@ def _build(seed: int = 0) -> World:
     for m in w.modules:
         if m.name == "agents":
             m._settle_marriage = lambda *a, **k: None  # noqa: SLF001
+            m._settle_courtship = lambda *a, **k: None  # noqa: SLF001 婚配已下沉为 court 动作
     return w
 
 
@@ -82,7 +83,8 @@ def test_market_credit_transfers_grain_and_records_origin(world):
     tuning = world.config.agents.tuning
     debtor_hh, debtor, creditor_hh, creditor = _pair(world)
     debtor_hh.grain = 0.0
-    creditor_hh.grain = 50.0
+    creditor_stock = 80.0  # 需覆盖 min_surplus(45) + min_shortage(30) 的可赊出量
+    creditor_hh.grain = creditor_stock
     world.current_tick = 10
 
     count = module._settle_market_credit(  # noqa: SLF001
@@ -90,15 +92,15 @@ def test_market_credit_transfers_grain_and_records_origin(world):
     )
 
     assert count == 1
-    assert debtor_hh.grain == pytest.approx(5.0)     # 补到 min_shortage
-    assert creditor_hh.grain == pytest.approx(45.0)
-    assert debtor_hh.debt == pytest.approx(5.0)
+    assert debtor_hh.grain == pytest.approx(tuning.market.credit.min_shortage)  # 补到 min_shortage
+    assert creditor_hh.grain == pytest.approx(creditor_stock - tuning.market.credit.min_shortage)
+    assert debtor_hh.debt == pytest.approx(tuning.market.credit.min_shortage)
     rec = debtor_hh.debts[0]
     assert rec.origin == "market_credit"
     assert rec.due_tick == 10 + tuning.market.credit.due_days
     ev = world.event_log.by_type("debt_formed")[-1]["payload"]
     assert ev["origin"] == "market_credit"
-    assert ev["amount"] == pytest.approx(5.0)
+    assert ev["amount"] == pytest.approx(tuning.market.credit.min_shortage)
     assert ev["due_tick"] == 10 + tuning.market.credit.due_days
     assert (ev["creditor_grain_before"] - ev["creditor_grain_after"]) == pytest.approx(
         ev["debtor_grain_after"] - ev["debtor_grain_before"]
@@ -123,14 +125,28 @@ def test_market_credit_requires_shortage_and_surplus(world):
 def test_market_credit_respects_household_cap(world):
     module = _module(world)
     tuning = world.config.agents.tuning
+    credit = tuning.market.credit
     debtor_hh, debtor, creditor_hh, creditor = _pair(world)
-    _market_credit(world, amount=8.0, due_tick=999)  # 已欠 8，上限 10
+    existing = 8.0
+    _market_credit(world, amount=existing, due_tick=999)  # 预置一笔未清偿赊账
     debtor_hh.grain = 0.0
-    creditor_hh.grain = 50.0
+    creditor_stock = 80.0  # 需覆盖 min_surplus(45) + min_shortage(30) 的可赊出量
+    creditor_hh.grain = creditor_stock
 
     assert module._settle_market_credit(world, tuning,  # noqa: SLF001
                                         [(debtor_hh, debtor), (creditor_hh, creditor)]) == 1
-    assert debtor_hh.debt == pytest.approx(10.0)  # 只补到上限
+    # 期望值从 config 推导：本次赊入 = min(缺口, 卖方可赊余量, 上限余量) 按步长向下取整，
+    # 不写死上限数值，配置调整不致碎测。
+    expected_top_up = _floor_to_step(
+        min(
+            credit.min_shortage,                      # 买方存粮 0，缺口即 min_shortage
+            creditor_stock - credit.min_surplus,      # 卖方至少余 min_surplus
+            credit.max_per_household - existing,      # 单户未清偿赊账上限余量
+        ),
+        tuning.market.trade_unit_step,
+    )
+    assert debtor_hh.debt == pytest.approx(existing + expected_top_up)
+    assert debtor_hh.debt <= credit.max_per_household  # 不越过单户赊账上限
 
 
 def test_market_credit_blocked_when_existing_overdue(world):
