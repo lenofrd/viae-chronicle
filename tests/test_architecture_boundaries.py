@@ -47,18 +47,18 @@ STATE_OWNERS: dict[str, set[str]] = {
     "climate": {"modules.climate"},
     "water_level_ratio": {"modules.climate"},
     "irrigation_gear": {"modules.climate"},
-    "ecological_resources": {"modules.ecology"},
+    "ecological_resources": {"modules.ecology", "contracts.resources"},
     # P3a 水源库存：环境域状态，由取水契约（ResourceService 切片）结算写入。
     "water_sources": {"contracts.water"},
-    # 农作物：按 ADR 2.3 归人文农业管理；灾害写长势属待收敛的跨域写
-    "field_growth": {"modules.agents"},
-    "fertility_factor": {"modules.agents"},
+    # 农作物：按 ADR 2.3 归人文农业管理；P3b 起灾害写长势/地力统一走 EcologicalImpact
+    "field_growth": {"modules.agents", "contracts.impacts"},
+    "fertility_factor": {"modules.agents", "contracts.impacts"},
     "soil_quality": {"modules.agents"},
     "field_season_labor": {"modules.agents"},
     # 静态生成副本（P4 世界生成分段后归 Environment）
     "terrain_cells": {"modules.land"},
     # Human
-    "agents": {"modules.agents", "modules.land", "modules.social"},
+    "agents": {"modules.agents", "modules.land", "modules.social", "contracts.impacts"},
     "households": {"modules.agents", "modules.land", "modules.construction"},
     "land_parcels": {"modules.land", "modules.tenancy_economy"},
     "buildings": {"modules.land", "modules.construction"},
@@ -101,12 +101,8 @@ CONTAINER_OF: dict[str, str] = {
 }
 
 # 已知跨域写：模块 -> 字段 -> 计划收敛阶段。修掉后必须删条目（见 test_no_untracked_cross_domain_writes）。
-KNOWN_CROSS_DOMAIN_WRITES: dict[tuple[str, str], str] = {
-    ("modules.agents", "ecological_resources"): "P3b：采集改走 ResourceService",
-    ("modules.xigu_events", "field_growth"): "P3b：洪涝/旱灾改走 EcologicalImpact",
-    ("modules.xigu_events", "fertility_factor"): "P3b：滑坡改走 EcologicalImpact",
-    ("modules.xigu_events", "agents"): "P3b：野生动物伤害改走 WildlifeQuery/EcologicalImpact",
-}
+# P3b 已把采集/捕鱼/打猎/取水与洪涝/旱灾/滑坡/野遇收敛到 contracts，台账清零。
+KNOWN_CROSS_DOMAIN_WRITES: dict[tuple[str, str], str] = {}
 
 PROJECTION_MODULES = {"core.replay"}
 
@@ -117,7 +113,6 @@ HUMAN_OWNED_ENV_FIELDS = {
 }
 # 尚未收敛的环境访问（修掉后必须删条目，测试会检查台账是否变假）。
 HUMAN_ENV_ACCESS_EXCEPTIONS: dict[tuple[str, str], str] = {
-    ("modules.agents", "ecological_resources"): "P3b：采集改走 ResourceService",
     ("modules.land", "terrain_cells"): "P4：世界生成分段后归 Environment",
 }
 

@@ -32,7 +32,7 @@
 | P1 状态容器拆分（已完成） | 一域一容器 | `WorldState` 变为组合根：`environment` / `wildlife` / `human` 子容器；字段按表迁移；`building.attributes` 库存提升为状态；肥力按裁决落为 `fertility_factor`（动态 1.0）与 `soil_quality`（静态生成值） | 全部现有测试不改断言仍绿；回放重建结果与拆分前逐字段一致；两年基线数字不变 |
 | P2 只读查询（已完成） | 读侧收口 | 新建 `vale/contracts/queries.py`：`EnvironmentQuery`（气候、灌溉系数）、`SpatialQuery`（节点、田地、面积）、`WildlifeQuery`（只读视图，P5 填充）；删除 `agents` 内三个私有读函数与散落气候直读；架构测试新增「人类模块直取环境字段即红」，农事四字段豁免、两处未收敛访问登记台账 | 人类模块不再 import 环境内部数据结构；查询有单元测试（6 项）；两年基线逐字段不变 |
 | P3a 水文库存（已完成） | 先有源 | 新增 `EnvironmentState.water_sources`（容量/存量/再生/日抽上限）与 `vale/contracts/water.py` 取水结算；每 tick 由 climate 按水位补水；`collect_water` 改走结算，未配置水源的节点保持旧行为；新增 4 类水源事件与回放处理器 | 取水行为与现基线逐 tick 等价（1226 次、29,424 单位、0 拒绝）；库存守恒测试；坏配置启动报错 |
-| P3b 写入契约 | 写侧收口 | `ResourceService`（采集/捕鱼/打猎/取水）、`EcologicalImpact`（洪涝/旱灾/滑坡/野遇）；所有者校验额度、同 tick 结算、拒绝事件、配对事件；取水改走 P3a 的库存 | 跨域写测试为 0；集市、采集、取水守恒断言通过；新增事件有回放处理器 |
+| P3b 写入契约（已完成） | 写侧收口 | 新增 `vale/contracts/resources.py`（`ResourceService.harvest` 校验存量与同 tick 额度、先事件后投影、拒绝事件；`withdraw_water` 路由 P3a 水源）与 `vale/contracts/impacts.py`（`EcologicalImpact` 洪涝/旱灾/滑坡/野遇）；`agents._execute_gather`、`agents.collect_water`、`xigu_events` 四类影响改走契约，台账清零 | 架构测试跨域写为 0（`KNOWN_CROSS_DOMAIN_WRITES` 清空）；采集守恒（池减 = 家庭增）、额度/空库存拒绝、四类影响投影与回放重建测试；两年基线逐字段不变 |
 | P4 世界生成分段 | 自然先、聚落后 | 生成自然环境公开结果（地形、水系、气候带、土壤、植被、栖息地）；聚落生成只读；统一资源模型，取消 attributes 复制；`game_trail` 与猎物绑定；`soil_quality` 由生成输入写入 Environment | 同种子生成结果逐字段等于现基线（除有意修正的错配）；`test_xigu_worldgen` 扩充 |
 | P4.5 生产接入（三个独立任务） | 让测试专用子系统真正运行 | 顺序：治理 → 建造 → 社区储备。治理先接生产，因为建造与租约读 `council_decisions`；建造是硬木/铜钱消耗端；储备依赖公库与仓房。每个任务单 PR | 每个任务接入后重跑两年基线并更新 STATUS；资源消耗端可观测；原有测试仍绿 |
 | P5 动物状态 | 真种群 | 动物独立状态模型；先抽通用执行能力（实体 ID、生命周期调度基础、确定性随机），再做尺度分层（近处个体、远处聚合、进入互动区个体化）；食物网查询；性能预算与聚合阈值 | 新增动物生命周期与尺度切换测试；切换事件可回放；长程无 `agent_error`；性能不低于现基线 |

@@ -27,7 +27,7 @@ from vale.core.household import (
     work_node_of,
 )
 from vale.contracts.queries import EnvironmentQuery, SpatialQuery
-from vale.contracts.water import withdraw_water
+from vale.contracts.resources import ResourceService
 from vale.core.state import AgentState, DebtRecord, HouseholdState
 from vale.modules import social
 from vale.modules.community import (
@@ -1746,7 +1746,7 @@ class AgentModule:
             advance_construction(world, project_id, worker_id=agent.agent_id)
         elif action == "collect_water":
             # 任务30：生活用水最小切片——取水按水源库存结算（P3a），日耗在结算扣减
-            collected = withdraw_water(
+            collected = ResourceService.withdraw_water(
                 world, "well", tuning.water.collect_amount,
                 requester_id=household.household_id,
             )
@@ -1867,27 +1867,17 @@ class AgentModule:
         success_rate = min(1.0, cfg.base_success_rate * season_mult * weather_mult)
         success = self.rng.random() < success_rate
         amount = cfg.output_amount
-        pool = world.state.environment.ecological_resources.get(cfg.target_node)
-        if success and pool is not None:
-            used_this_tick = (float(pool.get("harvested_this_tick", 0.0))
-                              if pool.get("harvest_tick") == world.current_tick else 0.0)
-            remaining_cap = max(0.0, float(pool.get("extraction_limit_per_tick", 0.0)) - used_this_tick)
-            amount = min(amount, remaining_cap, max(0.0, float(pool.get("current_stock", 0.0))))
-            if amount <= 0:
+        if success:
+            # P3b：采集改走 ResourceService（环境域校验额度与存量，先事件后投影）
+            granted = ResourceService.harvest(
+                world, cfg.target_node, amount,
+                agent_id=agent.agent_id, household_id=household.household_id,
+                action=action,
+            )
+            if granted <= 0:
                 success = False
             else:
-                stock_before = float(pool["current_stock"])
-                pool["current_stock"] = round(stock_before - amount, 6)
-                pool["harvest_tick"] = world.current_tick
-                pool["harvested_this_tick"] = round(used_this_tick + amount, 6)
-                world.event_log.append(world.current_tick, "resource_harvested", {
-                    "resource_node": cfg.target_node, "amount": round(amount, 3),
-                    "stock_before": round(stock_before, 3),
-                    "stock_after": pool["current_stock"],
-                    "harvested_this_tick": pool["harvested_this_tick"],
-                    "harvest_tick": world.current_tick,
-                    "agent_id": agent.agent_id, "household_id": household.household_id,
-                })
+                amount = granted
 
         if success:
             setattr(household, out_field, round(out_before + amount, 2))
@@ -1917,7 +1907,11 @@ class AgentModule:
                     "household_id": household.household_id,
                     "action": action,
                     "resource_node": cfg.target_node,
-                    "reason": "resource_depleted" if pool is not None else "未获猎物",
+                    "reason": (
+                        "resource_depleted"
+                        if ResourceService.is_resource_node(world, cfg.target_node)
+                        else "未获猎物"
+                    ),
                     "success_rate": round(success_rate, 3),
                 },
             )

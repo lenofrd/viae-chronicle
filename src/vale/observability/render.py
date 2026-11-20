@@ -241,6 +241,22 @@ def _render_water_withdrawal_refused(payload: dict) -> tuple[str, bool]:
     )
 
 
+def _render_resource_harvest_refused(payload: dict) -> tuple[str, bool]:
+    node = payload.get("resource_node")
+    requested = payload.get("requested")
+    granted = payload.get("granted")
+    if not node or requested is None or granted is None:
+        return "采集被拒（数据缺失）", True
+    verb, _ = _gather_verb_product(payload.get("action", ""))
+    who = payload.get("agent_id") or "?"
+    reason = payload.get("reason") or "?"
+    return (
+        f"[{who}] 在[{node}]{verb}被拒：请求 {float(requested):g}，"
+        f"实给 {float(granted):g}（{reason}）",
+        False,
+    )
+
+
 def _safe_diff(after: Any, before: Any) -> str:
     try:
         return _num(float(after) - float(before))
@@ -854,6 +870,9 @@ def render_event(evt: dict, names: Optional[dict[str, str]] = None) -> RenderRes
         elif event_type == "water_withdrawal_refused":
             text, degraded = _render_water_withdrawal_refused(payload)
             reason = "missing_water_field" if degraded else None
+        elif event_type == "resource_harvest_refused":
+            text, degraded = _render_resource_harvest_refused(payload)
+            reason = "missing_gather_field" if degraded else None
         elif event_type == "agent_action_taken":
             text, degraded = _render_action(payload, names)
             reason = "unknown_action_or_field" if degraded else None

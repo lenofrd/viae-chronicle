@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import random
 
+from vale.contracts.impacts import EcologicalImpact
+
 
 class XiguEventsModule:
     name = "xigu_events"
@@ -59,13 +61,10 @@ class XiguEventsModule:
             damage = min(before, before * ratio * max(.1, float(attrs.get("flood_risk", .5))))
             if damage <= 0:
                 continue
-            after = round(max(0.0, before - damage), 4)
-            world.state.environment.field_growth[node.id] = after
-            world.event_log.append(world.current_tick, "field_flood_damage", {
-                "field_node": node.id, "before": round(before, 4),
-                "damage": round(damage, 4), "after": after,
-                "precipitation_mm": climate.precipitation_mm,
-            })
+            EcologicalImpact.flood_damage(
+                world, node.id, damage,
+                precipitation_mm=climate.precipitation_mm,
+            )
 
     def _apply_drought_damage(self, world, climate) -> None:
         if climate.season.value != "summer" or climate.drought_state.value not in {"warning", "crisis"}:
@@ -77,13 +76,10 @@ class XiguEventsModule:
             damage = min(before, max(.1, before * .025))
             if damage <= 0:
                 continue
-            after = round(max(0.0, before - damage), 4)
-            world.state.environment.field_growth[node.id] = after
-            world.event_log.append(world.current_tick, "field_drought_damage", {
-                "field_node": node.id, "before": round(before, 4),
-                "damage": round(damage, 4), "after": after,
-                "drought_state": climate.drought_state.value,
-            })
+            EcologicalImpact.drought_damage(
+                world, node.id, damage,
+                drought_state=climate.drought_state.value,
+            )
 
     def _apply_landslide(self, world, climate) -> None:
         if climate.precipitation_mm < 18 or climate.year in self._landslide_years:
@@ -99,15 +95,11 @@ class XiguEventsModule:
         if not candidates:
             return
         target = max(candidates, key=lambda n: (float(n.attributes.get("x", 0)), n.id))
-        before = float(world.state.environment.fertility_factor.get(target.id, 1.0))
-        after = round(max(.1, before - .08), 4)
-        world.state.environment.fertility_factor[target.id] = after
+        EcologicalImpact.landslide(
+            world, target.id, amount=.08, source_node="low_mountain",
+            resource_stock_ratio=float(pool["current_stock"]) / maximum,
+        )
         self._landslide_years.add(climate.year)
-        world.event_log.append(world.current_tick, "landslide_damage", {
-            "source_node": "low_mountain", "field_node": target.id,
-            "fertility_before": before, "fertility_after": after,
-            "resource_stock_ratio": round(float(pool["current_stock"]) / maximum, 4),
-        })
 
     def _apply_wildlife_encounter(self, world, tick: int) -> None:
         query_at_tick = getattr(world.event_log, "by_type_at_tick", None)
@@ -129,17 +121,9 @@ class XiguEventsModule:
         if rng.random() >= .025:
             return
         source = rng.choice(todays)["payload"]
-        agent = world.state.human.agents.get(source.get("agent_id"))
-        if agent is None or not agent.alive:
-            return
-        before = agent.health
-        agent.health = max(0.0, before - 8.0)
-        agent.last_injury_tick = tick
-        world.event_log.append(tick, "wildlife_attack", {
-            "agent_id": agent.agent_id, "agent_name": agent.name,
-            "health_before": round(before, 2), "health_after": round(agent.health, 2),
-            "location": source.get("target_node"), "injury": 8.0,
-        })
+        EcologicalImpact.wildlife_attack(
+            world, source.get("agent_id"), 8.0, location=source.get("target_node"),
+        )
 
     def _social_echoes(self, world, tick: int) -> None:
         between = getattr(world.event_log, "between_ticks", None)

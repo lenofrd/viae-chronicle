@@ -20,7 +20,7 @@
 ```text
 src/vale/              模拟核心
   core/                事件库、世界状态、调度器、日历、回放、快照、世界注册
-  contracts/           跨领域只读查询契约（environment / spatial / wildlife）
+  contracts/           跨领域读写契约（只读查询 queries；结算 water / resources / impacts）
   modules/             可插拔模拟模块（climate 气候、agents 人物/家庭/经济、community 社区设施、
                        land 土地、construction 建造、governance 治理、tenancy_economy 租佃经济、
                        ecology 生态、xigu_events 西谷事件）
