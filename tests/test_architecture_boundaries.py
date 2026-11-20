@@ -47,18 +47,20 @@ STATE_OWNERS: dict[str, set[str]] = {
     "climate": {"modules.climate"},
     "water_level_ratio": {"modules.climate"},
     "irrigation_gear": {"modules.climate"},
-    "ecological_resources": {"modules.ecology", "contracts.resources"},
-    # P3a 水源库存：环境域状态，由取水契约（ResourceService 切片）结算写入。
-    "water_sources": {"contracts.water"},
-    # 农作物：按 ADR 2.3 归人文农业管理；P3b 起灾害写长势/地力统一走 EcologicalImpact
-    "field_growth": {"modules.agents", "contracts.impacts"},
-    "fertility_factor": {"modules.agents", "contracts.impacts"},
+    # 采集结算在环境域所有者（P3c 起契约只路由，不得登记为写入者）
+    "ecological_resources": {"modules.ecology"},
+    # P3a 水源库存：环境域状态，P3c 起结算归水文实现 modules.hydrology。
+    "water_sources": {"modules.hydrology"},
+    # 农作物：按 ADR 2.3 归人文农业管理；P3c 起灾害结算在 modules.agents.apply_*，
+    # 经 EcologicalImpact 契约路由。
+    "field_growth": {"modules.agents"},
+    "fertility_factor": {"modules.agents"},
     "soil_quality": {"modules.agents"},
     "field_season_labor": {"modules.agents"},
     # 静态生成副本（P4 世界生成分段后归 Environment）
     "terrain_cells": {"modules.land"},
     # Human
-    "agents": {"modules.agents", "modules.land", "modules.social", "contracts.impacts"},
+    "agents": {"modules.agents", "modules.land", "modules.social"},
     "households": {"modules.agents", "modules.land", "modules.construction"},
     "land_parcels": {"modules.land", "modules.tenancy_economy"},
     "buildings": {"modules.land", "modules.construction"},
@@ -101,7 +103,7 @@ CONTAINER_OF: dict[str, str] = {
 }
 
 # 已知跨域写：模块 -> 字段 -> 计划收敛阶段。修掉后必须删条目（见 test_no_untracked_cross_domain_writes）。
-# P3b 已把采集/捕鱼/打猎/取水与洪涝/旱灾/滑坡/野遇收敛到 contracts，台账清零。
+# P3b 把采集/取水与灾害收敛到写入契约；P3c 进一步把结算移交领域所有者，契约只路由（见红线测试）。
 KNOWN_CROSS_DOMAIN_WRITES: dict[tuple[str, str], str] = {}
 
 PROJECTION_MODULES = {"core.replay"}
@@ -242,6 +244,24 @@ def test_no_untracked_cross_domain_writes():
     assert stale == set(), (
         "台账里的跨域写已不存在，请删除条目：\n"
         + "\n".join(f"  {m} -> {f}（{KNOWN_CROSS_DOMAIN_WRITES[(m, f)]}）" for m, f in sorted(stale))
+    )
+
+
+def test_contracts_are_never_state_writers():
+    """P3c 红线：契约层只路由请求，不得写入任何状态字段（ADR 009 §2.4）。
+
+    结算、校验与事件由领域所有者执行（modules.ecology / modules.hydrology /
+    modules.agents）；契约出现在任何字段的写入者集合即失败。
+    """
+    offenders = {
+        (module, field)
+        for field, modules in state_writers().items()
+        for module in modules
+        if module.startswith("contracts.")
+    }
+    assert offenders == set(), (
+        "契约模块出现在状态写入者集合（契约只路由，结算归领域所有者）：\n"
+        + "\n".join(f"  {m} -> {f}" for m, f in sorted(offenders))
     )
 
 

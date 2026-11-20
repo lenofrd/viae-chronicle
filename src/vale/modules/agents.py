@@ -341,6 +341,75 @@ def _inventory(household: HouseholdState, items: list[str]) -> dict[str, float]:
 
 
 # --------------------------------------------------------------------------- #
+# 灾害影响的结算（P3b 机制；P3c 起由人类域所有者执行，契约 EcologicalImpact 只路由）
+# --------------------------------------------------------------------------- #
+
+def apply_flood_damage(world, field_node: str, damage: float, *, precipitation_mm: float) -> float:
+    """洪涝冲减田块长势，返回实际扣减量（请求量先夹到当前值）。"""
+    growth = world.state.environment.field_growth
+    before = float(growth.get(field_node, 0.0))
+    actual = min(before, max(0.0, float(damage)))
+    if actual <= 0:
+        return 0.0
+    after = round(max(0.0, before - actual), 4)
+    growth[field_node] = after
+    world.event_log.append(world.current_tick, "field_flood_damage", {
+        "field_node": field_node, "before": round(before, 4),
+        "damage": round(actual, 4), "after": after,
+        "precipitation_mm": precipitation_mm,
+    })
+    return actual
+
+
+def apply_drought_damage(world, field_node: str, damage: float, *, drought_state: str) -> float:
+    """旱灾冲减田块长势，返回实际扣减量（请求量先夹到当前值）。"""
+    growth = world.state.environment.field_growth
+    before = float(growth.get(field_node, 0.0))
+    actual = min(before, max(0.0, float(damage)))
+    if actual <= 0:
+        return 0.0
+    after = round(max(0.0, before - actual), 4)
+    growth[field_node] = after
+    world.event_log.append(world.current_tick, "field_drought_damage", {
+        "field_node": field_node, "before": round(before, 4),
+        "damage": round(actual, 4), "after": after,
+        "drought_state": drought_state,
+    })
+    return actual
+
+
+def apply_landslide(world, field_node: str, *, amount: float, source_node: str,
+                    resource_stock_ratio: float) -> float:
+    """滑坡扣减田块地力，返回扣减后的地力。"""
+    factors = world.state.environment.fertility_factor
+    before = float(factors.get(field_node, 1.0))
+    after = round(max(.1, before - max(0.0, float(amount))), 4)
+    factors[field_node] = after
+    world.event_log.append(world.current_tick, "landslide_damage", {
+        "source_node": source_node, "field_node": field_node,
+        "fertility_before": before, "fertility_after": after,
+        "resource_stock_ratio": round(resource_stock_ratio, 4),
+    })
+    return after
+
+
+def apply_wildlife_attack(world, agent_id: str, damage: float, *, location: str = "") -> bool:
+    """野生动物袭击：结算人类个体健康损失，返回是否命中（死亡/不存在直接拒绝）。"""
+    agent = world.state.human.agents.get(agent_id)
+    if agent is None or not agent.alive:
+        return False
+    before = agent.health
+    agent.health = max(0.0, before - float(damage))
+    agent.last_injury_tick = world.current_tick
+    world.event_log.append(world.current_tick, "wildlife_attack", {
+        "agent_id": agent.agent_id, "agent_name": agent.name,
+        "health_before": round(before, 2), "health_after": round(agent.health, 2),
+        "location": location, "injury": float(damage),
+    })
+    return True
+
+
+# --------------------------------------------------------------------------- #
 # 人物模块
 # --------------------------------------------------------------------------- #
 class AgentModule:

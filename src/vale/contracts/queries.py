@@ -1,7 +1,8 @@
 """跨领域只读查询契约（ADR 009 §2.5 / 迁移计划 P2）。
 
 查询只读，不改变状态，也不暴露对方内部结构：调用方拿到的是值或只读视图。
-写入必须走状态所有者的命令（P3b 的 ResourceService / EcologicalImpact）。
+写入经写入契约（ResourceService / EcologicalImpact）路由到状态所有者结算，
+契约本身不写状态（P3c 起由架构测试红线强制）。
 """
 from __future__ import annotations
 

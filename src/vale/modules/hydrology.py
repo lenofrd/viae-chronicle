@@ -1,8 +1,9 @@
-"""水源库存的读-校验-写结算（P3a，ResourceService 的取水切片）。
+"""水源库存的读-校验-写结算（P3a 机制；P3c 起结算归环境域水文实现）。
 
-ADR 009 §2.5：人类模块通过命令使用自然资源，不直接改写环境内部状态。
-本契约先校验存量与同 tick 抽取上限，再把结果写成事件并更新投影；真正的
-库存所有者是环境域（``EnvironmentState.water_sources``）。
+ADR 009 §2.4/§2.5：``EnvironmentState.water_sources`` 的唯一所有者是环境域，
+结算、校验与事件都由本模块执行；人类模块经写入契约
+（``contracts.resources.ResourceService.withdraw_water``）提交请求，契约只路由、
+不写状态。P3a 期间结算曾放在 ``contracts/water.py``，P3c 按裁决移交所有者。
 
 机制（确定性、无随机）：
 - 存量夹在 ``0..capacity``；

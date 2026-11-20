@@ -1,4 +1,8 @@
-"""P3a 水源库存测试：初始化、补水、取水结算、上限、拒绝、坏配置与回放。"""
+"""P3a 水源库存测试：初始化、补水、取水结算、上限、拒绝、坏配置与回放。
+
+P3c 起结算归环境域所有者 ``vale/modules/hydrology.py``（原 ``contracts/water.py``），
+行为不变。
+"""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -7,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from config.schema.natural_params import WaterSupplyParams
-from vale.contracts.water import (
+from vale.modules.hydrology import (
     ensure_source,
     regenerate_water_sources,
     withdraw_water,

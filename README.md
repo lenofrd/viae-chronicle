@@ -20,10 +20,11 @@
 ```text
 src/vale/              模拟核心
   core/                事件库、世界状态、调度器、日历、回放、快照、世界注册
-  contracts/           跨领域读写契约（只读查询 queries；结算 water / resources / impacts）
+  contracts/           跨领域契约（只读查询 queries；写入契约 resources / impacts 只路由，
+                       结算在领域所有者模块）
   modules/             可插拔模拟模块（climate 气候、agents 人物/家庭/经济、community 社区设施、
                        land 土地、construction 建造、governance 治理、tenancy_economy 租佃经济、
-                       ecology 生态、xigu_events 西谷事件）
+                       ecology 生态、hydrology 水文库存、xigu_events 西谷事件）
   worldgen/            世界生成（xigu：按种子生成西谷镇住户、田块与地理）
   observability/       只读观察层（事件查询、文本渲染、导出、CLI viewer）
   cli.py, main.py      命令行入口（events list / timeline / run 等）

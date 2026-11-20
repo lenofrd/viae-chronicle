@@ -17,7 +17,7 @@ import random
 from typing import Any
 
 from config.schema.natural_params import DroughtState, IrrigationGear, Season, WeatherType
-from vale.contracts.water import regenerate_water_sources
+from vale.modules.hydrology import regenerate_water_sources
 
 from ..core.calendar import (
     calendar_from_tick,
@@ -229,7 +229,7 @@ class ClimateModule:
 
         # 8. 任务30：水文演化（确定性，随当日降水）
         self._evolve_hydrology(world, cfg, precip)
-        # P3a：按最新水位为水源补水（水源库存归环境域，取水由 contracts.water 结算）
+        # P3a：按最新水位为水源补水（水源库存归环境域，结算在 modules.hydrology，P3c）
         regenerate_water_sources(world)
 
     # ------------------------------------------------------------------
