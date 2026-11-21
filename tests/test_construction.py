@@ -7,10 +7,10 @@ from vale.core.event_log import EventLog
 from vale.core.state import BuildingState
 from vale.core.replay import rebuild_state
 from vale.core.world import World
-from vale.modules.agents import AgentModule
-from vale.modules.construction import advance_construction, request_building, request_repair, request_expansion, request_demolition, share_building_access, pause_construction, resume_construction, cancel_construction, abandon_construction
-from vale.modules.governance import cast_council_vote, propose_council_decision, register_representative
-from vale.modules.land import change_land_use
+from vale.domains.society.agents import AgentModule
+from vale.domains.society.construction import advance_construction, request_building, request_repair, request_expansion, request_demolition, share_building_access, pause_construction, resume_construction, cancel_construction, abandon_construction
+from vale.domains.society.governance import cast_council_vote, propose_council_decision, register_representative
+from vale.domains.society.land import change_land_use
 from vale.world.xigu import build_xigu_agents_config, generate_xigu_town
 
 
@@ -365,7 +365,7 @@ def test_shared_storehouse_is_an_alternative_to_duplicate_storage_and_replays():
 
 def test_building_need_can_be_resolved_by_an_existing_alternative():
     from vale.core.state import BuildingNeedState
-    from vale.modules.construction import resolve_building_need
+    from vale.domains.society.construction import resolve_building_need
     world, log, config = make_world()
     try:
         need = BuildingNeedState(

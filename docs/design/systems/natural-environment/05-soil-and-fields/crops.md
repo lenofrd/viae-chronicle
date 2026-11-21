@@ -90,7 +90,7 @@
 影响范围：按田地片
 ```
 
-> **已落地（盈余经济阶段二，2026-11-15）**：`harvest` 改按本式结算，实现见 `vale.modules.agents.expected_yield`。
+> **已落地（盈余经济阶段二，2026-11-15）**：`harvest` 改按本式结算，实现见 `vale.domains.society.agents.production.expected_yield`（P5-d 分层归位前的路径为 `vale.modules.agents.expected_yield`）。
 > - `base_yield`：配置键 `agriculture.base_yield`（原 `crop_gain` 更名，数值 75/55 不变）。
 > - `area`：`spatial-units.yaml` 节点 `area`，默认 1.0。
 > - `fertility_factor`：`WorldState.environment.fertility_factor`，阶段二恒 1.0；连作衰减/休耕恢复**未启用**（阶段三）。静态地力另存 `WorldState.environment.soil_quality`（地形生成值，不参与产量）。

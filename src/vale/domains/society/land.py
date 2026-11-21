@@ -52,7 +52,7 @@ def initialize_land(world) -> None:
     holding is seeded as Li Quan household property and work assignments become rights.
 
     P4 归口（2026-11-21 裁决）：地形栅格 ``terrain_cells`` 不再由本模块跨域
-    写入环境容器，改由环境域 ``modules.ecology.ensure_terrain_cells`` 从生成
+    写入环境容器，改由环境域 ``domains.environment.terrain.ensure_terrain_cells`` 从生成
     结果引导。
     """
     if world.state.human.land_parcels:

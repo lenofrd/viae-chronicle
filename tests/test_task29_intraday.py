@@ -23,7 +23,7 @@ from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
 from vale.core.world import World
-from vale.modules.agents import AgentModule, SpatialIndex
+from vale.domains.society.agents import AgentModule, SpatialIndex
 from vale.domains.environment.climate import ClimateModule
 
 WORK_WINDOW = {"spring": 10.0, "summer": 9.0, "autumn": 10.0, "winter": 6.0}

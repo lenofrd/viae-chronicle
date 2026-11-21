@@ -33,7 +33,7 @@ from vale.core.state import (
     WILDLIFE_RESOURCE_TYPES,
     WorldState,
 )
-from vale.modules.social import apply_kin_defaults, record_memory
+from vale.domains.society.social import apply_kin_defaults, record_memory
 
 _ASSET_FIELDS = ("grain", "meat", "fish", "vegetable", "cloth", "firewood", "herbs", "hardwood", "coin", "water")
 

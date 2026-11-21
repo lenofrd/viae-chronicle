@@ -6,12 +6,12 @@ from vale.core.config_loader import LoadedConfig, load_config
 from vale.core.event_log import EventLog
 from vale.core.replay import rebuild_state
 from vale.core.world import World
-from vale.modules.agents import AgentModule
-from vale.modules.land import (
+from vale.domains.society.agents import AgentModule
+from vale.domains.society.land import (
     change_land_use, grant_land_right, transfer_land_ownership, relocate_household,
     settle_household_land_inheritance,
 )
-from vale.modules.governance import cast_council_vote, propose_council_decision, register_representative
+from vale.domains.society.governance import cast_council_vote, propose_council_decision, register_representative
 from vale.world.xigu import build_xigu_agents_config, generate_xigu_town
 
 
@@ -30,7 +30,7 @@ def make_world():
     world = World(config.world.world_id, log, config.world.start_tick, config)
     AgentModule()._ensure_agents(world, config.agents)
     # P4：地形栅格由环境域引导（不再由 land 模块跨域写入），显式触发一次。
-    from vale.modules.ecology import ensure_terrain_cells
+    from vale.domains.environment.terrain import ensure_terrain_cells
     ensure_terrain_cells(world)
     return world, log, config
 
@@ -310,7 +310,7 @@ def test_private_land_returns_to_village_when_household_has_no_heir():
         log.close()
 
 def test_household_inheritance_transfers_active_land_lease_party():
-    from vale.modules.land import settle_household_land_inheritance
+    from vale.domains.society.land import settle_household_land_inheritance
     world, log, config = make_world()
     try:
         source = next(iter(world.state.human.households.values()))
@@ -331,7 +331,7 @@ def test_household_inheritance_transfers_active_land_lease_party():
         log.close()
 
 def test_household_can_relinquish_non_residential_land_to_collective():
-    from vale.modules.land import relinquish_household_parcel
+    from vale.domains.society.land import relinquish_household_parcel
     world, log, _ = make_world()
     try:
         parcel = next(p for p in world.state.human.land_parcels.values()

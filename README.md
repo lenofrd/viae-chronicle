@@ -24,14 +24,19 @@ src/vale/              模拟核心
                        结算在领域所有者模块）
   config/schema/       配置模型与校验（Pydantic；世界 YAML 数据仍在仓库根 config/）
   domains/             领域层（ADR 009）
-    environment/       环境域：climate 气候、hydrology 水文库存
-    wildlife/          动物域：wildlife 鱼/猎物存量池（个体与种群留待 P5）
-    society/           人文社会域（本轮仅包骨架，模块随后续批次迁入）
+    environment/       环境域：climate 气候、hydrology 水文库存、terrain 地形栅格、
+                       fields 田块生态、resources 植被类资源池（引导/再生/采集结算）
+    wildlife/          动物域：wildlife 鱼/猎物存量池（个体与种群留待后续）
+    society/           人文社会域：land 土地、community 社区设施、social 社会互动、
+                       governance 治理、construction 建造、economy 租佃经济；
+                       agents/ 人物子系统（module 协调日结算，lifecycle 生命周期、
+                       labor 劳动、decision 决策、actions 动作、household 家庭日常、
+                       market 集市、mortality 死亡继承、marriage 婚配、
+                       reproduction 分家生育、debt 债务催收、perception 感知、
+                       production 生产口径、spatial 距离索引、demographics 人口基础）
   world/               世界生成（nature 自然段：地形栅格/资源池目录/静态植被栖息地描述；
                        settlement 聚落段：布点/路网/距离矩阵；xigu 组合门面按种子生成西谷镇）
-  modules/             可插拔模拟模块（agents 人物/家庭/经济、community 社区设施、
-                       land 土地、construction 建造、governance 治理、tenancy_economy 租佃经济、
-                       ecology 生态（植被类资源池+田块生态）、xigu_events 西谷事件）
+  world/scenarios/xigu/ 溪古镇场景独有逻辑（xigu_events 季节性灾害/村落事件），不进通用领域
   observability/       只读观察层（事件查询、文本渲染、导出、CLI viewer）
   cli.py, main.py      命令行入口（events list / timeline / run 等）
   api/                 HTTP/查询接口占位（routes），当前非主要入口
@@ -77,7 +82,7 @@ python scripts/run_xigu.py 360        # 按种子生成西谷镇并跑 360 天�
 - 本 PR（任务 29，M5 日内时间预算与体力分级）：`_process_one` 改为**日内 TU 循环**——季节工作窗（春 10 / 夏 9 / 秋 10 / 冬 6 TU，配置 `natural_params.climate_evolution.seasons.*.work_window_tu`）下逐动作贪心重规划；**单次动作占用 = 动作 TU + 往返移动 TU**，超预算动作在决策阶段即不可行。新增 `agents.tuning.action.tu_cost` / `heavy_actions` / `heavy_stamina_per_tu`（重活 25 体力/TU，轻活 0），删除 `action.stamina_cost` 平表与 `physiology.rest_stamina_recovery`；`rest` 为 1 TU 回满且**就地**歇息，剩余 TU 一次性转闲时休整（`idle=true`）；`location` 日内真实化（动作停在目标节点、日末回家），计距基点由家改为当前位置。`agent_action_taken` 新增 `slot` / `tu_spent` / `tu_remaining` / `move_stamina` / `labor_stamina` / `idle`，废弃 `stamina_cost`；观察层渲染「当日第 N 件」，旧库缺字段降级（`pytest -k replay` 保持绿）。**重标定临时值（待长期方案复核）**：`utility.stamina_score_divisor` 100→500、hunt/fish `injury_risk` 0.07/0.02→0.035/0.01。验收：5 种子 × 3600 存活 8–10、`agent_error` 0（饿死 0–6）；成人首年 2.6–2.7 动作/日，冬季/夏季动作比 0.78–0.94。**已登记副作用**：镇内往返 13–16 TU 的打猎当前不可达（需过夜/营地机制）；贫民区到东/南/西田往返 7–9 TU + 4 TU 农活 > 工作窗，贫民户无法耕作。
 - 本 PR（任务 30，水模型最小切片）：激活 `hydrology_initial`（水位 0.60 / 灌溉档 low）到 `WorldState.water_level_ratio` / `irrigation_gear`，由 `ClimateModule` 确定性演化——有效降水按 `recharge_per_mm × mm × (1 − 水位)` 补水、无雨日按 `dry_loss_per_day` 下降，夹紧 0–1，跨档写 `irrigation_gear_changed`，每天变化写 `water_level_changed`。新增 `HouseholdState.water`：`collect_water` 每次产水 5；每日结算按存活成员数扣水（1/人，写 `water_consumed`），**每次进食另耗 0.5（烹饪/佐餐，水不足则该次无法进食，生存门控会先去打水）**；存水低于目标 5 时打水紧迫度线性上升（权重 2.0），成年劳力因此主动维持水缸。水随继承/分家按比例转移、无继承人时归公，不参与集市交易。产量公式 `moisture` 接灌溉档（充足 1.0 / 偏少 0.85 / 缺水 0.7 / 断水 0.5），`harvest_detail` 带 `moisture`。观察层渲染三类新事件与打水产出，replay 支持新事件、旧库无水文事件时取配置初值。验收：5 种子 × 3600 存活 8–10、`agent_error` 0、水守恒 `产出−日耗−归公−存量=0`。
 - 本 PR（西谷镇世界生成 + 婚育动作化）：新增 `src/vale/worldgen/xigu.py` 与 `scripts/run_xigu.py`，按种子生成 30 户、40 名居民的西谷镇（开局家庭口粮 50–70 石，**临时值**）。婚配与生育从系统定时结算下沉为 agent 动作：新增 `court`（结亲）与 `try_for_child`（求子），未婚者感知最近合格候选、双方当日互选才成婚（日末 `_settle_courtship` 结算），育龄女方在生育闸门内自主决定求子；新增 `courtship_offer` 事件。断粮户坏账核销：`debt_forgiven`（含 `cause`）+ `debt.write_off_unpayable` 开关，解除逾期对借粮/借食/赊账的永久锁死。2 年基线（seed 20261118，720 tick）：婚姻 20、新生儿 18、生育户 13、死亡 41。
-- 本 PR（任务 P4，世界生成分段与领域归口）：`worldgen` 拆为自然段（`nature.py`：地形栅格、资源池目录、静态植被/栖息地描述）与聚落段（`settlement.py`：布点、路网、距离矩阵），`xigu.py` 保留为组合门面；资源池参数正式化为 `ResourcePoolSpec`（经 `LoadedConfig.resources` 进运行时，节点 attributes 不再携带 `resource_*` 副本），运行时投影为 `ResourcePoolState`；鱼/猎物池归动物域新增 `modules/wildlife.py` 引导与结算（暂为池形式，个体/种群留待后续阶段）；植被仅结构迁移，动态生物量/退化未启用；`terrain_cells` 归口环境域；采集配置新增 `agents.tuning.gathering.*.harvests_resource_type` 声明产出类型（当前仅模型关联，运行时行为不变）。同种子 worldgen 逐字段等价、两年仿真快照 byte-identical（seed 20261118）；40 年门禁首跑 `agent_error` 0、无负值，人口仍受既有承载力问题约束（见已知问题 ⑩）。
+- 本 PR（任务 P4，世界生成分段与领域归口）：`worldgen` 拆为自然段（`nature.py`：地形栅格、资源池目录、静态植被/栖息地描述）与聚落段（`settlement.py`：布点、路网、距离矩阵），`xigu.py` 保留为组合门面；资源池参数正式化为 `ResourcePoolSpec`（经 `LoadedConfig.resources` 进运行时，节点 attributes 不再携带 `resource_*` 副本），运行时投影为 `ResourcePoolState`；鱼/猎物池归动物域新增 `domains/wildlife/wildlife.py` 引导与结算（暂为池形式，个体/种群留待后续阶段）；植被仅结构迁移，动态生物量/退化未启用；`terrain_cells` 归口环境域；采集配置新增 `agents.tuning.gathering.*.harvests_resource_type` 声明产出类型（当前仅模型关联，运行时行为不变）。同种子 worldgen 逐字段等价、两年仿真快照 byte-identical（seed 20261118）；40 年门禁首跑 `agent_error` 0、无负值，人口仍受既有承载力问题约束（见已知问题 ⑩）。
 - 已知问题（未解决）：① G1 家庭口粮承载力——长程仍有个别饿死（任务 29/30 后 5 种子 × 3600：饿死 5–7、存活 8–10），口粮承载力未做专项调平；② 弥留窗口（plan A 回滚后未修）；③ 田块封顶使成人约 47% 的休息与体力无关（G11，待老板定夺）；④ 体力上限、打分体力紧缺度除数仍为代码硬编码（G10，需单独立项；「1 动作/日」已由任务 29 的日内 TU 循环解除）；⑤ 部分还款自然流结构性低频（机制仅由单测覆盖）；⑥ 印象 P2 已接线但当前 8 种子 × 3600 中**零可观测差异**（defaulting 会话均已因前科走 full），且规则只升不降，不能减轻诉求；⑦ 少年分段与白名单为临时值；⑧ 水已用于烹饪/日耗，但未建模口渴健康惩罚与水存储上限；少年白名单不开放打水，纯儿童户缺水时无法炊事；⑨ 打猎因往返 TU 超工作窗不可达、贫民户无法耕作（任务 29 移动扣 TU 的副作用，需过夜/营地或距离调平）；⑩ 西谷镇长程承载力不足——单产 `base_yield=155`（**临时值**）下人口仍从峰值 53 回落到 t720 的 17，秋收产出只够约 52 人吃半年，第 2 年春荒崩塌后劳力不足以恢复；40 年门禁已恢复为 `test_forty_year_xigu_run_keeps_population_alive`（seed 20261118，断言终局人口 > 0），当前因 G1 以 **strict xfail** 登记，解 G1 后移除标记。
 - 下一阶段方向：阶段五收口（P2 验收与统一 PR）；G1 承载力提产与弥留窗口修复的取舍；G11 田块封顶；货币系统评估、派生系统前置（教育/地位）。
 - 协作者请看 [`docs/collab/PROGRESS.md`](docs/collab/PROGRESS.md)；最新内部状态以维护者提供的 STATUS 为准。

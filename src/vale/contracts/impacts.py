@@ -4,15 +4,15 @@ ADR 009 §2.5/§2.6（2026-11-21 修订）：调用方只决定"哪里、多大"
 与事件由状态所有者执行。
 
 - 田块生态状态（``field_growth`` / ``fertility_factor``）：环境域所有者
-  ``modules.ecology`` 结算——农事长势增量、收获复位、洪涝 / 旱灾 / 滑坡冲减；
-- 人类个体健康（野遇）：人文域所有者结算（``modules.agents.apply_wildlife_attack``，
-  函数内延迟导入以避免 agents ↔ impacts 模块级循环导入）。
+  ``domains.environment.fields`` 结算——农事长势增量、收获复位、洪涝 / 旱灾 / 滑坡冲减；
+- 人类个体健康（野遇）：人文域所有者结算（``domains.society.agents.apply_wildlife_attack``，
+  函数内延迟导入以避免人物子系统 ↔ impacts 模块级循环导入）。
 
 契约层不得出现在状态写入者集合（架构测试红线）。
 """
 from __future__ import annotations
 
-from vale.modules.ecology import (
+from vale.domains.environment.fields import (
     apply_drought_damage,
     apply_farm_growth,
     apply_flood_damage,
@@ -47,8 +47,8 @@ class EcologicalImpact:
     @staticmethod
     def wildlife_attack(world, agent_id: str, damage: float, *, location: str = "") -> bool:
         """野生动物袭击：结算人类个体健康损失，返回是否命中。"""
-        # 延迟导入：agents 模块级引用本契约（农事意图），避免模块级循环导入。
-        from vale.modules.agents import apply_wildlife_attack
+        # 延迟导入：人物子系统模块级引用本契约（农事意图），避免模块级循环导入。
+        from vale.domains.society.agents import apply_wildlife_attack
         return apply_wildlife_attack(world, agent_id, damage, location=location)
 
     # -- 农事意图（2026-11-21 裁决：田块生态归环境域，意图携带增量）--------- #

@@ -55,3 +55,12 @@
 2. 最重要的两处越界：人类采集直接改 `ecological_resources`；灾害事件模块直接改田块长势/地力与人物健康。
 3. 治理、社区储备、建造工程在运行时没有触发路径，只有测试在调用。迁移计划不能假设它们是"活"的子系统。
 4. 状态按"数据形状"聚在一起（人物 + 社会认知 + 记忆），而不是按领域所有权；拆分容器时需按字段迁移，不能整对象搬迁。
+
+## 5. P5 完成后的写入者现状（2026-11-21）
+
+本文以上各表是 P0 审计基线 `c9f29a5` 的快照（行号与 `modules.*` 路径已随分层迁移失效）。P5 完成后，**写入者的权威登记**是 `tests/test_architecture_boundaries.py` 的 `STATE_OWNERS`（静态扫描会失败）与 [ADR 009 §3 落地注记](../../decisions/009-layered-domain-architecture.md)；P5-a/b/c/d 的归口结论摘要：
+
+- 环境侧：`climate` 归 `domains.environment.climate`；`water_sources` 归 `domains.environment.hydrology`；`field_growth`/`fertility_factor`/`soil_quality` 归 `domains.environment.fields`；`terrain_cells` 归 `domains.environment.terrain`；`ecological_resources` 归 `domains.environment.resources`；`pools`（fish/game）归 `domains.wildlife.wildlife`。
+- 本文 §1 的两处越界已消除：采集改由 `ResourceService` 路由、结算在资源所有者；灾害改由 `EcologicalImpact` 路由、田块生态结算在环境域；野遇伤害由 `domains.society.agents.demographics.apply_wildlife_attack` 结算（人文域所有者）。
+- 人文侧：`agents`/`households` 的写入者是最小必要子集——`agents.demographics`（开局播种）、`agents.lifecycle`（健康/体力/存活）、`agents.marriage`、`agents.reproduction`、`agents.actions`、`agents.module`（日末归位），以及 `domains.society.land`/`social`/`construction` 的既有职责；`field_season_labor` 归 `agents.actions`（农事劳动簿记）。
+- `modules.*` 包已不存在；`xigu_events` 迁 `world.scenarios.xigu.events`。

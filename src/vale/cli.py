@@ -25,9 +25,9 @@ from vale.core.config_loader import load_config  # noqa: E402
 from vale.core.event_log import EventLog  # noqa: E402
 from vale.core.scheduler import run_tick  # noqa: E402
 from vale.core.world import World  # noqa: E402
-from vale.modules.agents import AgentModule  # noqa: E402
+from vale.domains.society.agents import AgentModule  # noqa: E402
 from vale.domains.environment.climate import ClimateModule  # noqa: E402
-from vale.modules.ecology import EcologyModule  # noqa: E402
+from vale.domains.environment.resources import EcologyModule  # noqa: E402
 from vale.observability.export import EXPORT_FORMATS  # noqa: E402
 from vale.observability.query import EventFilter, apply_filter  # noqa: E402
 from vale.observability.render import payload_preview, render_event  # noqa: E402

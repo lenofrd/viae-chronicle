@@ -1,4 +1,9 @@
-"""Emergent seasonal hazards and village social events for Xigu."""
+"""Emergent seasonal hazards and village social events for Xigu.
+
+P5-b 归口（2026-11-21）：本模块是溪古镇场景独有逻辑，从 ``modules/`` 迁入
+``world/scenarios/xigu/``，不得混入通用领域；灾害与野遇的写入仍经
+``contracts.impacts.EcologicalImpact`` 路由到状态所有者结算。
+"""
 from __future__ import annotations
 
 import random

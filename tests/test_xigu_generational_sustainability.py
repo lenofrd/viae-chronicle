@@ -15,12 +15,12 @@ from vale.core.config_loader import LoadedConfig, load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
 from vale.core.world import World
-from vale.modules.agents import AgentModule, SpatialIndex, age_years
+from vale.domains.society.agents import AgentModule, SpatialIndex, age_years
 from vale.domains.environment.climate import ClimateModule
-from vale.modules.ecology import EcologyModule
-from vale.modules.tenancy_economy import TenancyEconomyModule
+from vale.domains.environment.resources import EcologyModule
+from vale.domains.society.economy import TenancyEconomyModule
 from vale.domains.wildlife.wildlife import WildlifeModule
-from vale.modules.xigu_events import XiguEventsModule
+from vale.world.scenarios.xigu.events import XiguEventsModule
 from vale.world.xigu import XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town
 
 

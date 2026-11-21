@@ -148,7 +148,7 @@ class ImpressionEntry(BaseModel):
 
     独立载体，不并入 ``AcquaintanceEntry``（避免被认知 TTL 连带删除）。
     counts 全部由记忆窗口派生（裁决 §3.5），不是独立累加计数器；
-    ``label`` 由确定性规则从 counts 派生，规则为 ``vale.modules.social`` 内代码常量。
+    ``label`` 由确定性规则从 counts 派生，规则为 ``vale.domains.society.social`` 内代码常量。
     """
 
     label: str = "unknown"
@@ -163,7 +163,7 @@ class AgentState(BaseModel):
     """单个人物的状态快照，写入 world.state.human.agents[agent_id]。
 
     年龄唯一真相源是 ``birth_tick``（允许负值：开局前出生），不存 ``age`` 字段，
-    避免与 tick 双写漂移；年龄由 ``vale.modules.agents.age_years`` 实时派生。
+    避免与 tick 双写漂移；年龄由 ``vale.domains.society.agents.age_years`` 实时派生。
     资产/债务/住所归家庭；``work_node`` 仅保存个人劳作点偏好（None = 家庭默认）。
     """
 
@@ -394,7 +394,7 @@ class ResourcePoolState(BaseModel):
     """资源池运行时投影（P4，事件溯源）；字段序即事件载荷键序。
 
     ``current_stock`` / ``harvested_this_tick`` / ``degradation`` 由领域所有者
-    结算：植被类池归环境域（``modules.ecology``），鱼/猎物池归动物域
+    结算：植被类池归环境域（``domains.environment.resources``），鱼/猎物池归动物域
     （``domains.wildlife.wildlife``，2026-11-21 裁决）。
     """
 
@@ -428,7 +428,7 @@ class EnvironmentState(BaseModel):
     ecological_resources: dict[str, ResourcePoolState] = Field(default_factory=dict)
     # 水源库存（P3a）：node_id -> 存量/容量/再生/日抽上限；由 HydrologyModule 结算。
     water_sources: dict[str, WaterSourceState] = Field(default_factory=dict)
-    # 田地长势：node_id -> 0-100；环境域所有者 modules.ecology 结算（2026-11-21 裁决）
+    # 田地长势：node_id -> 0-100；环境域所有者 domains.environment.fields 结算（2026-11-21 裁决）
     field_growth: dict[str, float] = Field(default_factory=dict)
     # 田块地力（crops.md §4.5 fertility）：node_id -> 动态乘数，默认 1.0，参与产量。
     fertility_factor: dict[str, float] = Field(default_factory=dict)
@@ -473,7 +473,7 @@ class WildlifeState(BaseModel):
 
 
 # 归动物域的资源类型（P4 裁决）：目录中 resource_type 命中此集合的池由
-# domains.wildlife.wildlife 拥有并结算，其余归 modules.ecology。P5 扩种群时再扩集合。
+# domains.wildlife.wildlife 拥有并结算，其余归 domains.environment.resources。P5 扩种群时再扩集合。
 WILDLIFE_RESOURCE_TYPES = frozenset({"fish", "game"})
 
 

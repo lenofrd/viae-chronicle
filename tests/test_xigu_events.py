@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from vale.modules.xigu_events import XiguEventsModule
+from vale.world.scenarios.xigu.events import XiguEventsModule
 
 
 class EventSink:

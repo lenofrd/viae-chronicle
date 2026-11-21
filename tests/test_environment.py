@@ -7,8 +7,8 @@ from vale.core.event_log import EventLog
 from vale.core.state import BuildingState
 from vale.core.replay import rebuild_state
 from vale.core.world import World
-from vale.modules.agents import AgentModule, SpatialIndex
-from vale.modules.community import (
+from vale.domains.society.agents import AgentModule, SpatialIndex
+from vale.domains.society.community import (
     environmental_injury_multiplier, fatigue_efficiency,
     production_efficiency_at_node, service_capacity_available, settle_building_maintenance,
     approve_community_relief, contribute_to_community_reserve,

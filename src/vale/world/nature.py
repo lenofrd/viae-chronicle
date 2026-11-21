@@ -93,7 +93,7 @@ def make_resource_catalog() -> dict[str, ResourcePoolSpec]:
     """生态资源池目录（键 = 资源节点 id）。
 
     fish / game 类型池归动物域（domains.wildlife.wildlife 拥有并结算）；其余归环境域
-    （modules.ecology）。deep_mountain 为受限封禁池。
+    （domains.environment.resources）。deep_mountain 为受限封禁池。
     """
     return {
         "river_town": ResourcePoolSpec(

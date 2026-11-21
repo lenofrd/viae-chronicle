@@ -25,7 +25,7 @@ from vale.core.config_loader import load_config  # noqa: E402
 from vale.core.event_log import EventLog  # noqa: E402
 from vale.core.scheduler import run_tick  # noqa: E402
 from vale.core.world import World  # noqa: E402
-from vale.modules.agents import AgentModule  # noqa: E402
+from vale.domains.society.agents import AgentModule  # noqa: E402
 from vale.domains.environment.climate import ClimateModule  # noqa: E402
 
 _WORLD_ID = "brookvale-town-001"

@@ -12,7 +12,7 @@ from vale.core.household import (
     work_node_of,
 )
 from vale.core.state import ResourcePoolSpec
-from vale.modules.ecology import bootstrap_pool
+from vale.core.pools import bootstrap_pool
 
 ITEMS = ("grain", "meat", "fish", "vegetable", "cloth")
 

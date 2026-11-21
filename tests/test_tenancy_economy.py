@@ -2,7 +2,7 @@ from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.world import World
 from vale.core.state import HouseholdState, LandParcelState, BuildingState
-from vale.modules.tenancy_economy import (
+from vale.domains.society.economy import (
     create_land_lease, settle_land_rent, settle_household_trade,
     deposit_shared_storage, withdraw_shared_storage,
     enqueue_service_request, process_service_queue,
@@ -105,7 +105,7 @@ def test_rent_arrears_accumulate_by_period_and_are_cleared_when_paid():
     assert w.state.human.land_leases["arrears"]["arrears_amount"] == 0
 
 def test_in_kind_resource_loan_tracks_partial_repayment():
-    from vale.modules.tenancy_economy import lend_household_goods, repay_household_goods
+    from vale.domains.society.economy import lend_household_goods, repay_household_goods
     w = _world()
     loan = lend_household_goods(w, "grain-loan", lender_household_id="a",
         borrower_household_id="b", item="grain", quantity=5,
@@ -121,7 +121,7 @@ def test_in_kind_resource_loan_tracks_partial_repayment():
     assert w.state.human.households["b"].grain == 4
 
 def test_resource_loan_becomes_overdue_once():
-    from vale.modules.tenancy_economy import lend_household_goods, settle_due_resource_loans
+    from vale.domains.society.economy import lend_household_goods, settle_due_resource_loans
     w = _world()
     lend_household_goods(w, "late", lender_household_id="a", borrower_household_id="b",
                          item="grain", quantity=2, repayment_quantity=2, due_tick=1)
@@ -131,7 +131,7 @@ def test_resource_loan_becomes_overdue_once():
     assert w.state.human.resource_loans["late"]["status"] == "overdue"
 
 def test_lease_expiry_refunds_escrowed_deposit():
-    from vale.modules.tenancy_economy import settle_due_leases
+    from vale.domains.society.economy import settle_due_leases
     w = _world()
     create_land_lease(w, "deposit", parcel_id="p", lessor_household_id="a",
                       lessee_household_id="b", rent_per_period=2, deposit=5,
@@ -144,7 +144,7 @@ def test_lease_expiry_refunds_escrowed_deposit():
     assert not w.state.human.land_parcels["p"].use_rights
 
 def test_lease_deposit_offsets_unpaid_rent_on_termination():
-    from vale.modules.tenancy_economy import terminate_land_lease
+    from vale.domains.society.economy import terminate_land_lease
     w = _world()
     create_land_lease(w, "deposit-arrears", parcel_id="p", lessor_household_id="a",
                       lessee_household_id="b", rent_per_period=4, deposit=3,
@@ -158,7 +158,7 @@ def test_lease_deposit_offsets_unpaid_rent_on_termination():
     assert w.state.human.land_leases["deposit-arrears"]["outstanding_arrears"] == 1
 
 def test_lease_renewal_extends_use_right_and_can_reprice():
-    from vale.modules.tenancy_economy import renew_land_lease
+    from vale.domains.society.economy import renew_land_lease
     w = _world()
     create_land_lease(w, "renew", parcel_id="p", lessor_household_id="a",
                       lessee_household_id="b", rent_per_period=2, period_days=5, duration_days=20)

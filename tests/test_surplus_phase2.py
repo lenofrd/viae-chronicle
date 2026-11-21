@@ -23,7 +23,7 @@ from vale.core.state import AgentState, HouseholdState
 from vale.core.world import World
 from vale.config.schema.agents import AgentSex
 from vale.config.schema.natural_params import Season
-from vale.modules.agents import AgentModule, SpatialIndex, expected_yield
+from vale.domains.society.agents import AgentModule, SpatialIndex, expected_yield
 from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 

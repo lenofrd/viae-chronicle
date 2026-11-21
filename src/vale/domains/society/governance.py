@@ -15,7 +15,7 @@ from vale.core.state import (
     HouseholdRepresentativeState,
     VillageElectionState,
 )
-from vale.modules.agents import age_years
+from vale.domains.society.agents.demographics import age_years
 
 
 def _adult_alive(world, agent_id: str) -> bool:

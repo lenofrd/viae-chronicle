@@ -25,9 +25,9 @@ from vale.core.state import (
     WorldState,
 )
 from vale.core.world import World
-from vale.modules.agents import AgentModule
+from vale.domains.society.agents import AgentModule
 from vale.domains.environment.climate import ClimateModule
-from vale.modules.ecology import EcologyModule
+from vale.domains.environment.resources import EcologyModule
 from vale.domains.wildlife.wildlife import WildlifeModule
 from vale.world.xigu import (
     XiguGenerationConfig,
@@ -50,37 +50,48 @@ STATE_OWNERS: dict[str, set[str]] = {
     "irrigation_gear": {"domains.environment.climate"},
     # 采集结算在环境域所有者（P3c 起契约只路由，不得登记为写入者）。
     # P4：fish/game 池迁动物域容器（WildlifeState.pools），环境容器只留植被类池。
-    "ecological_resources": {"modules.ecology"},
+    "ecological_resources": {"domains.environment.resources"},
     "pools": {"domains.wildlife.wildlife"},
     # P3a 水源库存：环境域状态，P3c 起结算归水文实现 domains.environment.hydrology。
     "water_sources": {"domains.environment.hydrology"},
-    # 田块生态状态：ADR 009 §2.3/§2.4（2026-11-21 修订）归环境域所有者 modules.ecology
-    # 结算——农事长势增量、收获复位、洪涝/旱灾/滑坡冲减均经 EcologicalImpact 契约路由。
-    "field_growth": {"modules.ecology"},
-    "fertility_factor": {"modules.ecology"},
-    "soil_quality": {"modules.ecology"},
+    # 田块生态状态：ADR 009 §2.3/§2.4（2026-11-21 修订）归环境域所有者
+    # domains.environment.fields 结算——农事长势增量、收获复位、洪涝/旱灾/滑坡冲减
+    # 均经 EcologicalImpact 契约路由。
+    "field_growth": {"domains.environment.fields"},
+    "fertility_factor": {"domains.environment.fields"},
+    "soil_quality": {"domains.environment.fields"},
     # 季节劳力簿记：人文劳动管理（2026-11-21 裁决由 EnvironmentState 迁入 HumanState）。
-    "field_season_labor": {"modules.agents"},
+    "field_season_labor": {"domains.society.agents.actions"},
     # 静态生成副本（P4 世界生成分段）：地形栅格由环境域从生成结果引导。
-    "terrain_cells": {"modules.ecology"},
-    # Human
-    "agents": {"modules.agents", "modules.land", "modules.social"},
-    "households": {"modules.agents", "modules.land", "modules.construction"},
-    "land_parcels": {"modules.land", "modules.tenancy_economy"},
-    "buildings": {"modules.land", "modules.construction"},
-    "construction_projects": {"modules.construction"},
-    "building_needs": {"modules.community", "modules.construction"},
-    "land_leases": {"modules.tenancy_economy"},
-    "resource_loans": {"modules.tenancy_economy"},
-    "public_treasury": {"modules.tenancy_economy"},
-    "community_reserves": {"modules.community"},
-    "service_queues": {"modules.community", "modules.tenancy_economy"},
-    "representatives": {"modules.governance"},
-    "elections": {"modules.governance"},
-    "headman_id": {"modules.governance"},
-    "acting_headman_id": {"modules.governance"},
-    "council_decisions": {"modules.governance"},
-    "appeals": {"modules.governance"},
+    "terrain_cells": {"domains.environment.terrain"},
+    # Human（P5-c：land/community/social/governance/construction/tenancy_economy
+    # 已迁入 domains/society；P5-d：agents 按职责拆入 domains/society/agents）
+    "agents": {
+        "domains.society.agents.demographics", "domains.society.agents.lifecycle",
+        "domains.society.agents.marriage", "domains.society.agents.module",
+        "domains.society.agents.reproduction",
+        "domains.society.land", "domains.society.social",
+    },
+    "households": {
+        "domains.society.agents.actions", "domains.society.agents.lifecycle",
+        "domains.society.agents.marriage", "domains.society.agents.reproduction",
+        "domains.society.land", "domains.society.construction",
+    },
+    "land_parcels": {"domains.society.land", "domains.society.economy"},
+    "buildings": {"domains.society.land", "domains.society.construction"},
+    "construction_projects": {"domains.society.construction"},
+    "building_needs": {"domains.society.community", "domains.society.construction"},
+    "land_leases": {"domains.society.economy"},
+    "resource_loans": {"domains.society.economy"},
+    "public_treasury": {"domains.society.economy"},
+    "community_reserves": {"domains.society.community"},
+    "service_queues": {"domains.society.community", "domains.society.economy"},
+    "representatives": {"domains.society.governance"},
+    "elections": {"domains.society.governance"},
+    "headman_id": {"domains.society.governance"},
+    "acting_headman_id": {"domains.society.governance"},
+    "council_decisions": {"domains.society.governance"},
+    "appeals": {"domains.society.governance"},
 }
 
 # 子容器归属（P1）：显式写死，字段被搬到错误的容器会在这里失败。
@@ -116,7 +127,7 @@ PROJECTION_MODULES = {"core.replay"}
 # 农事四字段已按 2026-11-21 裁决移交：田块生态（field_growth/fertility_factor/
 # soil_quality）归环境域所有者结算，人类只读经查询、写经契约；
 # 季节劳力簿记迁 HumanState（人文域自有状态，无需直读环境）。
-# P4 后无已知例外：地形栅格归口 Environment（modules.ecology 引导）。
+# P4 后无已知例外：地形栅格归口 Environment（domains.environment.terrain 引导）。
 HUMAN_ENV_ACCESS_EXCEPTIONS: dict[tuple[str, str], str] = {}
 
 
@@ -251,8 +262,9 @@ def test_no_untracked_cross_domain_writes():
 def test_contracts_are_never_state_writers():
     """P3c 红线：契约层只路由请求，不得写入任何状态字段（ADR 009 §2.4）。
 
-    结算、校验与事件由领域所有者执行（modules.ecology / domains.environment.hydrology /
-    modules.agents）；契约出现在任何字段的写入者集合即失败。
+    结算、校验与事件由领域所有者执行（domains.environment.resources /
+    domains.environment.fields / domains.environment.hydrology /
+    domains.society.agents.*）；契约出现在任何字段的写入者集合即失败。
     """
     offenders = {
         (module, field)
@@ -307,19 +319,36 @@ def test_human_modules_read_environment_through_query_only():
 
 ENVIRONMENT_MODULES = {
     "domains.environment.climate", "domains.environment.hydrology",
-    "modules.ecology", "modules.xigu_events",
+    "domains.environment.resources", "domains.environment.terrain",
+    "domains.environment.fields",
 }
 HUMAN_MODULES = {
-    "modules.agents", "modules.land", "modules.construction", "modules.governance",
-    "modules.tenancy_economy", "modules.social", "modules.community",
+    "domains.society.agents.actions",
+    "domains.society.agents.constants",
+    "domains.society.agents.debt",
+    "domains.society.agents.decision",
+    "domains.society.agents.demographics",
+    "domains.society.agents.household",
+    "domains.society.agents.labor",
+    "domains.society.agents.lifecycle",
+    "domains.society.agents.market",
+    "domains.society.agents.marriage",
+    "domains.society.agents.module",
+    "domains.society.agents.mortality",
+    "domains.society.agents.perception",
+    "domains.society.agents.production",
+    "domains.society.agents.reproduction",
+    "domains.society.agents.spatial",
+    "domains.society.land", "domains.society.construction",
+    "domains.society.governance", "domains.society.economy",
+    "domains.society.social", "domains.society.community",
 }
+AGENTS_COORDINATOR = "domains.society.agents.module"
 ENTRY_MODULES = {"vale.cli", "vale.main", "vale.api.main"}
 
 # 已知越界：core 依赖领域、领域互相依赖。修掉后必须删条目。
 KNOWN_IMPORT_VIOLATIONS: dict[tuple[str, str], str] = {
-    ("core.replay", "modules.social"): "D3：基础设施依赖人类领域（P1 消除）",
-    ("modules.construction", "modules.agents"): "D1：施工依赖人类主模块（P6 抽取公共派生函数）",
-    ("modules.governance", "modules.agents"): "D2：治理依赖人类主模块（P6 抽取公共派生函数）",
+    ("core.replay", "domains.society.social"): "D3：基础设施依赖人类领域（P1 消除）",
 }
 
 
@@ -348,7 +377,7 @@ def internal_import_edges() -> set[tuple[str, str]]:
                     continue
                 short = target.removeprefix("vale.").removeprefix("config.")
                 edges.add((module, short))
-                # ``from vale.modules import social`` 的别名可能指模块，只在确为模块时计入。
+                # ``from vale.domains.society import social`` 的别名可能指模块，只在确为模块时计入。
                 for alias in node.names:
                     candidate = f"{short}.{alias.name}"
                     if candidate in known_modules:
@@ -370,15 +399,15 @@ def test_import_direction_rules():
     for importer, imported in internal_import_edges():
         if _is_entry(imported) or imported == "scripts":
             violations.add((importer, imported))
-        if importer.startswith("core.") and imported.startswith("modules."):
+        if importer.startswith("core.") and imported.startswith(("modules.", "domains.")):
             violations.add((importer, imported))
         if importer in ENVIRONMENT_MODULES | HUMAN_MODULES:
             if importer in ENVIRONMENT_MODULES and imported in HUMAN_MODULES:
                 violations.add((importer, imported))
             if importer in HUMAN_MODULES and imported in ENVIRONMENT_MODULES:
                 violations.add((importer, imported))
-        # 人类主模块不得被其他人文子系统反向依赖（D1/D2）。
-        if importer in HUMAN_MODULES - {"modules.agents"} and imported == "modules.agents":
+        # 其他人类子系统不得反向依赖人物子系统协调器（避免业务回灌协调器）。
+        if importer in HUMAN_MODULES - {AGENTS_COORDINATOR} and imported == AGENTS_COORDINATOR:
             violations.add((importer, imported))
         if importer.startswith("world.") and imported.startswith(
             ("modules.", "observability.", "cli.", "main.")

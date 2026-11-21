@@ -13,7 +13,7 @@ from vale.core.event_log import EventLog
 from vale.core.household import household_of
 from vale.core.state import AgentState, DebtRecord, HouseholdState
 from vale.core.world import World
-from vale.modules.agents import AgentModule
+from vale.domains.society.agents import AgentModule
 from vale.observability.render import render_event
 
 

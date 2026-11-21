@@ -26,7 +26,7 @@ from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
 from vale.core.state import AgentState, DebtRecord, HouseholdState
 from vale.core.world import World
-from vale.modules.agents import (
+from vale.domains.society.agents import (
     AgentModule,
     Perception,
     SpatialIndex,

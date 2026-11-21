@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 from vale.core.state import ResourcePoolSpec, ResourcePoolState
-from vale.modules.ecology import EcologyModule
+from vale.domains.environment.resources import EcologyModule
 from vale.domains.wildlife.wildlife import WildlifeModule
 
 
@@ -106,7 +106,7 @@ def test_harvest_on_unregistered_pool_raises_in_catalog_world():
     """P4 收敛：有池目录的世界，未登记池不再原额给付（直接调用所有者即抛错）。"""
     import pytest
 
-    from vale.modules.ecology import harvest_from_pool
+    from vale.domains.environment.resources import harvest_from_pool
 
     world = _world({"foothill_woodland": ResourcePoolSpec(
         resource_id="foothill_woodland", resource_type="firewood",

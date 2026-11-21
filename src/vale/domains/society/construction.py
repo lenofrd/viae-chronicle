@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from vale.contracts.queries import EnvironmentQuery
 from vale.core.state import BuildingNeedState, BuildingState, ConstructionProjectState
-from vale.modules.agents import age_years
+from vale.domains.society.agents.demographics import age_years
 
 # Costs are deliberately explicit and modest; future economy balancing can
 # move these into location tuning without changing the event contract.

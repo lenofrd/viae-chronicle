@@ -2,7 +2,7 @@
 
 ADR 009 §2.4/§2.5：本契约是按资源类型路由到状态所有者的门面，不拥有库存、
 不做结算——生态资源池按域分流（P4，2026-11-21 裁决）：植被类池归环境域
-（``modules.ecology.harvest_from_pool``），鱼/猎物池归动物域
+（``domains.environment.resources.harvest_from_pool``），鱼/猎物池归动物域
 （``domains.wildlife.wildlife.harvest_from_wildlife``）；生活用水归水文库存
 （``domains.environment.hydrology.withdraw_water``）。P3b 期间结算曾放在本契约内，P3c 按
 裁决移交所有者；契约层不得出现在状态写入者集合（架构测试红线
@@ -11,8 +11,8 @@ ADR 009 §2.4/§2.5：本契约是按资源类型路由到状态所有者的门�
 from __future__ import annotations
 
 from vale.domains.environment import hydrology
+from vale.domains.environment.resources import harvest_from_pool
 from vale.domains.wildlife import wildlife
-from vale.modules import ecology
 
 
 class ResourceService:
@@ -30,7 +30,7 @@ class ResourceService:
         """
         requested = max(0.0, float(requested))
         if world.state.environment.ecological_resources.get(node_id) is not None:
-            return ecology.harvest_from_pool(
+            return harvest_from_pool(
                 world, node_id, requested,
                 agent_id=agent_id, household_id=household_id, action=action,
             )

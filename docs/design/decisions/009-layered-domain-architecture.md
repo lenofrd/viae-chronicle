@@ -183,6 +183,12 @@
 
 **目录落地注记（2026-11-21，批 3）**：`worldgen/` 整体迁入 `world/`；`climate`、`hydrology` 迁入 `domains/environment/`，`wildlife` 迁入 `domains/wildlife/`；`domains/society/` 本轮只建包骨架，`agents`、`ecology` 及其余模块暂留 `modules/`，内部拆分随功能批次。目录搬迁不改运行时行为，项目内旧路径 import 一次改净、不留 re-export。
 
+**P5-a 落地注记（2026-11-21）**：`modules/ecology.py` 按职责拆分迁入环境域——`domains/environment/terrain.py`（地形栅格引导）、`fields.py`（田块生态结算：长势、动态/静态地力、灾害冲减）、`resources.py`（植被类池引导/再生/采集结算，模块注册名仍为 `ecology`）。池初始化、封顶再生与同 tick 额度采集结算的共享机制落到基础设施 `core/pools.py`，由环境域与动物域各自调用，两域不互相导入；契约仍只路由。旧路径 `modules.ecology` 已删除，项目内 import 一次改净。两年基线（seed 20261118，720 tick）与 P4 工作区逐字段 byte-identical。
+
+**P5-b/P5-c 落地注记（2026-11-21）**：`xigu_events.py` 迁入场景层 `world/scenarios/xigu/events.py`（模块注册名仍为 `xigu_events`），不再计入环境域模块集合；`land`、`community`、`social`、`governance`、`construction`、`tenancy_economy`（更名 `economy`）迁入 `domains/society/`。D1/D2（施工、治理依赖人类主模块）与 D3（core.replay 依赖社会互动投影）当时仍登记为已知越界。
+
+**P5-d 落地注记（2026-11-21）**：`modules/agents.py`（约 4390 行）未整体改名搬迁，而是按职责拆入 `domains/society/agents/` 子包——`module.py` 只保留 `AgentModule` 与日结算调度顺序（`step`/`_settle`/`_log_agent_error`），业务方法按 mixin 归口：`lifecycle`（衰老/死亡/日内推进）、`labor`（分工计划）、`decision`（感知打分选择）、`actions`（动作执行与还债）、`household`（日常接触/用水）、`market`、`mortality`（死亡继承）、`marriage`、`reproduction`（分家生育）、`debt`（催收纠纷）；纯函数与数据类独立成 `perception`、`production`、`spatial`、`demographics`、`constants`。模块注册名仍为 `agents`，`modules/` 包已删除、旧路径 import 一次改净。D1/D2 随拆分消除（施工/治理改依赖 `agents.demographics.age_years`），D3 仍待 P6；状态所有权登记同步细分到子模块（`tests/test_architecture_boundaries.py`）。两年基线（seed 20261118，720 tick）与 P5-c 工作区逐字段 identical。
+
 ## 4. 配置与实现约束
 
 1. 遵循 ADR 003：通用机制与地点配置分离；通用规则进入系统机制，地点物种分布、栖息地参数和资源条件进入对应 location 配置，并使用 Pydantic 校验。

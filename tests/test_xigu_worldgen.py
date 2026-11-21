@@ -117,7 +117,7 @@ def test_initial_households_register_at_head_house_and_keep_vacant_split_homes()
     from vale.core.config_loader import LoadedConfig, load_config
     from vale.core.event_log import EventLog
     from vale.core.world import World
-    from vale.modules.agents import AgentModule
+    from vale.domains.society.agents import AgentModule
 
     base = load_config("brookvale-town-001")
     generated = generate_xigu_town(base_spatial=base.spatial)
@@ -149,7 +149,7 @@ def test_gathering_target_outside_pool_catalog_fails_at_startup():
     from vale.core.config_loader import LoadedConfig, load_config
     from vale.core.event_log import EventLog
     from vale.core.world import World
-    from vale.modules.agents import AgentModule
+    from vale.domains.society.agents import AgentModule
 
     base = load_config("brookvale-town-001")
     generated = generate_xigu_town(base_spatial=base.spatial)
@@ -173,7 +173,7 @@ def test_world_with_gathering_but_no_pool_catalog_fails_at_startup():
     from vale.core.config_loader import load_config
     from vale.core.event_log import EventLog
     from vale.core.world import World
-    from vale.modules.agents import AgentModule
+    from vale.domains.society.agents import AgentModule
 
     base = load_config("brookvale-town-001")
     assert base.agents.tuning.gathering.actions  # 基础世界自带 hunt/fish
@@ -187,7 +187,7 @@ def test_world_without_gathering_may_skip_pool_catalog():
     from vale.core.config_loader import load_config
     from vale.core.event_log import EventLog
     from vale.core.world import World
-    from vale.modules.agents import AgentModule
+    from vale.domains.society.agents import AgentModule
 
     base = load_config("brookvale-town-001")
     base.agents.tuning.gathering.actions.clear()
