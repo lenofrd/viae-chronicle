@@ -105,7 +105,9 @@
 
 ```text
 入口: cli / main / scripts.run_xigu / viz.sim_worker
-  world.replay -> domains.{society,environment,wildlife}.state、core.pools、domains.society.social
+  world.replay -> core.replay.engine、domains.{environment,wildlife,society}.projection
+  core.replay -> core.state、core.pools（通用引擎；无 domains 导入）
+  domains.{environment,wildlife,society}.projection -> 本领域 state、core.*、本领域模块
   core.state -> domains.*.state（组合根：WorldState 由三个领域容器组成，架构闸唯一豁免）
   core.pools / core.snapshots -> 无内部依赖（跨领域共享值对象）
   domains.society.agents.module -> agents.{lifecycle,labor,decision,actions,household,
@@ -120,4 +122,4 @@
 
 §6 的 6 条改造项在 P3b/P3c/P5 已全部落地（采集、灾害、野遇、取水走契约；天气/水位/土壤走 `EnvironmentQuery`；`construction`/`land` 不再读 `agents` 主模块，只依赖 `agents.demographics.age_years` 派生函数）。`agents` 协调器不再被其他人类子系统反向依赖，架构闸以此设红线。
 
-P6（2026-11-21）：D3（`core.replay → domains.society.social`）已消除——Replay 整体迁入 `world/replay.py`；`core/household.py` 迁 `domains/society/households.py`；`core/state.py` 只留组合根，且是唯一被豁免的 core→domain 导入。当前 `KNOWN_IMPORT_VIOLATIONS` 为空。
+P6（2026-11-21）：D3 已消除——老板裁决「core 只留通用重放引擎，领域投影由各领域提供，world 组装注册」，据此 `core/replay.py` 无 domain 导入、三个 `domains/*/projection.py` 承接投影、`world/replay.py` 只注册；`core/household.py` 迁 `domains/society/households.py`；`core/state.py` 只留组合根，且是唯一被豁免的 core→domain 导入。当前 `KNOWN_IMPORT_VIOLATIONS` 为空。

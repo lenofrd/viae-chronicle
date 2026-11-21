@@ -119,7 +119,14 @@ CONTAINER_OF: dict[str, str] = {
 # P3b 把采集/取水与灾害收敛到写入契约；P3c 进一步把结算移交领域所有者，契约只路由（见红线测试）。
 KNOWN_CROSS_DOMAIN_WRITES: dict[tuple[str, str], str] = {}
 
-PROJECTION_MODULES = {"world.replay"}
+# 投影模块（core 通用引擎 + 三个领域投影）单独豁免：它按事件重建状态，
+# 是投影而非领域写入（2026-11-21 裁决：引擎归 core，处理器归各领域，组装归 world）。
+PROJECTION_MODULES = {
+    "core.replay",
+    "domains.environment.projection",
+    "domains.wildlife.projection",
+    "domains.society.projection",
+}
 
 # P2 读侧收口：人类模块只能经 EnvironmentQuery 读环境。
 # 农事四字段已按 2026-11-21 裁决移交：田块生态（field_growth/fertility_factor/
@@ -458,6 +465,17 @@ def test_core_state_is_composition_root_only():
     )
     for module, path in DOMAIN_STATE_MODULES.items():
         assert (SRC / (path.replace(".", "/") + "/state.py")).exists(), f"缺少领域状态模块 {module}"
+
+
+def test_replay_engine_is_domain_agnostic_and_assembled_in_world():
+    """2026-11-21 裁决：core 只留通用引擎，投影按域归各领域，组装归 world。"""
+    edges = internal_import_edges()
+    core_imports = {imported for importer, imported in edges if importer == "core.replay"}
+    offenders = sorted(target for target in core_imports if target.startswith("domains."))
+    assert offenders == [], f"core.replay 不得导入领域（含惰性 import）：{offenders}"
+    world_imports = {imported for importer, imported in edges if importer == "world.replay"}
+    missing = sorted(PROJECTION_MODULES - {"core.replay"} - world_imports)
+    assert missing == [], f"world.replay 缺领域投影注册：{missing}"
 
 
 # ---------------------------------------------------------------------------

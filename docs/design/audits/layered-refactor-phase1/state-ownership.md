@@ -69,4 +69,4 @@
 
 - 状态模型本身也按领域落位：`domains/environment/state.py`、`domains/wildlife/state.py`、`domains/society/state.py`。
 - `core/state.py` 只剩 `WorldState` 组合根；跨领域共享值对象在 `core/snapshots.py`（气候快照）与 `core/pools.py`（资源池形状）。
-- 投影（Replay）迁 `world/replay.py`：它是重建三个领域状态的协调机制，不再属于基础设施，也不再反向依赖领域业务模块（D3 已消除）。
+- 投影（Replay）按 2026-11-21 裁决拆分：`core/replay.py` 只留通用引擎（事件读取/顺序/派发/finalize/validate），领域投影在 `domains/{environment,wildlife,society}/projection.py`，`world/replay.py` 只注册组装并暴露 `rebuild_state`。基础设施不再反向依赖领域业务（D3 已消除）。

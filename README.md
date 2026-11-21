@@ -26,17 +26,20 @@ src/vale/              模拟核心
   config/schema/       配置模型与校验（Pydantic；世界 YAML 数据仍在仓库根 config/）
   domains/             领域层（ADR 009）
     environment/       环境域：state 状态模型、climate 气候、hydrology 水文库存、
-                       terrain 地形栅格、fields 田块生态、resources 植被类资源池
-    wildlife/          动物域：state 状态模型、wildlife 鱼/猎物存量池（个体与种群留待后续）
+                       terrain 地形栅格、fields 田块生态、resources 植被类资源池、
+                       projection 环境事件投影
+    wildlife/          动物域：state 状态模型、wildlife 鱼/猎物存量池（个体与种群留待后续）、
+                       projection 动物事件投影
     society/           人文社会域：state 状态模型、households 家庭访问器、
                        land 土地、community 社区设施、social 社会互动、
-                       governance 治理、construction 建造、economy 租佃经济；
+                       governance 治理、construction 建造、economy 租佃经济、
+                       projection 人文事件投影；
                        agents/ 人物子系统（module 协调日结算，lifecycle 生命周期、
                        labor 劳动、decision 决策、actions 动作、household 家庭日常、
                        market 集市、mortality 死亡继承、marriage 婚配、
                        reproduction 分家生育、debt 债务催收、perception 感知、
                        production 生产口径、spatial 距离索引、demographics 人口基础）
-  world/               世界协调：replay 事件重建（唯一投影入口）、xigu 世界生成组合门面
+  world/               世界协调：replay 注册三领域投影并暴露 rebuild_state、xigu 世界生成组合门面
                        与 nature/settlement 分段
   world/scenarios/xigu/ 溪古镇场景独有逻辑（xigu_events 季节性灾害/村落事件），不进通用领域
   observability/       只读观察层（事件查询、文本渲染、导出、CLI viewer）

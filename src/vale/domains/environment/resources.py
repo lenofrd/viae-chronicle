@@ -23,6 +23,11 @@ from vale.domains.wildlife.state import WILDLIFE_RESOURCE_TYPES
 from vale.domains.environment.terrain import ensure_terrain_cells
 
 
+def owns_resource_type(resource_type: str) -> bool:
+    """池类型是否归环境域（fish / game 归动物域，2026-11-21 P4 裁决）。"""
+    return resource_type not in WILDLIFE_RESOURCE_TYPES
+
+
 class EcologyModule:
     name = "ecology"
     depends_on = ["climate"]
@@ -32,7 +37,7 @@ class EcologyModule:
         season = EnvironmentQuery.season(world).value
         pools = world.state.environment.ecological_resources
         for node_id, spec in pool_specs(world).items():
-            if spec.resource_type in WILDLIFE_RESOURCE_TYPES:
+            if not owns_resource_type(spec.resource_type):
                 continue  # 鱼/猎物池归动物域（domains.wildlife.wildlife 拥有并结算）
             pool = pools.get(node_id)
             if pool is None:
