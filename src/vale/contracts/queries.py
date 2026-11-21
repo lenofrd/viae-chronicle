@@ -126,7 +126,7 @@ class SpatialQuery:
 class WildlifeQuery:
     """动物只读查询（ADR 009 §2.5）。
 
-    P4 起 ``WildlifeState.pools`` 承载鱼/猎物存量池（``modules.wildlife``
+    P4 起 ``WildlifeState.pools`` 承载鱼/猎物存量池（``domains.wildlife.wildlife``
     所有者）；P5 填入个体与种群后在此扩展。本类只提供读入口，不得被
     调用方用来修改动物状态。
     """

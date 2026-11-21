@@ -1,6 +1,6 @@
 from vale.config.schema.spatial_units import NodeType
-from vale.worldgen.nature import harvest_resource, regenerate_resource
-from vale.worldgen.xigu import (
+from vale.world.nature import harvest_resource, regenerate_resource
+from vale.world.xigu import (
     XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town, validate_xigu_town,
 )
 

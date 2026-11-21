@@ -14,7 +14,7 @@ from vale.modules.governance import (
     recognize_election, register_representative, submit_appeal,
     tally_election, resolve_appeal,
 )
-from vale.worldgen.xigu import build_xigu_agents_config, generate_xigu_town
+from vale.world.xigu import build_xigu_agents_config, generate_xigu_town
 
 
 def make_world():

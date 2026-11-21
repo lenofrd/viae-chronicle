@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from vale.core.state import ResourcePoolSpec, ResourcePoolState
 from vale.modules.ecology import EcologyModule
-from vale.modules.wildlife import WildlifeModule
+from vale.domains.wildlife.wildlife import WildlifeModule
 
 
 class EventSink:

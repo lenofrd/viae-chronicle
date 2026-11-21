@@ -3,14 +3,16 @@
 ADR 009 §2.4/§2.5：本契约是按资源类型路由到状态所有者的门面，不拥有库存、
 不做结算——生态资源池按域分流（P4，2026-11-21 裁决）：植被类池归环境域
 （``modules.ecology.harvest_from_pool``），鱼/猎物池归动物域
-（``modules.wildlife.harvest_from_wildlife``）；生活用水归水文库存
-（``modules.hydrology.withdraw_water``）。P3b 期间结算曾放在本契约内，P3c 按
+（``domains.wildlife.wildlife.harvest_from_wildlife``）；生活用水归水文库存
+（``domains.environment.hydrology.withdraw_water``）。P3b 期间结算曾放在本契约内，P3c 按
 裁决移交所有者；契约层不得出现在状态写入者集合（架构测试红线
 ``test_contracts_are_never_state_writers``）。
 """
 from __future__ import annotations
 
-from vale.modules import ecology, hydrology, wildlife
+from vale.domains.environment import hydrology
+from vale.domains.wildlife import wildlife
+from vale.modules import ecology
 
 
 class ResourceService:
@@ -47,5 +49,5 @@ class ResourceService:
 
     @staticmethod
     def withdraw_water(world, node_id: str, amount: float, *, requester_id: str = "") -> float:
-        """生活用水：路由到环境域水文结算（``modules.hydrology``）。"""
+        """生活用水：路由到环境域水文结算（``domains.environment.hydrology``）。"""
         return hydrology.withdraw_water(world, node_id, amount, requester_id=requester_id)

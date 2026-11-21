@@ -1,6 +1,6 @@
 """溪谷镇世界生成·聚落段（P4，ADR 009 §3.2/§3.5）。
 
-读取自然段公开结果（worldgen.nature），在地理骨架上布点：地标、水系、
+读取自然段公开结果（world.nature），在地理骨架上布点：地标、水系、
 资源节点占位、田块与住宅，随后建道路网与距离矩阵、派发家庭候选田块。
 不覆盖自然地理骨架；资源池参数不投影进节点 attributes（P4 裁决：池目录
 是唯一真相源，由 LoadedConfig.resources 传入运行时）。
@@ -16,7 +16,7 @@ from typing import Iterable
 
 from vale.config.schema.spatial_units import DistanceEdge, NodeType, SpatialConfig, SpatialNode
 
-from vale.worldgen.nature import terrain_at
+from vale.world.nature import terrain_at
 
 
 @dataclass(frozen=True)

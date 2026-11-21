@@ -11,7 +11,7 @@ from vale.modules.agents import AgentModule
 from vale.modules.construction import advance_construction, request_building, request_repair, request_expansion, request_demolition, share_building_access, pause_construction, resume_construction, cancel_construction, abandon_construction
 from vale.modules.governance import cast_council_vote, propose_council_decision, register_representative
 from vale.modules.land import change_land_use
-from vale.worldgen.xigu import build_xigu_agents_config, generate_xigu_town
+from vale.world.xigu import build_xigu_agents_config, generate_xigu_town
 
 
 def make_world():

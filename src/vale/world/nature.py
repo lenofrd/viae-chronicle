@@ -40,7 +40,7 @@ class VegetationProfile:
 
 # 静态目录：地形带 -> 植被与栖息地描述。P5 种群系统按栖息地条件决定物种
 # 分布（ADR 009 §2.2B）；本表在 P4 仅作为生成结果的公开数据。[调参] 来源：
-# 与 worldgen.xigu._terrain_at 的地形带划分一一对应，数值为描述性初值。
+# 与 world.xigu._terrain_at 的地形带划分一一对应，数值为描述性初值。
 VEGETATION_PROFILES: dict[str, VegetationProfile] = {
     zone: VegetationProfile(zone, *values) for zone, values in {
         "river_bank": ("河谷柳灌丛带", .35, "moderate", "水陆交错带，水鸟与小型水栖动物觅食地"),
@@ -92,7 +92,7 @@ def make_terrain(config) -> list[TerrainCell]:
 def make_resource_catalog() -> dict[str, ResourcePoolSpec]:
     """生态资源池目录（键 = 资源节点 id）。
 
-    fish / game 类型池归动物域（modules.wildlife 拥有并结算）；其余归环境域
+    fish / game 类型池归动物域（domains.wildlife.wildlife 拥有并结算）；其余归环境域
     （modules.ecology）。deep_mountain 为受限封禁池。
     """
     return {

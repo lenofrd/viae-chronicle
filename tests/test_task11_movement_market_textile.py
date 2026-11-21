@@ -20,7 +20,7 @@ from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
 from vale.core.world import World
 from vale.modules.agents import IMPOSSIBLE, AgentModule, SpatialIndex
-from vale.modules.climate import ClimateModule
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 
 INITIAL_STAMINA = 80.0  # 配置 initial_stamina；锚点百分比以其为分母（与 STATUS 校准表一致）

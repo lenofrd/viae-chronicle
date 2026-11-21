@@ -23,12 +23,15 @@ src/vale/              模拟核心
   contracts/           跨领域契约（只读查询 queries；写入契约 resources / impacts 只路由，
                        结算在领域所有者模块）
   config/schema/       配置模型与校验（Pydantic；世界 YAML 数据仍在仓库根 config/）
-  modules/             可插拔模拟模块（climate 气候、agents 人物/家庭/经济、community 社区设施、
-                       land 土地、construction 建造、governance 治理、tenancy_economy 租佃经济、
-                       ecology 生态（植被类资源池+田块生态）、wildlife 动物（鱼/猎物池）、
-                       hydrology 水文库存、xigu_events 西谷事件）
-  worldgen/            世界生成（nature 自然段：地形栅格/资源池目录/静态植被栖息地描述；
+  domains/             领域层（ADR 009）
+    environment/       环境域：climate 气候、hydrology 水文库存
+    wildlife/          动物域：wildlife 鱼/猎物存量池（个体与种群留待 P5）
+    society/           人文社会域（本轮仅包骨架，模块随后续批次迁入）
+  world/               世界生成（nature 自然段：地形栅格/资源池目录/静态植被栖息地描述；
                        settlement 聚落段：布点/路网/距离矩阵；xigu 组合门面按种子生成西谷镇）
+  modules/             可插拔模拟模块（agents 人物/家庭/经济、community 社区设施、
+                       land 土地、construction 建造、governance 治理、tenancy_economy 租佃经济、
+                       ecology 生态（植被类资源池+田块生态）、xigu_events 西谷事件）
   observability/       只读观察层（事件查询、文本渲染、导出、CLI viewer）
   cli.py, main.py      命令行入口（events list / timeline / run 等）
   api/                 HTTP/查询接口占位（routes），当前非主要入口

@@ -28,7 +28,7 @@ from vale.core.state import (
 from vale.core.world import World
 from vale.modules import social
 from vale.modules.agents import AgentModule
-from vale.modules.climate import ClimateModule
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 
 

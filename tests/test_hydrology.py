@@ -11,7 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 from vale.config.schema.natural_params import WaterSupplyParams
-from vale.modules.hydrology import (
+from vale.domains.environment.hydrology import (
     ensure_source,
     regenerate_water_sources,
     withdraw_water,
@@ -21,7 +21,7 @@ from vale.core.event_log import EventLog
 from vale.core.replay import rebuild_state
 from vale.core.scheduler import run_tick
 from vale.core.world import World
-from vale.modules.climate import ClimateModule
+from vale.domains.environment.climate import ClimateModule
 
 
 def _world(*, supply: dict[str, WaterSupplyParams] | None = None, ratio: float = 0.5) -> World:

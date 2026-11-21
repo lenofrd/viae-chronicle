@@ -16,16 +16,15 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from vale.config.schema.natural_params import DroughtState, IrrigationGear, Season, WeatherType
-from vale.modules.hydrology import regenerate_water_sources
-
-from ..core.calendar import (
+from vale.core.calendar import (
     calendar_from_tick,
     season_for_month,
     season_progress_from_day_of_year,
     start_day_of_year,
 )
-from ..core.state import ClimateSnapshot
+from vale.core.state import ClimateSnapshot
+from vale.config.schema.natural_params import DroughtState, IrrigationGear, Season, WeatherType
+from vale.domains.environment.hydrology import regenerate_water_sources
 
 # weather_trend_window 地点参数缺失，使用默认值 7，待确认
 DEFAULT_TREND_WINDOW = 7
@@ -229,7 +228,7 @@ class ClimateModule:
 
         # 8. 任务30：水文演化（确定性，随当日降水）
         self._evolve_hydrology(world, cfg, precip)
-        # P3a：按最新水位为水源补水（水源库存归环境域，结算在 modules.hydrology，P3c）
+        # P3a：按最新水位为水源补水（水源库存归环境域，结算在 domains.environment.hydrology，P3c）
         regenerate_water_sources(world)
 
     # ------------------------------------------------------------------

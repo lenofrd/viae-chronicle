@@ -5,7 +5,7 @@
 并再生，捕获结算由 ``harvest_from_wildlife`` 执行（复用 ``modules.ecology``
 的池结算机制，同一口径）；人类模块经写入契约
 （``contracts.resources.ResourceService.harvest``）提交请求。动物个体与种群
-行为留给 P5；环境域只提供栖息地条件（worldgen.nature 静态植被/栖息地描述）。
+行为留给 P5；环境域只提供栖息地条件（world.nature 静态植被/栖息地描述）。
 """
 from __future__ import annotations
 

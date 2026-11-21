@@ -20,11 +20,11 @@ from vale.core.scheduler import run_tick
 from vale.core.state import ResourcePoolState
 from vale.core.world import World
 from vale.modules.agents import AgentModule
-from vale.modules.climate import ClimateModule
+from vale.domains.environment.climate import ClimateModule
 from vale.modules.ecology import EcologyModule
-from vale.modules.wildlife import WildlifeModule
+from vale.domains.wildlife.wildlife import WildlifeModule
 from vale.observability.render import render_event
-from vale.worldgen.xigu import (
+from vale.world.xigu import (
     XiguGenerationConfig,
     build_xigu_agents_config,
     generate_xigu_town,

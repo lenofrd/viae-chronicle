@@ -179,7 +179,9 @@
 4. 固定的溪古镇核心地理锚点与可变的外围世界应由世界生成配置和确定性种子共同约束，不能依靠无约束分区拼接破坏河流、山脉和流域连续性。
 5. 世界生成应复用既有空间节点与边，不创建平行空间图。
 
-**P4 落地注记（2026-11-21）**：`worldgen` 已按上述边界分段——自然段（`worldgen/nature.py`）产出地形栅格、资源池目录（`ResourcePoolSpec`，经 `LoadedConfig.resources` 进运行时）与静态植被 / 栖息地描述（纯数据表达，动态生物量 / 退化未启用，P5 前不参与运行时行为）；聚落段（`worldgen/settlement.py`）只读自然结果，负责布点、路网与距离矩阵；`worldgen/xigu.py` 保留为组合门面。节点 attributes 不再携带 `resource_*` 池参数副本，池目录是唯一真相源。鱼 / 猎物池按 §2.2B/§2.4 归动物域（`modules/wildlife` 引导与结算），植被类池归环境域（`modules/ecology`）。同种子逐字段等价已验证（`.ai/STATUS.md`）。
+**P4 落地注记（2026-11-21）**：世界生成已按上述边界分段——自然段（`world/nature.py`）产出地形栅格、资源池目录（`ResourcePoolSpec`，经 `LoadedConfig.resources` 进运行时）与静态植被 / 栖息地描述（纯数据表达，动态生物量 / 退化未启用，P5 前不参与运行时行为）；聚落段（`world/settlement.py`）只读自然结果，负责布点、路网与距离矩阵；`world/xigu.py` 保留为组合门面。节点 attributes 不再携带 `resource_*` 池参数副本，池目录是唯一真相源。鱼 / 猎物池按 §2.2B/§2.4 归动物域（`domains/wildlife/wildlife.py` 引导与结算），植被类池归环境域（`modules/ecology`）。同种子逐字段等价已验证（`.ai/STATUS.md`）。
+
+**目录落地注记（2026-11-21，批 3）**：`worldgen/` 整体迁入 `world/`；`climate`、`hydrology` 迁入 `domains/environment/`，`wildlife` 迁入 `domains/wildlife/`；`domains/society/` 本轮只建包骨架，`agents`、`ecology` 及其余模块暂留 `modules/`，内部拆分随功能批次。目录搬迁不改运行时行为，项目内旧路径 import 一次改净、不留 re-export。
 
 ## 4. 配置与实现约束
 
@@ -194,10 +196,10 @@
 
 本决策不授权一次性重写自然环境或人文系统。迁移必须分阶段、最小改动并保持现有行为可验证：
 
-1. 先审计现有 `WorldState`、`ClimateModule`、`EcologyModule`、`AgentModule`、`worldgen/xigu.py`、资源操作和 Scheduler 的真实读写关系。
+1. 先审计现有 `WorldState`、`ClimateModule`、`EcologyModule`、`AgentModule`、`world/xigu.py`、资源操作和 Scheduler 的真实读写关系。
 2. 建立状态所有权清单、子系统依赖图和公开契约；标出当前违反边界的直接读写。
 3. 拆分顺序为：先按领域拆出状态容器，再抽出只读查询，最后收敛写入。原「先抽查询」的顺序已于 2026-11-20 由老板裁决取代（见 `.ai/DECISIONS.md`）：在扁平 `WorldState` 上先建查询，会为了取数直接读所有领域字段，等于把耦合固化进新 API；容器先分，查询才有明确的读边界。
-4. 将 `worldgen/xigu.py` 中自然地理生成与聚落生成职责逐步分离，保留现有世界生成顺序和溪古镇兼容性。
+4. 将 `world/xigu.py` 中自然地理生成与聚落生成职责逐步分离，保留现有世界生成顺序和溪古镇兼容性。
 5. 在动物模块实现前，审查现有 Agent 执行基础设施，复用可复用部分；不复制整套人类 Agent，也不强行继承人类状态模型。
 6. 每一步保留或补充确定性、事件守恒、Replay、空间连续性和长程生态测试；不得通过删除实质断言或缩短长期测试来宣称迁移完成。
 7. 不因本 ADR 自动移动大量文件、修改配置路径或改变既有领域行为。具体迁移方案应单独审查和分阶段实施。

@@ -22,7 +22,7 @@ from vale.core.scheduler import run_tick
 from vale.core.state import DebtRecord
 from vale.core.world import World
 from vale.modules.agents import IMPOSSIBLE, AgentModule, select_creditor
-from vale.modules.climate import ClimateModule
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 
 

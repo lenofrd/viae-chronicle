@@ -1,7 +1,7 @@
 """Deterministic procedural generator for 溪谷镇 — 组合门面（P4 分段）。
 
-自然段（worldgen.nature）产出地形栅格、资源池目录与静态植被/栖息地描述；
-聚落段（worldgen.settlement）读取自然结果，在其上布点、建路网与距离矩阵、
+自然段（world.nature）产出地形栅格、资源池目录与静态植被/栖息地描述；
+聚落段（world.settlement）读取自然结果，在其上布点、建路网与距离矩阵、
 派发家庭候选田块；本模块只做组合与整体校验（ADR 009 §3）。
 
 This is an edge adapter: runtime output uses the existing SpatialConfig schema.
@@ -22,9 +22,9 @@ from dataclasses import dataclass, field
 from vale.config.schema.agents import AgentAssets, AgentConfig, AgentSex, AgentsConfig, GatheringActionTuning
 from vale.config.schema.spatial_units import NodeType, SpatialConfig, SpatialNode
 
-from vale.worldgen import settlement
-from vale.worldgen.nature import ResourcePoolSpec, TerrainCell, VegetationProfile, generate_nature
-from vale.worldgen.settlement import RoadSegment
+from vale.world import settlement
+from vale.world.nature import ResourcePoolSpec, TerrainCell, VegetationProfile, generate_nature
+from vale.world.settlement import RoadSegment
 
 
 @dataclass(frozen=True)

@@ -15,7 +15,7 @@ from vale.modules.community import (
     request_community_relief, settle_community_reserves, settle_storage_capacity,
     update_building_needs,
 )
-from vale.worldgen.xigu import build_xigu_agents_config, generate_xigu_town
+from vale.world.xigu import build_xigu_agents_config, generate_xigu_town
 
 
 def make_world():

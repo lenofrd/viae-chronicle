@@ -26,10 +26,10 @@ from vale.core.state import (
 )
 from vale.core.world import World
 from vale.modules.agents import AgentModule
-from vale.modules.climate import ClimateModule
+from vale.domains.environment.climate import ClimateModule
 from vale.modules.ecology import EcologyModule
-from vale.modules.wildlife import WildlifeModule
-from vale.worldgen.xigu import (
+from vale.domains.wildlife.wildlife import WildlifeModule
+from vale.world.xigu import (
     XiguGenerationConfig,
     build_xigu_agents_config,
     generate_xigu_town,
@@ -45,15 +45,15 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "vale"
 # 是投影而非领域写入。未登记的字段会在 test_world_state_fields_have_declared_owner 失败。
 STATE_OWNERS: dict[str, set[str]] = {
     # Environment（自然）
-    "climate": {"modules.climate"},
-    "water_level_ratio": {"modules.climate"},
-    "irrigation_gear": {"modules.climate"},
+    "climate": {"domains.environment.climate"},
+    "water_level_ratio": {"domains.environment.climate"},
+    "irrigation_gear": {"domains.environment.climate"},
     # 采集结算在环境域所有者（P3c 起契约只路由，不得登记为写入者）。
     # P4：fish/game 池迁动物域容器（WildlifeState.pools），环境容器只留植被类池。
     "ecological_resources": {"modules.ecology"},
-    "pools": {"modules.wildlife"},
-    # P3a 水源库存：环境域状态，P3c 起结算归水文实现 modules.hydrology。
-    "water_sources": {"modules.hydrology"},
+    "pools": {"domains.wildlife.wildlife"},
+    # P3a 水源库存：环境域状态，P3c 起结算归水文实现 domains.environment.hydrology。
+    "water_sources": {"domains.environment.hydrology"},
     # 田块生态状态：ADR 009 §2.3/§2.4（2026-11-21 修订）归环境域所有者 modules.ecology
     # 结算——农事长势增量、收获复位、洪涝/旱灾/滑坡冲减均经 EcologicalImpact 契约路由。
     "field_growth": {"modules.ecology"},
@@ -251,7 +251,7 @@ def test_no_untracked_cross_domain_writes():
 def test_contracts_are_never_state_writers():
     """P3c 红线：契约层只路由请求，不得写入任何状态字段（ADR 009 §2.4）。
 
-    结算、校验与事件由领域所有者执行（modules.ecology / modules.hydrology /
+    结算、校验与事件由领域所有者执行（modules.ecology / domains.environment.hydrology /
     modules.agents）；契约出现在任何字段的写入者集合即失败。
     """
     offenders = {
@@ -305,7 +305,10 @@ def test_human_modules_read_environment_through_query_only():
 # 二、模块依赖方向
 # ---------------------------------------------------------------------------
 
-ENVIRONMENT_MODULES = {"modules.climate", "modules.ecology", "modules.xigu_events"}
+ENVIRONMENT_MODULES = {
+    "domains.environment.climate", "domains.environment.hydrology",
+    "modules.ecology", "modules.xigu_events",
+}
 HUMAN_MODULES = {
     "modules.agents", "modules.land", "modules.construction", "modules.governance",
     "modules.tenancy_economy", "modules.social", "modules.community",
@@ -377,7 +380,7 @@ def test_import_direction_rules():
         # 人类主模块不得被其他人文子系统反向依赖（D1/D2）。
         if importer in HUMAN_MODULES - {"modules.agents"} and imported == "modules.agents":
             violations.add((importer, imported))
-        if importer.startswith("worldgen.") and imported.startswith(
+        if importer.startswith("world.") and imported.startswith(
             ("modules.", "observability.", "cli.", "main.")
         ):
             violations.add((importer, imported))

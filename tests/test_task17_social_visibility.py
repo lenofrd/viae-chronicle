@@ -26,7 +26,7 @@ from vale.core.state import DebtRecord
 from vale.observability.query import EventFilter, apply_filter
 from vale.observability.render import render_event
 from vale.modules.agents import AgentModule
-from vale.modules.climate import ClimateModule
+from vale.domains.environment.climate import ClimateModule
 from vale.core.world import World
 
 

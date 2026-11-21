@@ -23,7 +23,7 @@ from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
 from vale.core.world import World
 from vale.modules.agents import IMPOSSIBLE, AgentModule, _candidate_actions, _target_node
-from vale.modules.climate import ClimateModule
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 
 

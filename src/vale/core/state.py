@@ -225,7 +225,7 @@ class TerrainCellState(BaseModel):
 class WaterSourceState(BaseModel):
     """水源库存（P3a）：水井/河段的可取水量与再生参数。
 
-    ``current_stock`` 是所有取水动作的唯一可用量；环境域（modules.hydrology）
+    ``current_stock`` 是所有取水动作的唯一可用量；环境域（domains.environment.hydrology）
     是唯一写入者，人类模块只能调用 ``withdraw_water`` 结算。
     """
 
@@ -395,7 +395,7 @@ class ResourcePoolState(BaseModel):
 
     ``current_stock`` / ``harvested_this_tick`` / ``degradation`` 由领域所有者
     结算：植被类池归环境域（``modules.ecology``），鱼/猎物池归动物域
-    （``modules.wildlife``，2026-11-21 裁决）。
+    （``domains.wildlife.wildlife``，2026-11-21 裁决）。
     """
 
     resource_type: str
@@ -466,14 +466,14 @@ class WildlifeState(BaseModel):
     """动物领域状态容器（ADR 009 §2.2B）。
 
     P4（2026-11-21 裁决）：鱼/猎物存量池迁入动物域（河流不拥有鱼），由
-    ``modules.wildlife`` 拥有并结算；P5 再填入个体与种群状态。
+    ``domains.wildlife.wildlife`` 拥有并结算；P5 再填入个体与种群状态。
     """
 
     pools: dict[str, ResourcePoolState] = Field(default_factory=dict)
 
 
 # 归动物域的资源类型（P4 裁决）：目录中 resource_type 命中此集合的池由
-# modules.wildlife 拥有并结算，其余归 modules.ecology。P5 扩种群时再扩集合。
+# domains.wildlife.wildlife 拥有并结算，其余归 modules.ecology。P5 扩种群时再扩集合。
 WILDLIFE_RESOURCE_TYPES = frozenset({"fish", "game"})
 
 

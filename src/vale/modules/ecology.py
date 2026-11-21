@@ -9,7 +9,7 @@ P3c 按裁决移交所有者。
 P4（2026-11-21 裁决）之后的边界：池参数唯一真相源是生成器产出的池目录
 （``LoadedConfig.resources``，``ResourcePoolSpec``），节点 attributes 不再携带
 ``resource_*`` 副本；``resource_type`` 为 fish/game 的池归动物域
-（``modules.wildlife`` 拥有并结算），其余归本模块；地形栅格 ``terrain_cells``
+（``domains.wildlife.wildlife`` 拥有并结算），其余归本模块；地形栅格 ``terrain_cells``
 由本模块从生成结果引导（``ensure_terrain_cells``），不再由人文域土地模块
 跨域写入；未登记池的原额给付 fallback 取消（采集指向未登记池启动即报错，
 运行期直达则抛错），受限池拒绝 reason 专列 ``restricted``。
@@ -102,7 +102,7 @@ class EcologyModule:
         pools = world.state.environment.ecological_resources
         for node_id, spec in pool_specs(world).items():
             if spec.resource_type in WILDLIFE_RESOURCE_TYPES:
-                continue  # 鱼/猎物池归动物域（modules.wildlife 拥有并结算）
+                continue  # 鱼/猎物池归动物域（domains.wildlife.wildlife 拥有并结算）
             pool = pools.get(node_id)
             if pool is None:
                 pools[node_id] = bootstrap_pool(world, node_id, spec)
@@ -216,7 +216,7 @@ def apply_landslide(world, field_node: str, *, amount: float, source_node: str,
 
 # --------------------------------------------------------------------------- #
 # 采集结算（P3b 机制；P3c 起由环境域所有者执行，契约 ResourceService 只路由；
-# P4 起 State 化 + 收敛：共享结算机制供动物域（modules.wildlife）复用）
+# P4 起 State 化 + 收敛：共享结算机制供动物域（domains.wildlife.wildlife）复用）
 # --------------------------------------------------------------------------- #
 
 def _harvested_this_tick(pool: ResourcePoolState, tick: int) -> float:

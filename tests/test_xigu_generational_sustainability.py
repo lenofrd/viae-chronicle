@@ -16,12 +16,12 @@ from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
 from vale.core.world import World
 from vale.modules.agents import AgentModule, SpatialIndex, age_years
-from vale.modules.climate import ClimateModule
+from vale.domains.environment.climate import ClimateModule
 from vale.modules.ecology import EcologyModule
 from vale.modules.tenancy_economy import TenancyEconomyModule
-from vale.modules.wildlife import WildlifeModule
+from vale.domains.wildlife.wildlife import WildlifeModule
 from vale.modules.xigu_events import XiguEventsModule
-from vale.worldgen.xigu import XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town
+from vale.world.xigu import XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town
 
 
 TICKS_PER_YEAR = 360
