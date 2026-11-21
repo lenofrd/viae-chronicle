@@ -1,8 +1,8 @@
-"""Forty-year generated-town integration test.
+"""Generated-town long-run gates.
 
-Tracks three generations, including second- and third-generation marriages, and descendants entering the labor force. The
-failure message includes enough economic and demographic evidence to diagnose
-the first collapse rather than reporting only an empty population.
+2 年基线（默认 `long_run`）：婚育由 agent 自主发生后婚姻数/新生儿数为正、
+人口存活、无模块错误。40 年门禁：终局人口 > 0；承载力缺口 G1 未解，
+当前按现状登记为 strict xfail，解 G1 后必须移除标记。
 """
 from __future__ import annotations
 
@@ -29,6 +29,9 @@ TICKS_PER_YEAR = 360
 # 婚姻数与新生儿数是否为正、人口是否存活、无模块错误。40 年世代链指标保留在
 # _diagnostics 里作观察，但不再作为断言。
 HORIZON = 2 * TICKS_PER_YEAR
+# 40 年门禁（2026-11-21 裁决④）：终局人口 > 0。承载力缺口 G1 未解，按现状
+# 登记为 strict xfail；解 G1 后移除标记，让门禁真正生效（XPASS 会直接变红）。
+FORTY_YEAR_HORIZON = 40 * TICKS_PER_YEAR
 
 
 def _build(seed: int) -> World:
@@ -433,5 +436,31 @@ def test_two_year_xigu_run_records_agent_driven_marriages_and_births():
                 "final_food_stock", "agent_errors",
             )
         })
+    finally:
+        world.event_log.close()
+
+
+@pytest.mark.long_run
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "G1 家庭口粮承载力未解：40 年终局人口归零（2026-11-21 裁决④登记）；"
+        "解 G1 后移除 xfail，让门禁真正生效"
+    ),
+)
+def test_forty_year_xigu_run_keeps_population_alive():
+    """40 年门禁：终局人口 > 0（当前按 G1 承载力缺口登记为 strict xfail）。"""
+    seed = 20261118
+    world = _build(seed)
+    try:
+        for tick in range(1, FORTY_YEAR_HORIZON + 1):
+            run_tick(world)
+            if not any(a.alive for a in world.state.human.agents.values()):
+                break
+        final_population = sum(1 for a in world.state.human.agents.values() if a.alive)
+        assert final_population > 0, (
+            f"40-year town extinct at tick {world.current_tick}: "
+            f"final_population={final_population}（seed {seed}）"
+        )
     finally:
         world.event_log.close()
