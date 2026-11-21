@@ -19,6 +19,7 @@ from vale.modules.agents import AgentModule, SpatialIndex, age_years
 from vale.modules.climate import ClimateModule
 from vale.modules.ecology import EcologyModule
 from vale.modules.tenancy_economy import TenancyEconomyModule
+from vale.modules.wildlife import WildlifeModule
 from vale.modules.xigu_events import XiguEventsModule
 from vale.worldgen.xigu import XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town
 
@@ -39,10 +40,12 @@ def _build(seed: int) -> World:
         spatial=generated.spatial,
         agents=build_xigu_agents_config(generated, base.agents.tuning, base.agents),
         terrain=generated.terrain,
+        resources=generated.resources,
     )
     world = World(config.world.world_id, EventLog(":memory:"), config.world.start_tick, config)
     world.register(ClimateModule(rng=random.Random(seed)))
     world.register(EcologyModule())
+    world.register(WildlifeModule())
     world.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     world.register(TenancyEconomyModule())
     world.register(XiguEventsModule(seed=seed))
@@ -344,7 +347,7 @@ def _diagnostics(world, population_curve, checkpoints):
             h.work_node for h in world.state.human.households.values()
             if h.work_node in world.state.environment.field_growth
         }),
-        "seasonal_field_labor_records": len(world.state.environment.field_season_labor),
+        "seasonal_field_labor_records": len(world.state.human.field_season_labor),
         "minimum_population": min(population_curve, default=0),
         "minimum_household_food_stock": min(
             (float(c["household_food_stock_min"]) for c in checkpoints), default=0.0

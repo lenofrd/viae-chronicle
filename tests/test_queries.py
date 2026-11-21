@@ -119,9 +119,18 @@ def test_spatial_query_node_and_area_fallbacks(spatial):
 # WildlifeQuery
 # --------------------------------------------------------------------------- #
 
-def test_wildlife_query_is_empty_until_phase5_and_read_only():
+def test_wildlife_query_exposes_read_only_pools_view():
+    """P4：鱼/猎物池迁动物域后，查询暴露只读池视图（空世界视图为空）。"""
     world = _world()
-    populations = WildlifeQuery.populations(world)
-    assert dict(populations) == {}
+    assert WildlifeQuery.populations(world)["pools"] == {}
+
+    from vale.core.state import ResourcePoolState
+    world.state.wildlife.pools["river_town"] = ResourcePoolState(
+        resource_type="fish", current_stock=90.0, max_stock=140.0)
+    view = WildlifeQuery.populations(world)
+    assert view["pools"]["river_town"]["current_stock"] == 90.0
     with pytest.raises(TypeError):
-        populations["deer"] = 1  # type: ignore[index]
+        view["deer"] = 1  # type: ignore[index]
+    # 快照隔离：改返回值不影响状态本体（内层是深拷贝 dict）。
+    view["pools"]["river_town"]["current_stock"] = 1.0
+    assert world.state.wildlife.pools["river_town"].current_stock == 90.0

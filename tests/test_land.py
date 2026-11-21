@@ -24,10 +24,14 @@ def make_world():
         spatial=generated.spatial,
         agents=build_xigu_agents_config(generated, base.agents.tuning, base.agents),
         terrain=generated.terrain,
+        resources=generated.resources,
     )
     log = EventLog(":memory:")
     world = World(config.world.world_id, log, config.world.start_tick, config)
     AgentModule()._ensure_agents(world, config.agents)
+    # P4：地形栅格由环境域引导（不再由 land 模块跨域写入），显式触发一次。
+    from vale.modules.ecology import ensure_terrain_cells
+    ensure_terrain_cells(world)
     return world, log, config
 
 

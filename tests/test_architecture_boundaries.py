@@ -28,6 +28,7 @@ from vale.core.world import World
 from vale.modules.agents import AgentModule
 from vale.modules.climate import ClimateModule
 from vale.modules.ecology import EcologyModule
+from vale.modules.wildlife import WildlifeModule
 from vale.worldgen.xigu import (
     XiguGenerationConfig,
     build_xigu_agents_config,
@@ -47,18 +48,21 @@ STATE_OWNERS: dict[str, set[str]] = {
     "climate": {"modules.climate"},
     "water_level_ratio": {"modules.climate"},
     "irrigation_gear": {"modules.climate"},
-    # 采集结算在环境域所有者（P3c 起契约只路由，不得登记为写入者）
+    # 采集结算在环境域所有者（P3c 起契约只路由，不得登记为写入者）。
+    # P4：fish/game 池迁动物域容器（WildlifeState.pools），环境容器只留植被类池。
     "ecological_resources": {"modules.ecology"},
+    "pools": {"modules.wildlife"},
     # P3a 水源库存：环境域状态，P3c 起结算归水文实现 modules.hydrology。
     "water_sources": {"modules.hydrology"},
-    # 农作物：按 ADR 2.3 归人文农业管理；P3c 起灾害结算在 modules.agents.apply_*，
-    # 经 EcologicalImpact 契约路由。
-    "field_growth": {"modules.agents"},
-    "fertility_factor": {"modules.agents"},
-    "soil_quality": {"modules.agents"},
+    # 田块生态状态：ADR 009 §2.3/§2.4（2026-11-21 修订）归环境域所有者 modules.ecology
+    # 结算——农事长势增量、收获复位、洪涝/旱灾/滑坡冲减均经 EcologicalImpact 契约路由。
+    "field_growth": {"modules.ecology"},
+    "fertility_factor": {"modules.ecology"},
+    "soil_quality": {"modules.ecology"},
+    # 季节劳力簿记：人文劳动管理（2026-11-21 裁决由 EnvironmentState 迁入 HumanState）。
     "field_season_labor": {"modules.agents"},
-    # 静态生成副本（P4 世界生成分段后归 Environment）
-    "terrain_cells": {"modules.land"},
+    # 静态生成副本（P4 世界生成分段）：地形栅格由环境域从生成结果引导。
+    "terrain_cells": {"modules.ecology"},
     # Human
     "agents": {"modules.agents", "modules.land", "modules.social"},
     "households": {"modules.agents", "modules.land", "modules.construction"},
@@ -82,16 +86,16 @@ STATE_OWNERS: dict[str, set[str]] = {
 # 子容器归属（P1）：显式写死，字段被搬到错误的容器会在这里失败。
 ENVIRONMENT_FIELDS = {
     "climate", "terrain_cells", "water_level_ratio", "irrigation_gear",
-    "ecological_resources", "water_sources", "field_growth", "field_season_labor",
+    "ecological_resources", "water_sources", "field_growth",
     "fertility_factor", "soil_quality",
 }
 HUMAN_FIELDS = {
-    "agents", "households", "land_parcels", "buildings", "construction_projects",
-    "land_leases", "resource_loans", "service_queues", "public_treasury",
-    "community_reserves", "building_needs", "representatives", "elections",
-    "headman_id", "acting_headman_id", "council_decisions", "appeals",
+    "agents", "households", "field_season_labor", "land_parcels", "buildings",
+    "construction_projects", "land_leases", "resource_loans", "service_queues",
+    "public_treasury", "community_reserves", "building_needs", "representatives",
+    "elections", "headman_id", "acting_headman_id", "council_decisions", "appeals",
 }
-WILDLIFE_FIELDS: set[str] = set()
+WILDLIFE_FIELDS = {"pools"}
 
 FIELD_CONTAINERS = {
     "environment": ENVIRONMENT_FIELDS,
@@ -109,14 +113,11 @@ KNOWN_CROSS_DOMAIN_WRITES: dict[tuple[str, str], str] = {}
 PROJECTION_MODULES = {"core.replay"}
 
 # P2 读侧收口：人类模块只能经 EnvironmentQuery 读环境。
-# 农事四字段按 ADR 2.3 归人类农业管理，允许直读直写。
-HUMAN_OWNED_ENV_FIELDS = {
-    "field_growth", "fertility_factor", "soil_quality", "field_season_labor",
-}
-# 尚未收敛的环境访问（修掉后必须删条目，测试会检查台账是否变假）。
-HUMAN_ENV_ACCESS_EXCEPTIONS: dict[tuple[str, str], str] = {
-    ("modules.land", "terrain_cells"): "P4：世界生成分段后归 Environment",
-}
+# 农事四字段已按 2026-11-21 裁决移交：田块生态（field_growth/fertility_factor/
+# soil_quality）归环境域所有者结算，人类只读经查询、写经契约；
+# 季节劳力簿记迁 HumanState（人文域自有状态，无需直读环境）。
+# P4 后无已知例外：地形栅格归口 Environment（modules.ecology 引导）。
+HUMAN_ENV_ACCESS_EXCEPTIONS: dict[tuple[str, str], str] = {}
 
 
 _MUTATING_METHODS = {"append", "extend", "update", "pop", "remove", "clear", "setdefault", "add"}
@@ -287,8 +288,7 @@ def test_human_modules_read_environment_through_query_only():
             continue
         for field in _environment_attribute_accesses(path):
             present.add((module, field))
-    allowed = {(m, f) for m, f in present if f in HUMAN_OWNED_ENV_FIELDS}
-    allowed |= set(HUMAN_ENV_ACCESS_EXCEPTIONS)
+    allowed = set(HUMAN_ENV_ACCESS_EXCEPTIONS)
     offenders = present - allowed
     assert offenders == set(), (
         "人类模块直接读取环境内部字段（改用 EnvironmentQuery）：\n"
@@ -428,6 +428,7 @@ def _generated_config():
         spatial=generated.spatial,
         agents=build_xigu_agents_config(generated, base.agents.tuning, base.agents),
         terrain=generated.terrain,
+        resources=generated.resources,
     )
     return generated, config
 
@@ -437,10 +438,11 @@ def test_gathering_targets_are_live_resource_nodes():
     nodes = {node.id: node for node in generated.spatial.nodes}
     for action, cfg in config.agents.tuning.gathering.actions.items():
         assert cfg.target_node in nodes, f"{action} 的目标节点 {cfg.target_node} 不存在"
-        attrs = nodes[cfg.target_node].attributes
-        assert "resource_stock" in attrs, f"{action} 的目标节点 {cfg.target_node} 没有资源池"
-        if not attrs.get("restricted"):
-            assert attrs["resource_max_stock"] > 0, f"{action} 的目标节点池上限非法"
+        # P4：池目录（LoadedConfig.resources）是唯一真相源，节点 attributes 无副本。
+        pool = generated.resources.get(cfg.target_node)
+        assert pool is not None, f"{action} 的目标节点 {cfg.target_node} 没有资源池"
+        if not pool.restricted:
+            assert pool.max_stock > 0, f"{action} 的目标节点池上限非法"
 
 
 def test_output_source_mismatch_is_tracked():
@@ -492,6 +494,7 @@ def test_fertility_runtime_and_static_sources_are_separated():
     world = World(config.world.world_id, log, config.world.start_tick, config)
     world.register(ClimateModule())
     world.register(EcologyModule())
+    world.register(WildlifeModule())
     world.register(AgentModule())
     try:
         run_tick(world)

@@ -28,7 +28,9 @@ from vale.core.state import (
     ImpressionEntry,
     LandParcelState,
     LandRightState,
+    ResourcePoolState,
     WaterSourceState,
+    WILDLIFE_RESOURCE_TYPES,
     WorldState,
 )
 from vale.modules.social import apply_kin_defaults, record_memory
@@ -345,7 +347,7 @@ class _Replayer:
         field_node = payload.get("field_node")
         if not field_node:
             return
-        self.state.environment.field_season_labor[field_node] = {
+        self.state.human.field_season_labor[field_node] = {
             "year": int(payload.get("year", 1)),
             "season": str(payload.get("season", "spring")),
             "labor_completed": max(0.0, float(payload.get("labor_after", 0.0))),
@@ -508,7 +510,7 @@ class _Replayer:
     def _on_field_labor_progressed(self, payload: dict, tick: int) -> None:
         node_id = payload.get("field_node")
         if node_id and payload.get("labor_after") is not None:
-            self.state.environment.field_season_labor[node_id] = {
+            self.state.human.field_season_labor[node_id] = {
                 "year": int(payload.get("year", 1)),
                 "season": str(payload.get("season", "")),
                 "labor_completed": float(payload["labor_after"]),
@@ -627,24 +629,37 @@ class _Replayer:
             "work_node": payload.get("work_node") or household.work_node,
         })
 
+    def _pool_container(self, pool_payload: dict):
+        """按资源类型路由池容器（P4）：fish/game 归动物域，其余归环境域。"""
+        if pool_payload.get("resource_type") in WILDLIFE_RESOURCE_TYPES:
+            return self.state.wildlife.pools
+        return self.state.environment.ecological_resources
+
+    def _find_pool(self, node_id: str):
+        pool = self.state.environment.ecological_resources.get(node_id)
+        if pool is None:
+            pool = self.state.wildlife.pools.get(node_id)
+        return pool
+
     def _on_resource_pool_initialized(self, payload: dict, tick: int) -> None:
         node_id = payload.get("resource_node")
         if node_id:
-            self.state.environment.ecological_resources[node_id] = dict(payload.get("pool", {}))
+            data = dict(payload.get("pool", {}))
+            self._pool_container(data)[node_id] = ResourcePoolState(**data)
 
     def _on_resource_regenerated(self, payload: dict, tick: int) -> None:
         node_id = payload.get("resource_node")
-        pool = self.state.environment.ecological_resources.get(node_id) if node_id else None
+        pool = self._find_pool(node_id) if node_id else None
         if pool is not None and payload.get("stock_after") is not None:
-            pool["current_stock"] = float(payload["stock_after"])
+            pool.current_stock = float(payload["stock_after"])
 
     def _on_resource_harvested(self, payload: dict, tick: int) -> None:
         node_id = payload.get("resource_node")
-        pool = self.state.environment.ecological_resources.get(node_id) if node_id else None
+        pool = self._find_pool(node_id) if node_id else None
         if pool is not None and payload.get("stock_after") is not None:
-            pool["current_stock"] = float(payload["stock_after"])
-            pool["harvested_this_tick"] = float(payload.get("harvested_this_tick", 0.0))
-            pool["harvest_tick"] = int(payload.get("harvest_tick", tick))
+            pool.current_stock = float(payload["stock_after"])
+            pool.harvested_this_tick = float(payload.get("harvested_this_tick", 0.0))
+            pool.harvest_tick = int(payload.get("harvest_tick", tick))
 
     # -- 任务30：水文与生活用水 ---------------------------------------------- #
     def _on_water_level_changed(self, payload: dict, tick: int) -> None:

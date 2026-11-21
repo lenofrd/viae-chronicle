@@ -17,10 +17,12 @@ from vale.core.config_loader import LoadedConfig, load_config
 from vale.core.event_log import EventLog
 from vale.core.replay import rebuild_state
 from vale.core.scheduler import run_tick
+from vale.core.state import ResourcePoolState
 from vale.core.world import World
 from vale.modules.agents import AgentModule
 from vale.modules.climate import ClimateModule
 from vale.modules.ecology import EcologyModule
+from vale.modules.wildlife import WildlifeModule
 from vale.observability.render import render_event
 from vale.worldgen.xigu import (
     XiguGenerationConfig,
@@ -29,27 +31,21 @@ from vale.worldgen.xigu import (
 )
 
 
-def _pool(**overrides) -> dict:
-    pool = {
-        "resource_type": "fish",
-        "current_stock": 100.0,
-        "max_stock": 100.0,
-        "regeneration_per_tick": 0.0,
-        "extraction_limit_per_tick": 10.0,
-        "seasonal_weights": {},
-        "restricted": False,
-        "degradation": 0.0,
-        "harvested_this_tick": 0.0,
-        "harvest_tick": 0,
-    }
-    pool.update(overrides)
-    return pool
+def _pool(**overrides) -> ResourcePoolState:
+    pool = ResourcePoolState(
+        resource_type="fish",
+        current_stock=100.0,
+        max_stock=100.0,
+        regeneration_per_tick=0.0,
+        extraction_limit_per_tick=10.0,
+    )
+    return pool.model_copy(update=overrides)
 
 
-def _world(pool: dict | None = None) -> World:
+def _world(pool: ResourcePoolState | None = None) -> World:
     world = World("p3b", EventLog(":memory:"), start_tick=1, config=SimpleNamespace())
     if pool is not None:
-        world.state.environment.ecological_resources["river_town"] = dict(pool)
+        world.state.environment.ecological_resources["river_town"] = pool
     return world
 
 
@@ -64,10 +60,12 @@ def _sim(seed: int = 0) -> World:
         spatial=generated.spatial,
         agents=build_xigu_agents_config(generated, base.agents.tuning, base.agents),
         terrain=generated.terrain,
+        resources=generated.resources,
     )
     world = World(cfg.world.world_id, EventLog(":memory:"), cfg.world.start_tick, cfg)
     world.register(ClimateModule(rng=random.Random(seed)))
     world.register(EcologyModule())
+    world.register(WildlifeModule())
     world.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     run_tick(world)  # 初始化资源池、家庭与人物
     return world
@@ -87,8 +85,8 @@ def test_harvest_granted_and_event_pairs_stock():
     )
     assert granted == pytest.approx(4.0)
     pool = world.state.environment.ecological_resources["river_town"]
-    assert pool["current_stock"] == pytest.approx(46.0)
-    assert pool["harvested_this_tick"] == pytest.approx(4.0)
+    assert pool.current_stock == pytest.approx(46.0)
+    assert pool.harvested_this_tick == pytest.approx(4.0)
     event = world.event_log.by_type("resource_harvested")[-1]["payload"]
     assert event["stock_before"] == pytest.approx(50.0)
     assert event["stock_after"] == pytest.approx(46.0)
@@ -118,7 +116,7 @@ def test_harvest_refuses_empty_stock_without_writing_state():
     )
     assert granted == 0.0
     pool = world.state.environment.ecological_resources["river_town"]
-    assert pool["current_stock"] == 0.0
+    assert pool.current_stock == 0.0
     assert not world.event_log.by_type("resource_harvested")
     refused = world.event_log.by_type("resource_harvest_refused")[-1]["payload"]
     assert refused["reason"] == "stock_depleted"
@@ -146,7 +144,7 @@ def test_gather_through_service_conserves_pool_and_household():
     cfg.injury_risk = 0.0
 
     pool = world.state.environment.ecological_resources["low_mountain"]
-    stock_before = float(pool["current_stock"])
+    stock_before = float(pool.current_stock)
     meat_before = hh(world, agent).meat
 
     module._execute_gather(world, agent, "hunt", module._perceive(world, agent),  # noqa: SLF001
@@ -156,7 +154,7 @@ def test_gather_through_service_conserves_pool_and_household():
     success = world.event_log.by_type("gather_success")[-1]["payload"]
     granted = float(harvested["amount"])
     assert granted > 0
-    assert float(pool["current_stock"]) == pytest.approx(stock_before - granted, abs=1e-6)
+    assert float(pool.current_stock) == pytest.approx(stock_before - granted, abs=1e-6)
     assert hh(world, agent).meat == pytest.approx(meat_before + granted, abs=0.01)
     assert success["output_field"] == "meat"
     assert success["amount"] == pytest.approx(round(granted, 2))

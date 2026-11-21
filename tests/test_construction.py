@@ -22,6 +22,7 @@ def make_world():
         spatial=generated.spatial,
         agents=build_xigu_agents_config(generated, base.agents.tuning, base.agents),
         terrain=generated.terrain,
+        resources=generated.resources,
     )
     log = EventLog(":memory:")
     world = World(config.world.world_id, log, config.world.start_tick, config)

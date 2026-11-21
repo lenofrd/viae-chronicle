@@ -16,6 +16,8 @@ from vale.core.world import World
 
 _DEFAULT_SEASON = Season.SPRING
 _DEFAULT_WEATHER = WeatherType.SUNNY
+# 田块动态地力中性值（crops.md §4.5）；田块生态状态所有权归环境域（2026-11-21 裁决）。
+DEFAULT_FIELD_FERTILITY = 1.0
 
 
 def _is_field_node(node: SpatialNode) -> bool:
@@ -78,6 +80,18 @@ class EnvironmentQuery:
         table = world.config.natural_params.hydrology_evolution.moisture_by_gear
         return float(table.get(gear, 1.0))
 
+    @staticmethod
+    def field_growth(world: World, node_id: str) -> float:
+        """田块长势只读快照（0–100；未引导的田块按 0.0）。"""
+        return float(world.state.environment.field_growth.get(node_id, 0.0))
+
+    @staticmethod
+    def fertility_factor(world: World, node_id: str) -> float:
+        """田块动态地力只读快照（动态乘数；未引导按中性值 1.0）。"""
+        return float(world.state.environment.fertility_factor.get(
+            node_id, DEFAULT_FIELD_FERTILITY
+        ))
+
 
 class SpatialQuery:
     """空间单元只读查询：节点、田块与面积。通行成本仍由 SpatialIndex 提供。"""
@@ -112,10 +126,12 @@ class SpatialQuery:
 class WildlifeQuery:
     """动物只读查询（ADR 009 §2.5）。
 
-    当前 ``WildlifeState`` 为空容器，P5 填入个体与种群后在此扩展；
-    本类只提供读入口，不得被调用方用来修改动物状态。
+    P4 起 ``WildlifeState.pools`` 承载鱼/猎物存量池（``modules.wildlife``
+    所有者）；P5 填入个体与种群后在此扩展。本类只提供读入口，不得被
+    调用方用来修改动物状态。
     """
 
     @staticmethod
     def populations(world: World) -> Mapping[str, Any]:
+        """动物域状态只读视图（当前为池目录快照；P5 扩种群）。"""
         return MappingProxyType(world.state.wildlife.model_dump())

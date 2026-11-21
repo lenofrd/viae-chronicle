@@ -20,6 +20,7 @@ from vale.core.world import World
 from vale.modules.agents import AgentModule
 from vale.modules.climate import ClimateModule
 from vale.modules.ecology import EcologyModule
+from vale.modules.wildlife import WildlifeModule
 from vale.modules.xigu_events import XiguEventsModule
 from vale.modules.tenancy_economy import TenancyEconomyModule
 from vale.worldgen.xigu import XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town
@@ -38,6 +39,7 @@ def main():
         spatial=generated.spatial,
         agents=build_xigu_agents_config(generated, base.agents.tuning, base.agents),
         terrain=generated.terrain,
+        resources=generated.resources,
     )
     db_dir = os.path.join(ROOT, "data", "worlds", config.world.world_id)
     os.makedirs(db_dir, exist_ok=True)
@@ -48,6 +50,7 @@ def main():
     world = World(config.world.world_id, log, config.world.start_tick, config)
     world.register(ClimateModule())
     world.register(EcologyModule())
+    world.register(WildlifeModule())
     world.register(AgentModule())
     world.register(TenancyEconomyModule())
     world.register(XiguEventsModule(seed=args.seed))

@@ -392,6 +392,11 @@ class GatheringActionTuning(BaseModel):
 
     target_node: str = Field(..., description="采集目标空间节点 id（如 low_mountain）")
     output_field: str = Field(..., description="产出写入 AgentState 的字段名（如 meat）")
+    # P4（2026-11-21 裁决③）：登记该动作采集的资源类型（如 hunt→game、fish→fish），
+    # 与资源池目录（game_trail ↔ game）建立模型关联；None = 未声明（纯植被采集
+    # 可不填）。仅作登记性关联，不改变 target_node 的运行时结算路径。
+    harvests_resource_type: Optional[str] = Field(
+        default=None, description="动作采集的资源类型（game/fish 等）；None = 未声明")
     base_success_rate: float = Field(0.5, ge=0, le=1, description="基础成功率")
     output_amount: float = Field(4.0, ge=0, description="成功产出量")
     injury_risk: float = Field(0.1, ge=0, le=1, description="每次采集的受伤概率")

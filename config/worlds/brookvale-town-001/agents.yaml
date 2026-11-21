@@ -151,6 +151,7 @@ tuning:
     actions:
       hunt:
         target_node: low_mountain       # 浅山（spatial-units.yaml 已有节点）
+        harvests_resource_type: game    # P4 模型关联（2026-11-21 裁决③）：打猎采集的是猎物（game ↔ game_trail 兽径池）；行为切换（target 改指 game_trail）另立任务
         output_field: meat              # 产出写入 AgentState.meat
         base_success_rate: 0.55         # [调参] 任务10：0.5→0.55，保证季节打猎不绝迹
         output_amount: 5                # [调参] 任务10：4→5，打猎产出回升为季节补充（秋季尤佳）
@@ -161,6 +162,7 @@ tuning:
         bad_weather_injury_mult: 2.0    # [调参] 坏天气受伤概率乘数
       fish:                             # 任务10 新增：渔业（配置驱动，走通用采集分支，不改核心结算）
         target_node: river_town         # 翠溪镇前段（近镇，spatial-units.yaml 已有水域节点）
+        harvests_resource_type: fish    # P4 模型关联（2026-11-21 裁决③）：渔业采集鱼类（fish ↔ river_town 鱼池，归动物域）
         output_field: fish              # 产出写入 AgentState.fish
         base_success_rate: 0.45         # [调参] 任务10：0.55→0.45，渔业降为补充，避免过剩反超农业
         output_amount: 3.5              # [调参] 阶段三第1轮：2→3.5（+75%）。诊断：口粮缺口约 25%，鱼类是唯一随人口增长的人均产出项；2 时人口 500–800 tick 归零，3.5 时 2 种子 × 1800 tick 均存活。临时值，待长期方案复核

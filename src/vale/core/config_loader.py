@@ -26,12 +26,17 @@ class LoadedConfig:
         spatial: SpatialConfig,
         agents: AgentsConfig,
         terrain: list | None = None,
+        resources: dict | None = None,
     ) -> None:
         self.world = world
         self.natural_params = natural_params
         self.spatial = spatial
         self.agents = agents
         self.terrain = list(terrain or [])
+        # P4：资源池目录（键 = 资源节点 id，值 = vale.core.state.ResourcePoolSpec）。
+        # 生成器自然段产出，领域所有者（ecology/wildlife）首 tick 引导建池；
+        # 池参数唯一真相源（节点 attributes 不再携带 resource_* 副本）。
+        self.resources = dict(resources or {})
 
 
 def load_config(world_id: str, config_root: str = "config/worlds") -> LoadedConfig:

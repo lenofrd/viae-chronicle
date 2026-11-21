@@ -27,6 +27,7 @@ def make_world():
         spatial=generated.spatial,
         agents=build_xigu_agents_config(generated, base.agents.tuning, base.agents),
         terrain=generated.terrain,
+        resources=generated.resources,
     )
     log = EventLog(":memory:")
     world = World(config.world.world_id, log, config.world.start_tick, config)
@@ -293,7 +294,7 @@ def test_field_has_explicit_spring_labor_budget_and_replays():
             [event for event in log.all() if event["event_type"] == "field_labor_progressed"],
             config,
         ).state
-        assert replayed.environment.field_season_labor[work_node]["labor_completed"] == pytest.approx(required)
+        assert replayed.human.field_season_labor[work_node]["labor_completed"] == pytest.approx(required)
     finally:
         log.close()
 
@@ -513,7 +514,7 @@ def test_fatigue_strain_and_seasonal_field_labor_replay():
         assert replay_agent.health == pytest.approx(agent.health)
         assert replay_agent.hunger == pytest.approx(agent.hunger)
         assert replay_agent.stamina == pytest.approx(agent.stamina)
-        progress = replayed.environment.field_season_labor[agent.work_node]
+        progress = replayed.human.field_season_labor[agent.work_node]
         assert progress["labor_completed"] == pytest.approx(
             tuning.agriculture.field_labor_per_farm
         )

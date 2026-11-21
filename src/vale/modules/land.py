@@ -5,7 +5,7 @@ building records on top of those nodes; it does not create a second map.
 """
 from __future__ import annotations
 
-from vale.core.state import BuildingState, LandParcelState, LandRightState, TerrainCellState
+from vale.core.state import BuildingState, LandParcelState, LandRightState
 
 
 def _node_type(node) -> str:
@@ -44,28 +44,19 @@ def _land_use(node) -> str:
 
 
 def initialize_land(world) -> None:
-    """Create the initial terrain/parcel/building projection once.
+    """Create the initial parcel/building projection once.
 
     Occupied homesteads belong to their household. Vacant residential slots are
     explicitly collective/reserved rather than silently treated as ownerless.
     Field nodes are collective by default; the established south-field
     holding is seeded as Li Quan household property and work assignments become rights.
+
+    P4 归口（2026-11-21 裁决）：地形栅格 ``terrain_cells`` 不再由本模块跨域
+    写入环境容器，改由环境域 ``modules.ecology.ensure_terrain_cells`` 从生成
+    结果引导。
     """
     if world.state.human.land_parcels:
         return
-
-    for cell in getattr(world.config, "terrain", []) or []:
-        cell_id = f"terrain:{cell.x}:{cell.y}"
-        world.state.environment.terrain_cells[cell_id] = TerrainCellState(
-            cell_id=cell_id,
-            x=cell.x,
-            y=cell.y,
-            terrain=cell.terrain,
-            elevation=cell.elevation,
-            slope=cell.slope,
-            flood_risk=cell.flood_risk,
-            soil_fertility=cell.soil_fertility,
-        )
 
     household_by_home = {
         household.home_node: household

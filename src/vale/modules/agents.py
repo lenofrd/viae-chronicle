@@ -26,6 +26,7 @@ from vale.core.household import (
     living_households,
     work_node_of,
 )
+from vale.contracts.impacts import EcologicalImpact
 from vale.contracts.queries import EnvironmentQuery, SpatialQuery
 from vale.contracts.resources import ResourceService
 from vale.core.state import AgentState, DebtRecord, HouseholdState
@@ -308,7 +309,6 @@ def _node_crop_type(world, node_id: str) -> str:
 # moisture 已由灌溉档派生（任务30，见 EnvironmentQuery.moisture_factor）。
 YIELD_GROWTH_HEALTH = 1.0
 YIELD_DISASTER_DAMAGE = 0.0
-DEFAULT_FIELD_FERTILITY = 1.0
 
 
 def expected_yield(world, node_id: str, crop: str, tuning: AgentTuning) -> float:
@@ -321,7 +321,7 @@ def expected_yield(world, node_id: str, crop: str, tuning: AgentTuning) -> float
     return (
         tuning.agriculture.base_yield.get(crop, 0.0)
         * SpatialQuery.area(world, node_id)
-        * world.state.environment.fertility_factor.get(node_id, DEFAULT_FIELD_FERTILITY)
+        * EnvironmentQuery.fertility_factor(world, node_id)
         * EnvironmentQuery.moisture_factor(world)
         * YIELD_GROWTH_HEALTH
         * (1.0 - YIELD_DISASTER_DAMAGE)
@@ -341,57 +341,8 @@ def _inventory(household: HouseholdState, items: list[str]) -> dict[str, float]:
 
 
 # --------------------------------------------------------------------------- #
-# 灾害影响的结算（P3b 机制；P3c 起由人类域所有者执行，契约 EcologicalImpact 只路由）
+# 个体健康结算（人类域所有者；田块生态结算已迁 modules.ecology，2026-11-21 裁决）
 # --------------------------------------------------------------------------- #
-
-def apply_flood_damage(world, field_node: str, damage: float, *, precipitation_mm: float) -> float:
-    """洪涝冲减田块长势，返回实际扣减量（请求量先夹到当前值）。"""
-    growth = world.state.environment.field_growth
-    before = float(growth.get(field_node, 0.0))
-    actual = min(before, max(0.0, float(damage)))
-    if actual <= 0:
-        return 0.0
-    after = round(max(0.0, before - actual), 4)
-    growth[field_node] = after
-    world.event_log.append(world.current_tick, "field_flood_damage", {
-        "field_node": field_node, "before": round(before, 4),
-        "damage": round(actual, 4), "after": after,
-        "precipitation_mm": precipitation_mm,
-    })
-    return actual
-
-
-def apply_drought_damage(world, field_node: str, damage: float, *, drought_state: str) -> float:
-    """旱灾冲减田块长势，返回实际扣减量（请求量先夹到当前值）。"""
-    growth = world.state.environment.field_growth
-    before = float(growth.get(field_node, 0.0))
-    actual = min(before, max(0.0, float(damage)))
-    if actual <= 0:
-        return 0.0
-    after = round(max(0.0, before - actual), 4)
-    growth[field_node] = after
-    world.event_log.append(world.current_tick, "field_drought_damage", {
-        "field_node": field_node, "before": round(before, 4),
-        "damage": round(actual, 4), "after": after,
-        "drought_state": drought_state,
-    })
-    return actual
-
-
-def apply_landslide(world, field_node: str, *, amount: float, source_node: str,
-                    resource_stock_ratio: float) -> float:
-    """滑坡扣减田块地力，返回扣减后的地力。"""
-    factors = world.state.environment.fertility_factor
-    before = float(factors.get(field_node, 1.0))
-    after = round(max(.1, before - max(0.0, float(amount))), 4)
-    factors[field_node] = after
-    world.event_log.append(world.current_tick, "landslide_damage", {
-        "source_node": source_node, "field_node": field_node,
-        "fertility_before": before, "fertility_after": after,
-        "resource_stock_ratio": round(resource_stock_ratio, 4),
-    })
-    return after
-
 
 def apply_wildlife_attack(world, agent_id: str, damage: float, *, location: str = "") -> bool:
     """野生动物袭击：结算人类个体健康损失，返回是否命中（死亡/不存在直接拒绝）。"""
@@ -517,6 +468,18 @@ class AgentModule:
         """
         if world.state.human.agents:
             return
+        # P4 收敛（2026-11-21 裁决）：带池目录的世界，采集动作的目标节点必须在
+        # 目录登记，坏配置启动即报错（取消未登记池原额给付 fallback）；无池目录
+        # 的手工世界（基础 YAML 世界未编池）不校验，采集走 legacy 满额给付。
+        catalog = getattr(world.config, "resources", None) or {}
+        unregistered = sorted({
+            gcfg.target_node for gcfg in cfg.tuning.gathering.actions.values()
+            if gcfg.target_node not in catalog
+        })
+        if catalog and unregistered:
+            raise ValueError(
+                f"gathering actions target unregistered resource pools: {unregistered}"
+            )
         phys = cfg.tuning.physiology
         aging = cfg.tuning.aging
         start_tick = world.current_tick
@@ -573,23 +536,9 @@ class AgentModule:
                 stamina=a.initial_stamina if a.initial_stamina is not None else phys.initial_stamina,
                 fatigue=phys.initial_fatigue,
             )
-        # 初始化所有 FIELD 节点的长势为 0、地力为中性值（内容来自 spatial 配置，不写死节点 id）
-        if not world.state.environment.field_growth:
-            for n in world.config.spatial.nodes:
-                if getattr(n.type, "value", n.type) == "field" and not n.attributes.get("abstract_zone"):
-                    world.state.environment.field_growth[n.id] = 0.0
-        if not world.state.environment.fertility_factor:
-            for n in world.config.spatial.nodes:
-                if getattr(n.type, "value", n.type) == "field" and not n.attributes.get("abstract_zone"):
-                    world.state.environment.fertility_factor[n.id] = DEFAULT_FIELD_FERTILITY
-        # 静态地力：抄自地形生成输入，仅供未来地力平衡任务使用，不参与产量。
-        if not world.state.environment.soil_quality:
-            for n in world.config.spatial.nodes:
-                quality = n.attributes.get("soil_fertility")
-                if (getattr(n.type, "value", n.type) == "field"
-                        and not n.attributes.get("abstract_zone")
-                        and quality is not None):
-                    world.state.environment.soil_quality[n.id] = float(quality)
+        # 初始化田块生态状态（长势 0 / 动态地力中性 / 静态地力抄生成输入）：
+        # 环境域所有者执行（2026-11-21 裁决），此处仅按既有触发时序经契约调用，保持确定性。
+        EcologicalImpact.ensure_field_states(world)
         # 阶段二 C：播种家庭可分配田块（单人户 = [默认田]，与既有 work_node_of 等价；不写事件）
         for household in world.state.human.households.values():
             household.work_nodes = self._desired_work_nodes(world, household, cfg.tuning)
@@ -1214,7 +1163,7 @@ class AgentModule:
         season_key = season.value if hasattr(season, "value") else str(season)
         season_labor_required = tuning.agriculture.field_labor_required_by_season.get(season_key)
         season_year = EnvironmentQuery.year(world)
-        labor_record = world.state.environment.field_season_labor.get(work_node, {})
+        labor_record = world.state.human.field_season_labor.get(work_node, {})
         labor_completed = (
             float(labor_record.get("labor_completed", 0.0))
             if labor_record.get("year") == season_year and labor_record.get("season") == season_key
@@ -1246,7 +1195,7 @@ class AgentModule:
             temperature_c=temp,
             is_raining=weather in RAIN_WEATHERS,
             season=season,
-            work_field_growth=world.state.environment.field_growth.get(work_node, 0.0),
+            work_field_growth=EnvironmentQuery.field_growth(world, work_node),
             work_field_season_labor_remaining=season_labor_remaining,
             lender_node=_lender_node(world, agent, self._spatial),
             creditor_household_id=creditor.household_id if creditor else None,
@@ -1617,8 +1566,7 @@ class AgentModule:
         cloth_before = household.cloth
         water_before = household.water
         debt_before = household.debt
-        fg = world.state.environment.field_growth
-        field_growth_before = fg.get(work_node, 0.0)
+        field_growth_before = EnvironmentQuery.field_growth(world, work_node)
         harvest_detail: dict = {}
 
         # 扣体力（移动 + 分级劳动体力）
@@ -1664,14 +1612,14 @@ class AgentModule:
             season_year = EnvironmentQuery.year(world)
             required_labor = agr.field_labor_required_by_season.get(season_key)
             if required_labor is not None:
-                previous = world.state.environment.field_season_labor.get(work_node, {})
+                previous = world.state.human.field_season_labor.get(work_node, {})
                 completed = (
                     float(previous.get("labor_completed", 0.0))
                     if previous.get("year") == season_year and previous.get("season") == season_key
                     else 0.0
                 )
                 after_labor = min(float(required_labor), completed + agr.field_labor_per_farm)
-                world.state.environment.field_season_labor[work_node] = {
+                world.state.human.field_season_labor[work_node] = {
                     "year": season_year, "season": season_key,
                     "labor_completed": round(after_labor, 3),
                 }
@@ -1681,23 +1629,28 @@ class AgentModule:
                     "labor_required": float(required_labor), "agent_id": agent.agent_id,
                     "household_id": household.household_id,
                 })
-            # 只提升长势，绝不直接产粮（农业周期：farm → 累积 → harvest）
-            fg[work_node] = min(
-                agr.max_field_growth, field_growth_before + agr.field_growth_per_farm
+            # 只提升长势，绝不直接产粮（农业周期：farm → 累积 → harvest）。
+            # 意图携带增量（含 max_field_growth 截断），环境所有者校验边界并结算（2026-11-21 裁决）。
+            delta = max(
+                0.0, min(agr.field_growth_per_farm, agr.max_field_growth - field_growth_before)
+            )
+            EcologicalImpact.farm_growth(
+                world, work_node, delta,
+                agent_id=agent.agent_id, household_id=household.household_id,
             )
         elif action == "harvest":
-            # 秋季且长势达标：长势清零，按 crops.md §4.5 公式产出对应作物（grain / vegetable）；
-            # 再按债务记录还给对应债主。产出进家庭库存。
-            fg[work_node] = 0.0
+            # 秋季且长势达标：长势经契约由环境所有者复位归零；
+            # 按 crops.md §4.5 公式产出对应作物（grain / vegetable），产出进家庭库存。
+            EcologicalImpact.harvest_reset(
+                world, work_node, agent_id=agent.agent_id, household_id=household.household_id,
+            )
             base_gain = expected_yield(world, work_node, crop, tuning)
             gain = base_gain
             harvest_detail = {
                 "crop": crop,
                 "base_yield": tuning.agriculture.base_yield.get(crop, 0.0),
                 "field_area": SpatialQuery.area(world, work_node),
-                "field_fertility": world.state.environment.fertility_factor.get(
-                    work_node, DEFAULT_FIELD_FERTILITY
-                ),
+                "field_fertility": EnvironmentQuery.fertility_factor(world, work_node),
                 # 任务30：moisture 由灌溉档派生（旧库缺失时观察层按 1.0 降级）
                 "moisture": EnvironmentQuery.moisture_factor(world),
                 "base_expected_yield": round(base_gain, 2),
@@ -1825,7 +1778,7 @@ class AgentModule:
         elif action == "try_for_child":
             self._execute_try_for_child(world, agent, p, tuning)
 
-        field_growth_after = fg.get(work_node, 0.0)
+        field_growth_after = EnvironmentQuery.field_growth(world, work_node)
 
         # 004：日内位置真实化——动作结束停在目标节点；日末回家由 step 统一归位（C1）
         # 取水动作代表到井取水并把水带回家；往返 TU 已计入动作成本。

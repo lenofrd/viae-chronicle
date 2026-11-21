@@ -85,10 +85,10 @@ class XiguEventsModule:
         if climate.precipitation_mm < 18 or climate.year in self._landslide_years:
             return
         pool = world.state.environment.ecological_resources.get("low_mountain")
-        if not pool or pool.get("restricted"):
+        if not pool or pool.restricted:
             return
-        maximum = max(1.0, float(pool.get("max_stock", 1.0)))
-        if float(pool.get("current_stock", 0.0)) / maximum > .2:
+        maximum = max(1.0, float(pool.max_stock))
+        if float(pool.current_stock) / maximum > .2:
             return
         candidates = [n for n in world.config.spatial.nodes
                       if n.type.value == "field" and n.attributes.get("field_kind") == "dry"]
@@ -97,7 +97,7 @@ class XiguEventsModule:
         target = max(candidates, key=lambda n: (float(n.attributes.get("x", 0)), n.id))
         EcologicalImpact.landslide(
             world, target.id, amount=.08, source_node="low_mountain",
-            resource_stock_ratio=float(pool["current_stock"]) / maximum,
+            resource_stock_ratio=float(pool.current_stock) / maximum,
         )
         self._landslide_years.add(climate.year)
 

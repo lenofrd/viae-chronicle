@@ -371,6 +371,45 @@ class ConstructionProjectState(BaseModel):
     cancel_reason: Optional[str] = None
     abandoned_tick: Optional[int] = Field(default=None, ge=0)
 
+class ResourcePoolSpec(BaseModel):
+    """资源池生成参数（P4）：世界生成自然段产出的池目录条目。
+
+    由生成器写入 ``LoadedConfig.resources``（键 = 资源节点 id），供领域所有者
+    首 tick 引导建池；``current_stock`` 即初始存量。池参数唯一真相源从节点
+    attributes 副本迁到本目录（2026-11-21 P4 裁决）。
+    """
+
+    resource_id: str
+    resource_type: str
+    current_stock: float = Field(default=0.0, ge=0)
+    max_stock: float = Field(default=0.0, ge=0)
+    regeneration_per_tick: float = Field(default=0.0, ge=0)
+    extraction_limit_per_tick: float = Field(default=0.0, ge=0)
+    seasonal_weights: dict[str, float] = Field(default_factory=dict)
+    degradation: float = Field(default=0.0, ge=0)
+    restricted: bool = False
+
+
+class ResourcePoolState(BaseModel):
+    """资源池运行时投影（P4，事件溯源）；字段序即事件载荷键序。
+
+    ``current_stock`` / ``harvested_this_tick`` / ``degradation`` 由领域所有者
+    结算：植被类池归环境域（``modules.ecology``），鱼/猎物池归动物域
+    （``modules.wildlife``，2026-11-21 裁决）。
+    """
+
+    resource_type: str
+    current_stock: float = Field(default=0.0, ge=0)
+    max_stock: float = Field(default=0.0, ge=0)
+    regeneration_per_tick: float = Field(default=0.0, ge=0)
+    extraction_limit_per_tick: float = Field(default=0.0, ge=0)
+    seasonal_weights: dict[str, float] = Field(default_factory=dict)
+    restricted: bool = False
+    degradation: float = Field(default=0.0, ge=0)
+    harvested_this_tick: float = Field(default=0.0, ge=0)
+    harvest_tick: int = Field(default=-1, ge=0)
+
+
 class EnvironmentState(BaseModel):
     """自然环境领域状态（ADR 009 §2.2A）：气候、水文、地形、土壤与生态资源。
 
@@ -384,14 +423,13 @@ class EnvironmentState(BaseModel):
     # 灌溉档取 abundant/low/scarce/dry，由 ClimateModule 按配置阈值派生。
     water_level_ratio: float = Field(default=0.6, ge=0, le=1)
     irrigation_gear: str = Field(default="low")
-    # 生态资源库存由 EcologyModule 写事件、WorldState 保存可重放投影。
-    ecological_resources: dict[str, dict] = Field(default_factory=dict)
+    # 生态资源库存（植被类池）由 EcologyModule 写事件、WorldState 保存可重放投影；
+    # 鱼/猎物池在 WildlifeState.pools（2026-11-21 裁决：动物存量归动物域）。
+    ecological_resources: dict[str, ResourcePoolState] = Field(default_factory=dict)
     # 水源库存（P3a）：node_id -> 存量/容量/再生/日抽上限；由 HydrologyModule 结算。
     water_sources: dict[str, WaterSourceState] = Field(default_factory=dict)
-    # 田地长势：node_id -> 0-100；由 AgentModule 为 FIELD 节点初始化为 0
+    # 田地长势：node_id -> 0-100；环境域所有者 modules.ecology 结算（2026-11-21 裁决）
     field_growth: dict[str, float] = Field(default_factory=dict)
-    # node_id -> {year, season, labor_completed}; each season has an explicit labor budget.
-    field_season_labor: dict[str, dict] = Field(default_factory=dict)
     # 田块地力（crops.md §4.5 fertility）：node_id -> 动态乘数，默认 1.0，参与产量。
     fertility_factor: dict[str, float] = Field(default_factory=dict)
     # 静态地力：node_id -> 地形生成值，不参与产量（留给未来的地力平衡任务）。
@@ -419,10 +457,24 @@ class HumanState(BaseModel):
     appeals: dict[str, AppealState] = Field(default_factory=dict)
     agents: dict[str, AgentState] = Field(default_factory=dict)
     households: dict[str, HouseholdState] = Field(default_factory=dict)
+    # 季节劳力簿记：node_id -> {year, season, labor_completed}；人文劳动管理
+    # （2026-11-21 裁决由 EnvironmentState 迁入，劳动分工归人文域）。
+    field_season_labor: dict[str, dict] = Field(default_factory=dict)
 
 
 class WildlifeState(BaseModel):
-    """动物领域状态容器（ADR 009 §2.2B）；P5 填入个体与种群状态。"""
+    """动物领域状态容器（ADR 009 §2.2B）。
+
+    P4（2026-11-21 裁决）：鱼/猎物存量池迁入动物域（河流不拥有鱼），由
+    ``modules.wildlife`` 拥有并结算；P5 再填入个体与种群状态。
+    """
+
+    pools: dict[str, ResourcePoolState] = Field(default_factory=dict)
+
+
+# 归动物域的资源类型（P4 裁决）：目录中 resource_type 命中此集合的池由
+# modules.wildlife 拥有并结算，其余归 modules.ecology。P5 扩种群时再扩集合。
+WILDLIFE_RESOURCE_TYPES = frozenset({"fish", "game"})
 
 
 class WorldState(BaseModel):
