@@ -1,4 +1,7 @@
-"""动物领域状态（ADR 009 §2.2B）：鱼/猎物存量池容器与资源类型归属。"""
+"""动物领域状态（ADR 009 §2.2B）：鱼/猎物存量池容器。
+
+资源类型归属 ``WILDLIFE_RESOURCE_TYPES`` 是跨领域共享定义，位于 ``core.pools``。
+"""
 
 from __future__ import annotations
 
@@ -16,8 +19,3 @@ class WildlifeState(BaseModel):
     """
 
     pools: dict[str, ResourcePoolState] = Field(default_factory=dict)
-
-
-# 归动物域的资源类型（P4 裁决）：目录中 resource_type 命中此集合的池由
-# domains.wildlife.wildlife 拥有并结算，其余归 domains.environment.resources。P5 扩种群时再扩集合。
-WILDLIFE_RESOURCE_TYPES = frozenset({"fish", "game"})

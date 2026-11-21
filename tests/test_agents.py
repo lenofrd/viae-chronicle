@@ -33,6 +33,8 @@ def world():
         event_log=log,
         start_tick=cfg.world.start_tick,
         config=cfg,
+        # 孤立模块夹具：只注册气候 + 人物，显式允许缺失 ecology 等依赖
+        allow_missing_dependencies=True,
     )
     attach_test_resource_pools(w)
     w.register(ClimateModule())

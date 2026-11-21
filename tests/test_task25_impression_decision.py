@@ -32,7 +32,8 @@ from vale.domains.environment.climate import ClimateModule
 def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     w = World(world_id=cfg.world.world_id, event_log=EventLog(":memory:"),
-              start_tick=cfg.world.start_tick, config=cfg)
+              start_tick=cfg.world.start_tick, config=cfg,
+              allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
     attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))

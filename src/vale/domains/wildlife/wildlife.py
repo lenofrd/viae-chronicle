@@ -10,9 +10,14 @@
 from __future__ import annotations
 
 from vale.contracts.queries import EnvironmentQuery
-from vale.core.pools import bootstrap_pool, pool_specs, regenerate_pool, settle_pool_harvest
+from vale.core.pools import (
+    WILDLIFE_RESOURCE_TYPES,
+    bootstrap_pool,
+    pool_specs,
+    regenerate_pool,
+    settle_pool_harvest,
+)
 from vale.core.world import PHASE_WILDLIFE
-from vale.domains.wildlife.state import WILDLIFE_RESOURCE_TYPES
 
 
 class WildlifeModule:

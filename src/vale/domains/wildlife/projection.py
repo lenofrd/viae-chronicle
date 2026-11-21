@@ -6,9 +6,8 @@
 """
 from __future__ import annotations
 
-from vale.core.pools import ResourcePoolState
+from vale.core.pools import WILDLIFE_RESOURCE_TYPES, ResourcePoolState
 from vale.core.replay import ProjectionBase
-from vale.domains.wildlife.state import WILDLIFE_RESOURCE_TYPES
 
 
 class WildlifeProjection(ProjectionBase):

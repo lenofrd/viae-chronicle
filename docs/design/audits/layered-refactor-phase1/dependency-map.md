@@ -124,6 +124,6 @@
 
 §6 的 6 条改造项在 P3b/P3c/P5 已全部落地（采集、灾害、野遇、取水走契约；天气/水位/土壤走 `EnvironmentQuery`；`construction`/`land` 不再读 `agents` 主模块，只依赖 `agents.demographics.age_years` 派生函数）。`agents` 协调器不再被其他人类子系统反向依赖，架构闸以此设红线。
 
-P6（2026-11-21）：D3 已消除——老板裁决「core 只留通用重放引擎，领域投影由各领域提供，world 组装注册」，据此 `core/replay.py` 无 domain 导入、三个 `domains/*/projection.py` 承接投影、`world/replay.py` 只注册；`core/household.py` 迁 `domains/society/households.py`；`core/state.py` 只留组合根，且是唯一被豁免的 core→domain 导入。当前 `KNOWN_IMPORT_VIOLATIONS` 为空。
+P6（2026-11-21）：D3 已消除——老板裁决「core 只留通用重放引擎，领域投影由各领域提供，world 组装注册」，据此 `core/replay.py` 无 domain 导入、`domains/{environment,wildlife,society}/` 各自承接投影（人文投影在 P8 拆为 `projection/` 包）、`world/replay.py` 只注册；`core/household.py` 迁 `domains/society/households.py`；`core/state.py` 只留组合根，且是唯一被豁免的 core→domain 导入。当前 `KNOWN_IMPORT_VIOLATIONS` 为空。
 
 P7（2026-11-21）：新增 `world/assembly.py` 作为唯一组装入口（`full_modules` / `base_town_modules` / `viz_modules`），三个运行入口不再各自 `world.register`；调度按 `phase` + `depends_on` 拓扑，结构性错误直接 `ValueError`；无新增跨域依赖。

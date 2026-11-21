@@ -36,14 +36,16 @@ class World:
         event_log: EventLog,
         start_tick: int = 0,
         config: Any = None,
+        *,
+        allow_missing_dependencies: bool = False,
     ) -> None:
         self.world_id = world_id
         self.event_log = event_log
         self.current_tick: int = start_tick
         self.modules: list[Module] = []
-        # 是否要求模块声明的 depends_on 必须全部注册（统一组装入口置 True）；
-        # 手工搭建的局部世界（测试夹具）保持 False，只校验重名/依赖环/phase。
-        self.strict_schedule: bool = False
+        # depends_on 是模块契约：默认所有 World 都要求依赖必须注册（严格）。
+        # 只有确实需要孤立模块的测试夹具才显式置 True，声明允许缺失依赖。
+        self.allow_missing_dependencies = allow_missing_dependencies
         # 加载好的配置聚合对象（含 .natural_params / .spatial / .world）
         self.config = config
         # 结构化共享状态，气候模块负责初始化并写入 world.state.environment.climate

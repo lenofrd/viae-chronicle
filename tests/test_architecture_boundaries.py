@@ -125,7 +125,17 @@ PROJECTION_MODULES = {
     "core.replay",
     "domains.environment.projection",
     "domains.wildlife.projection",
+    # 人文投影按职责拆分（P8），统一注册入口仍是 projection 包。
     "domains.society.projection",
+}
+
+# 投影内部子模块也按「投影而非领域写入」豁免（P8 拆分后的实际文件路径）。
+PROJECTION_WRITE_MODULES = PROJECTION_MODULES | {
+    "domains.society.projection.base",
+    "domains.society.projection.people",
+    "domains.society.projection.households",
+    "domains.society.projection.economy",
+    "domains.society.projection.land_governance",
 }
 
 # P2 读侧收口：人类模块只能经 EnvironmentQuery 读环境。
@@ -222,7 +232,7 @@ def cross_domain_writes() -> set[tuple[str, str]]:
         (module, field)
         for field, modules in state_writers().items()
         for module in modules
-        if module not in PROJECTION_MODULES and module not in STATE_OWNERS.get(field, set())
+        if module not in PROJECTION_WRITE_MODULES and module not in STATE_OWNERS.get(field, set())
     }
 
 

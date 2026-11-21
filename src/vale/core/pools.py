@@ -13,6 +13,11 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+# 资源类型归属（跨领域共享定义）：目录中 resource_type 命中此集合的池由
+# domains.wildlife.wildlife 拥有并结算，其余归 domains.environment.resources。
+# 放在共享基础设施，避免环境域依赖动物域内部状态模块；P5 扩种群时再扩集合。
+WILDLIFE_RESOURCE_TYPES = frozenset({"fish", "game"})
+
 
 def pool_specs(world) -> dict[str, ResourcePoolSpec]:
     """生成器产出的资源池目录（键 = 资源节点 id；缺省配置返回空目录）。"""

@@ -4,8 +4,8 @@
 - 模块必须显式声明 ``phase``（见 ``core.world.PHASE_*``）与 ``depends_on``；
 - 排序先按 phase，再按依赖拓扑，最后按注册顺序稳定；
 - 重复模块名、依赖环、缺少 phase 一律明确报错，不静默回退注册顺序；
-- 统一组装入口（``world.assembly.build_world``）额外要求 depends_on 全部注册，
-  缺依赖即失败；手工搭建的局部世界（测试夹具）允许只注册被测模块；
+- 默认所有 World 都要求 depends_on 全部注册，缺依赖即失败（depends_on 是模块契约）；
+  只有显式 ``World(allow_missing_dependencies=True)`` 的孤立模块夹具可缺失依赖；
 - 某个模块内部崩溃不能让整个世界循环中断：
   捕获 Exception → 打印警告 → 写 module_error 事件 → 继续后续模块。
 """
@@ -20,9 +20,9 @@ from .world import World
 def resolve_order(modules, *, require_dependencies: bool = True) -> list:
     """返回模块执行顺序；调度配置错误一律抛 ValueError。
 
-    ``require_dependencies``：是否要求 ``depends_on`` 的模块必须已注册。生产世界由
-    ``world.assembly.build_world`` 统一组装并置为严格；手工搭建的局部世界（测试夹具）
-    可以只注册被测模块——此时缺失依赖不视为错误，顺序仍由 phase + 拓扑确定。
+    ``require_dependencies``：是否要求 ``depends_on`` 的模块必须已注册。默认严格；
+    只有显式声明 ``World(allow_missing_dependencies=True)`` 的孤立模块夹具才置 False，
+    此时缺失依赖不视为错误，顺序仍由 phase + 拓扑确定。
     """
     names = [getattr(m, "name", None) for m in modules]
     if any(not name for name in names):
@@ -79,7 +79,7 @@ def resolve_order(modules, *, require_dependencies: bool = True) -> list:
 
 
 def run_tick(world: World) -> None:
-    strict = bool(getattr(world, "strict_schedule", False))
+    strict = not bool(getattr(world, "allow_missing_dependencies", False))
     for module in resolve_order(world.modules, require_dependencies=strict):
         try:
             module.step(world)

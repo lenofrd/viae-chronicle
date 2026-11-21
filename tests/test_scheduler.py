@@ -113,6 +113,29 @@ def test_missing_dependency_fails() -> None:
         resolve_order(modules)
 
 
+def test_world_is_strict_by_default() -> None:
+    """depends_on 是模块契约：默认 World 缺依赖即失败，不因手工组装静默忽略。"""
+    world = World(world_id="test", event_log=EventLog(":memory:"), start_tick=1)
+    world.register(GoodModule())
+    world.register(_Recorder("needs_ghost", PHASE_NATURAL, ["ghost"]))
+    with pytest.raises(ValueError, match="未注册的模块 'ghost'"):
+        run_tick(world)
+
+
+def test_isolated_fixture_can_declare_missing_dependencies_allowed() -> None:
+    """孤立模块夹具必须显式声明例外，才允许缺失依赖。"""
+    world = World(
+        world_id="test",
+        event_log=EventLog(":memory:"),
+        start_tick=1,
+        allow_missing_dependencies=True,
+    )
+    world.register(GoodModule())
+    world.register(_Recorder("needs_ghost", PHASE_NATURAL, ["ghost"]))
+    run_tick(world)
+    assert world.current_tick == 2
+
+
 def test_dependency_cycle_fails() -> None:
     modules = [
         _Recorder("a", PHASE_NATURAL, ["b"]),

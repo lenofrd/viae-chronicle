@@ -23,12 +23,16 @@ from vale.world.scenarios.xigu.events import XiguEventsModule
 
 
 def full_modules(seed: int) -> list[Module]:
-    """完整世界：自然 → 生态 → 动物 → 人文 → 场景冲击（溪谷镇长期模拟口径）。"""
+    """完整世界：自然 → 生态 → 动物 → 人文 → 场景冲击（溪谷镇长期模拟口径）。
+
+    同一 seed 必须产生一致的运行结果（P7 验收）：气候与人物各自使用独立的
+    seeded Random，场景冲击直接接收 seed；不再依赖系统熵播种的故事流。
+    """
     return [
-        ClimateModule(),
+        ClimateModule(rng=random.Random(seed)),
         EcologyModule(),
         WildlifeModule(),
-        AgentModule(),
+        AgentModule(rng=random.Random(seed * 7 + 13)),
         TenancyEconomyModule(),
         XiguEventsModule(seed=seed),
     ]
@@ -62,6 +66,6 @@ def build_world(config, event_log: EventLog, *, modules: list[Module]) -> World:
     )
     for module in modules:
         world.register(module)
-    world.strict_schedule = True
+    # World 默认严格：此处显式校验缺依赖/重名/依赖环/缺 phase，不等首个 tick。
     resolve_order(world.modules)
     return world

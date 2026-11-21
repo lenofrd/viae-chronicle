@@ -46,7 +46,7 @@ def test_all_profiles_declare_phase_and_resolve() -> None:
 
 
 def test_build_world_is_strict_about_declared_dependencies() -> None:
-    """统一组装入口缺依赖即失败；手工局部世界只校验结构性错误。"""
+    """统一组装入口缺依赖即失败；World 默认严格，局部夹具须显式声明例外。"""
     from vale.domains.environment.climate import ClimateModule
     from vale.domains.society.agents import AgentModule
 
@@ -56,7 +56,7 @@ def test_build_world_is_strict_about_declared_dependencies() -> None:
         )
 
     world = build_world(_xigu_config(), EventLog(":memory:"), modules=full_modules(1))
-    assert world.strict_schedule is True
+    assert world.allow_missing_dependencies is False
 
 
 def test_entry_points_use_unified_assembly() -> None:

@@ -1,4 +1,8 @@
-"""阶段四验收脚本：加载真实配置，落盘数据库，跑 10 个 Tick，打印每日气候摘要。
+"""独立气候演示入口（非正式模拟运行入口）。
+
+只注册 ``ClimateModule``，跑 10 个 Tick 并打印每日气候摘要，用于气候子系统单独
+验收。正式模拟与可视化走 ``world.assembly`` 统一组装（``scripts/run_xigu.py``、
+``vale/cli.py``、``viz/sim_worker.py``），本文件不得再演化为第二套完整世界组装。
 
 运行：python src/vale/main.py
 """
@@ -37,7 +41,7 @@ def main() -> None:
     )
     world.register(ClimateModule())
 
-    print(f"世界 {cfg.world.name}（{cfg.world.world_id}）启动，start_tick={cfg.world.start_tick}")
+    print(f"[演示入口] 世界 {cfg.world.name}（{cfg.world.world_id}）启动，start_tick={cfg.world.start_tick}")
     print(f"数据库落盘：{db_path}")
     print("-" * 100)
 
