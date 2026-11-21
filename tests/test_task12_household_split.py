@@ -5,14 +5,15 @@ import random
 
 import pytest
 
-from config.schema.agents import AgentSex
+from vale.config.schema.agents import AgentSex
 from vale.core.calendar import DAYS_PER_YEAR
 from vale.core.config_loader import load_config
+from household_helpers import attach_test_resource_pools
 from vale.core.event_log import EventLog
-from vale.core.household import household_of
-from vale.core.state import AgentState, DebtRecord, HouseholdState
+from vale.domains.society.households import household_of
+from vale.domains.society.state import AgentState, DebtRecord, HouseholdState
 from vale.core.world import World
-from vale.modules.agents import AgentModule
+from vale.domains.society.agents import AgentModule
 from vale.observability.render import render_event
 
 
@@ -26,6 +27,7 @@ def world():
         config=cfg,
     )
     mod = AgentModule(rng=random.Random(7))
+    attach_test_resource_pools(w)
     w.register(mod)
     mod._ensure_agents(w, cfg.agents)  # noqa: SLF001
     w.current_tick = 100
@@ -43,7 +45,7 @@ def _module(world) -> AgentModule:
 def _household(world, members: list[AgentState], *, head: str, home="common_district",
                work="common_district", grain=100.0, cloth=4.0, debts: list[float] | None = None):
     """清空默认单人户，构造一个指定成员的家庭。"""
-    world.state.households.clear()
+    world.state.human.households.clear()
     hid = "hh_test"
     household = HouseholdState(
         household_id=hid, member_ids=[m.agent_id for m in members], head_id=head,
@@ -58,7 +60,7 @@ def _household(world, members: list[AgentState], *, head: str, home="common_dist
     for m in members:
         m.household_id = hid
         m.location = home
-    world.state.households[hid] = household
+    world.state.human.households[hid] = household
     return household
 
 
@@ -71,15 +73,15 @@ def _add_agent(world, agent_id: str, *, name: str, sex: AgentSex, age: int,
         health=90.0, hunger=10.0, stamina=80.0,
         mother_id=mother_id, father_id=father_id,
     )
-    world.state.agents[agent_id] = agent
+    world.state.human.agents[agent_id] = agent
     return agent
 
 
 def _couple(world):
     """户主 li_quan；lin_yuan(18, 男) 娶 zhou_qiaoniang(23, 女)，均非户主。"""
-    li = world.state.agents["li_quan"]
-    lin = world.state.agents["lin_yuan"]
-    zhou = world.state.agents["zhou_qiaoniang"]
+    li = world.state.human.agents["li_quan"]
+    lin = world.state.human.agents["lin_yuan"]
+    zhou = world.state.human.agents["zhou_qiaoniang"]
     lin.spouse_id, zhou.spouse_id = zhou.agent_id, lin.agent_id
     household = _household(world, [li, lin, zhou], head=li.agent_id, debts=[10.0])
     return li, lin, zhou, household
@@ -119,7 +121,7 @@ def test_no_split_when_spouse_in_other_household(world):
                              formed_tick=world.current_tick)
     household.member_ids.remove(zhou.agent_id)
     zhou.household_id = "hh_other"
-    world.state.households["hh_other"] = another
+    world.state.human.households["hh_other"] = another
     _module(world)._settle_split(world, world.config.agents.tuning)  # noqa: SLF001
     assert not world.event_log.by_type("household_split")
 
@@ -139,7 +141,7 @@ def test_split_moves_wife_and_minor_children_only(world):
 
     _module(world)._settle_split(world, world.config.agents.tuning)  # noqa: SLF001
     split = world.event_log.by_type("household_split")[-1]["payload"]
-    new_hh = world.state.households[split["new_household_id"]]
+    new_hh = world.state.human.households[split["new_household_id"]]
     assert new_hh.head_id == lin.agent_id
     assert set(new_hh.member_ids) == {lin.agent_id, zhou.agent_id, minor.agent_id}
     assert adult.agent_id in household.member_ids  # 成年子女留原户
@@ -157,11 +159,11 @@ def test_split_home_candidates_rotation(world):
     _module(world)._settle_split(world, tuning)  # noqa: SLF001
     payload = world.event_log.by_type("household_split")[-1]["payload"]
     expected = tuning.split.home_node_candidates[
-        len(world.state.households) % len(tuning.split.home_node_candidates)
+        len(world.state.human.households) % len(tuning.split.home_node_candidates)
     ]
     # 事件写入后 households 已含新户，故用事件里的住所校验其为候选之一
     assert payload["home_node"] in tuning.split.home_node_candidates
-    assert world.state.households[payload["new_household_id"]].home_node == payload["home_node"]
+    assert world.state.human.households[payload["new_household_id"]].home_node == payload["home_node"]
     assert isinstance(expected, str)
 
 
@@ -187,7 +189,7 @@ def test_split_work_node_from_husband_preference(world):
     lin.work_node = "market"
     _module(world)._settle_split(world, world.config.agents.tuning)  # noqa: SLF001
     split = world.event_log.by_type("household_split")[-1]["payload"]
-    new_hh = world.state.households[split["new_household_id"]]
+    new_hh = world.state.human.households[split["new_household_id"]]
     assert new_hh.work_node == "market"
     assert zhou.work_node is None and lin.work_node is None  # 迁出后取新户默认
 
@@ -201,7 +203,7 @@ def test_split_new_id_unique_and_event_payload_complete(world):
     _module(world)._settle_split(world, world.config.agents.tuning)  # noqa: SLF001
     payload = world.event_log.by_type("household_split")[-1]["payload"]
     assert payload["new_household_id"].startswith(f"hh_{household.household_id}_")
-    assert payload["new_household_id"] in world.state.households
+    assert payload["new_household_id"] in world.state.human.households
     assert payload["reason"] == "married_couple_out"
     for key in ("source_household_id", "assets_before", "source_assets_after", "new_assets",
                 "debts_before", "source_debts_after", "new_debts", "home_node", "head_id"):
@@ -223,7 +225,7 @@ def test_split_assets_conserved_to_two_decimals(world):
     before = {"grain": household.grain, "cloth": household.cloth}
     _module(world)._settle_split(world, world.config.agents.tuning)  # noqa: SLF001
     payload = world.event_log.by_type("household_split")[-1]["payload"]
-    new_hh = world.state.households[payload["new_household_id"]]
+    new_hh = world.state.human.households[payload["new_household_id"]]
     for item, amount in before.items():
         assert getattr(household, item) + getattr(new_hh, item) == pytest.approx(amount)
         assert round(getattr(new_hh, item), 2) == getattr(new_hh, item)
@@ -245,7 +247,7 @@ def test_split_debts_conserved_and_non_negative(world):
     before = 8.8
     _module(world)._settle_split(world, world.config.agents.tuning)  # noqa: SLF001
     payload = world.event_log.by_type("household_split")[-1]["payload"]
-    new_hh = world.state.households[payload["new_household_id"]]
+    new_hh = world.state.human.households[payload["new_household_id"]]
     assert household.debt + new_hh.debt == pytest.approx(before)
     assert household.debt >= 0 and new_hh.debt >= 0
     assert payload["debts_before"] == pytest.approx(before)

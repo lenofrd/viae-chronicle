@@ -13,23 +13,25 @@ import random
 import pytest
 from pydantic import ValidationError
 
-from config.schema.agents import DebtDisputeTuning
-from household_helpers import hh
+from vale.config.schema.agents import DebtDisputeTuning
+from household_helpers import attach_test_resource_pools, hh
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
-from vale.core.state import DebtRecord
+from vale.domains.society.state import DebtRecord
 from vale.core.world import World
-from vale.modules.agents import AgentModule, _floor_to_step
-from vale.modules.climate import ClimateModule
+from vale.domains.society.agents import AgentModule, _floor_to_step
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 
 
 def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     w = World(world_id=cfg.world.world_id, event_log=EventLog(":memory:"),
-              start_tick=cfg.world.start_tick, config=cfg)
+              start_tick=cfg.world.start_tick, config=cfg,
+              allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     # 隔离婚配合并，保证家庭/库存按测试构造
@@ -53,15 +55,15 @@ def _module(world) -> AgentModule:
 
 def _pair(world):
     """返回 (债务方家庭, 债务方户主, 债权方家庭, 债权方户主)。"""
-    debtor_agent = world.state.agents["lin_yuan"]
-    creditor_agent = world.state.agents["li_quan"]
+    debtor_agent = world.state.human.agents["lin_yuan"]
+    creditor_agent = world.state.human.agents["li_quan"]
     return hh(world, debtor_agent), debtor_agent, hh(world, creditor_agent), creditor_agent
 
 
 def _market_credit(world, *, amount=5.0, due_tick=0, overdue=False,
                    debtor=None, creditor=None) -> DebtRecord:
-    debtor = debtor or hh(world, world.state.agents["lin_yuan"])
-    creditor = creditor or hh(world, world.state.agents["li_quan"])
+    debtor = debtor or hh(world, world.state.human.agents["lin_yuan"])
+    creditor = creditor or hh(world, world.state.human.agents["li_quan"])
     rec = DebtRecord(
         debtor_household_id=debtor.household_id,
         creditor_household_id=creditor.household_id,
@@ -491,7 +493,7 @@ def test_replay_old_debt_formed_without_origin():
             "creditor_id": "li_quan", "creditor_household_id": "hh_li_quan",
             "amount": 5.0, "due_tick": 100}},
     ]
-    rec = rebuild_state(events, cfg).state.households["hh_lin_yuan"].debts[0]
+    rec = rebuild_state(events, cfg).state.human.households["hh_lin_yuan"].debts[0]
     assert rec.origin is None
     assert rec.debtor_household_id == "hh_lin_yuan"
     assert rec.creditor_household_id == "hh_li_quan"
@@ -519,7 +521,7 @@ def test_replay_new_credit_and_deferral_events():
          "payload": {"conflict_id": "cf-1", "resolution": "deferred", "new_due_tick": 160}},
     ]
     result = rebuild_state(events, cfg)
-    rec = result.state.households["hh_lin_yuan"].debts[0]
+    rec = result.state.human.households["hh_lin_yuan"].debts[0]
     assert rec.origin == "market_credit"
     assert rec.amount == pytest.approx(5.0)
     assert rec.due_tick == 160
@@ -543,6 +545,6 @@ def test_replay_broken_conflict_keeps_dispute_marker():
         {"id": 3, "tick": 100, "event_type": "conflict_broken",
          "payload": {"conflict_id": "cf-1", "reason": "refused", "amount": 5.0}},
     ]
-    rec = rebuild_state(events, cfg).state.households["hh_lin_yuan"].debts[0]
+    rec = rebuild_state(events, cfg).state.human.households["hh_lin_yuan"].debts[0]
     assert rec.dispute_started_tick == 100
     assert rec.amount == pytest.approx(5.0)

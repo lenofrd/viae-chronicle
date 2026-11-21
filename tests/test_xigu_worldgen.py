@@ -1,7 +1,7 @@
-from config.schema.spatial_units import NodeType
-from vale.worldgen.xigu import (
-    XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town, harvest_resource,
-    regenerate_resource, validate_xigu_town,
+from vale.config.schema.spatial_units import NodeType
+from vale.world.nature import harvest_resource, regenerate_resource
+from vale.world.xigu import (
+    XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town, validate_xigu_town,
 )
 
 
@@ -49,11 +49,15 @@ def test_each_household_has_all_fields_ordered_by_actual_route_cost():
 
 def test_resource_stock_is_bounded_and_deep_mountain_is_sealed():
     result = generate_xigu_town()
+    # P4：节点 attributes 不再携带 resource_* 副本，池目录是唯一真相源。
+    resource_nodes = {"river_town", "foothill_woodland", "low_mountain",
+                      "game_trail", "deep_mountain"}
+    for node in result.spatial.nodes:
+        if node.id in resource_nodes:
+            assert not ({"resource_stock", "resource_max_stock",
+                         "resource_regeneration_per_tick"} & set(node.attributes)), (
+                f"{node.id} 仍携带 resource_* 副本")
     pool = result.resources["river_town"]
-    river_node = next(node for node in result.spatial.nodes if node.id == "river_town")
-    assert river_node.attributes["resource_stock"] == pool.current_stock
-    assert river_node.attributes["resource_max_stock"] == pool.max_stock
-    assert river_node.attributes["resource_regeneration_per_tick"] == pool.regeneration_per_tick
     assert harvest_resource(pool, 999) <= pool.extraction_limit_per_tick
     assert pool.current_stock >= 0
     regenerate_resource(pool, "autumn", 100)
@@ -113,7 +117,7 @@ def test_initial_households_register_at_head_house_and_keep_vacant_split_homes()
     from vale.core.config_loader import LoadedConfig, load_config
     from vale.core.event_log import EventLog
     from vale.core.world import World
-    from vale.modules.agents import AgentModule
+    from vale.domains.society.agents import AgentModule
 
     base = load_config("brookvale-town-001")
     generated = generate_xigu_town(base_spatial=base.spatial)
@@ -123,16 +127,70 @@ def test_initial_households_register_at_head_house_and_keep_vacant_split_homes()
         spatial=generated.spatial,
         agents=build_xigu_agents_config(generated, base.agents.tuning, base.agents),
         terrain=generated.terrain,
+        resources=generated.resources,
     )
     log = EventLog(":memory:")
     world = World(config.world.world_id, log, config.world.start_tick, config)
     AgentModule()._ensure_agents(world, config.agents)
     assert world.world_id == "brookvale-town-001"
-    assert len(world.state.agents) == 40
-    assert {"lin_yuan", "zhao_cuilan", "li_quan", "zhou_qiaoniang"} <= set(world.state.agents)
-    assert len(world.state.households) == 30
-    assert len({h.home_node for h in world.state.households.values()}) == 30
-    assert all(h.registry_node == "elder_house" for h in world.state.households.values())
+    assert len(world.state.human.agents) == 40
+    assert {"lin_yuan", "zhao_cuilan", "li_quan", "zhou_qiaoniang"} <= set(world.state.human.agents)
+    assert len(world.state.human.households) == 30
+    assert len({h.home_node for h in world.state.human.households.values()}) == 30
+    assert all(h.registry_node == "elder_house" for h in world.state.human.households.values())
     assert len(log.by_type("household_registered")) == 30
     assert len(log.by_type("household_member_registered")) == 10
     log.close()
+
+def test_gathering_target_outside_pool_catalog_fails_at_startup():
+    """P4 收敛：带池目录的世界，采集目标未登记 → 首引导即报错（坏配置快速失败）。"""
+    import pytest as _pytest
+
+    from vale.core.config_loader import LoadedConfig, load_config
+    from vale.core.event_log import EventLog
+    from vale.core.world import World
+    from vale.domains.society.agents import AgentModule
+
+    base = load_config("brookvale-town-001")
+    generated = generate_xigu_town(base_spatial=base.spatial)
+    agents = build_xigu_agents_config(generated, base.agents.tuning, base.agents)
+    # 构造坏配置：采集目标不在池目录（剔除其池目录条目）。
+    catalog = {k: v for k, v in generated.resources.items() if k != "low_mountain"}
+    config = LoadedConfig(
+        world=base.world, natural_params=base.natural_params,
+        spatial=generated.spatial, agents=agents,
+        terrain=generated.terrain, resources=catalog,
+    )
+    world = World(config.world.world_id, EventLog(":memory:"), config.world.start_tick, config)
+    with _pytest.raises(ValueError, match="low_mountain"):
+        AgentModule()._ensure_agents(world, config.agents)
+
+
+def test_world_with_gathering_but_no_pool_catalog_fails_at_startup():
+    """2026-11-21 裁决：无池目录但配置了采集动作 → 启动即报错。"""
+    import pytest as _pytest
+
+    from vale.core.config_loader import load_config
+    from vale.core.event_log import EventLog
+    from vale.core.world import World
+    from vale.domains.society.agents import AgentModule
+
+    base = load_config("brookvale-town-001")
+    assert base.agents.tuning.gathering.actions  # 基础世界自带 hunt/fish
+    world = World(base.world.world_id, EventLog(":memory:"), base.world.start_tick, base)
+    with _pytest.raises(ValueError, match="no resource pool catalog"):
+        AgentModule()._ensure_agents(world, base.agents)
+
+
+def test_world_without_gathering_may_skip_pool_catalog():
+    """2026-11-21 裁决：无采集行为的基础世界可以不配资源池。"""
+    from vale.core.config_loader import load_config
+    from vale.core.event_log import EventLog
+    from vale.core.world import World
+    from vale.domains.society.agents import AgentModule
+
+    base = load_config("brookvale-town-001")
+    base.agents.tuning.gathering.actions.clear()
+    world = World(base.world.world_id, EventLog(":memory:"), base.world.start_tick, base)
+    AgentModule()._ensure_agents(world, base.agents)
+    assert world.state.human.agents

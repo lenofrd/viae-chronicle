@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from config.schema.natural_params import Season
+from vale.config.schema.natural_params import Season
 from vale.core.event_log import EventLog
 from vale.observability.export import EXPORT_FORMATS, export_csv, export_jsonl, export_markdown
 from vale.observability.query import EventFilter, apply_filter

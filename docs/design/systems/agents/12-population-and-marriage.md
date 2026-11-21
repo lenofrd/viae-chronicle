@@ -67,7 +67,7 @@
 
 - AgentState.acquaintances：人物对其他人物的认知阶段（unknown → met → known）。
 - AgentState.recent_interactions：近期互动记忆的有限容量记录。
-- 认知机制入口位于 src/vale/modules/social.py，由既有互动过程更新。
+- 认知机制入口位于 src/vale/domains/society/social.py，由既有互动过程更新。
 
 婚姻候选筛选应读取这些已有字段，不再只按人口列表枚举陌生人。初期规则：
 

@@ -5,21 +5,22 @@
 from __future__ import annotations
 
 from household_helpers import hh
-from vale.core.household import home_node_of, work_node_of
+from vale.domains.society.households import home_node_of, work_node_of
 
 import random
 
 import pytest
 from pydantic import ValidationError
 
-from config.schema.agents import MarketTuning
-from config.schema.natural_params import Season
+from household_helpers import attach_test_resource_pools
+from vale.config.schema.agents import MarketTuning
+from vale.config.schema.natural_params import Season
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
 from vale.core.world import World
-from vale.modules.agents import IMPOSSIBLE, AgentModule, SpatialIndex
-from vale.modules.climate import ClimateModule
+from vale.domains.society.agents import IMPOSSIBLE, AgentModule, SpatialIndex
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 
 INITIAL_STAMINA = 80.0  # 配置 initial_stamina；锚点百分比以其为分母（与 STATUS 校准表一致）
@@ -30,7 +31,9 @@ def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     log = EventLog(":memory:")
     w = World(world_id=cfg.world.world_id, event_log=log,
-              start_tick=cfg.world.start_tick, config=cfg)
+              start_tick=cfg.world.start_tick, config=cfg,
+              allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     return w
@@ -148,15 +151,15 @@ def test_market_travel_deducts_round_trip_stamina(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
     idx = SpatialIndex(world.config.spatial)
-    for a in world.state.agents.values():
+    for a in world.state.human.agents.values():
         a.stamina = 80.0
     expected = {
         a.agent_id: 2.0 * idx.travel_tu(home_node_of(world, a), "market") * MOVE_RATE
-        for a in world.state.agents.values()
+        for a in world.state.human.agents.values()
         if a.alive and not a.incapacitated
     }
     mod._settle_market(world, tuning)  # noqa: SLF001
-    for a in world.state.agents.values():
+    for a in world.state.human.agents.values():
         if a.agent_id in expected:
             assert a.stamina == pytest.approx(80.0 - expected[a.agent_id])
     summary = world.event_log.by_type("market_day_summary")[-1]["payload"]
@@ -169,7 +172,7 @@ def test_too_far_agents_skipped_without_stamina_loss(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
     tuning.market.market_max_distance_tu = 2.0  # 贫民区单程 2.6 TU → 过远
-    zhao = world.state.agents["zhao_cuilan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     zhao.stamina = 90.0
     mod._settle_market(world, tuning)  # noqa: SLF001
     summary = world.event_log.by_type("market_day_summary")[-1]["payload"]
@@ -181,7 +184,7 @@ def test_too_far_agents_skipped_without_stamina_loss(world):
 def test_too_weak_agents_skipped_without_stamina_loss(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    zhao = world.state.agents["zhao_cuilan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     zhao.stamina = 20.0  # 往返 15.6 → 余 4.4 < market_min_stamina 15
     mod._settle_market(world, tuning)  # noqa: SLF001
     summary = world.event_log.by_type("market_day_summary")[-1]["payload"]
@@ -192,7 +195,7 @@ def test_too_weak_agents_skipped_without_stamina_loss(world):
 def test_dead_or_incapacitated_skipped(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    zhao = world.state.agents["zhao_cuilan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     zhao.incapacitated = True
     zhao.stamina = 90.0
     mod._settle_market(world, tuning)  # noqa: SLF001
@@ -203,10 +206,10 @@ def test_dead_or_incapacitated_skipped(world):
 
 def _prepare_single_pair(world):
     """只保留「林远卖粮 ↔ 赵翠兰卖鱼」一对可成交关系，避免其他人抢单。"""
-    li = world.state.agents["li_quan"]
-    lin = world.state.agents["lin_yuan"]
-    zhao = world.state.agents["zhao_cuilan"]
-    zhou = world.state.agents["zhou_qiaoniang"]
+    li = world.state.human.agents["li_quan"]
+    lin = world.state.human.agents["lin_yuan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
+    zhou = world.state.human.agents["zhou_qiaoniang"]
     _set_inventory(world, li, grain=20, cloth=0)
     _set_inventory(world, lin, grain=40)
     _set_inventory(world, zhao, grain=0, fish=20)
@@ -260,10 +263,10 @@ def test_market_can_replenish_cloth_to_winter_warmth_threshold(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
     tuning.market.credit.enabled = False
-    li = world.state.agents["li_quan"]
-    lin = world.state.agents["lin_yuan"]
-    zhao = world.state.agents["zhao_cuilan"]
-    zhou = world.state.agents["zhou_qiaoniang"]
+    li = world.state.human.agents["li_quan"]
+    lin = world.state.human.agents["lin_yuan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
+    zhou = world.state.human.agents["zhou_qiaoniang"]
     _set_inventory(world, li, grain=100.0)
     _set_inventory(world, lin, cloth=12.0)
     _set_inventory(world, zhao, grain=20.0)
@@ -286,7 +289,7 @@ def test_market_can_replenish_cloth_to_winter_warmth_threshold(world):
 def test_no_trade_when_all_at_thresholds(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    for a in world.state.agents.values():
+    for a in world.state.human.agents.values():
         _set_inventory(
             world,
             a,
@@ -304,7 +307,7 @@ def test_trade_pairs_are_stable_and_unique(world):
     tuning = world.config.agents.tuning
     lin, zhao = _prepare_single_pair(world)
     # 再加一个同样富余粮的卖家（数量低于阈值，确保不抢单）
-    hh(world, world.state.agents["li_quan"]).grain = 20.0
+    hh(world, world.state.human.agents["li_quan"]).grain = 20.0
     mod._settle_market(world, tuning)  # noqa: SLF001
     seen = set()
     for ev in world.event_log.by_type("trade_executed"):
@@ -344,7 +347,7 @@ def test_market_bad_config_rejected(kwargs):
 def test_weave_success_adds_cloth(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    zhou = world.state.agents["zhou_qiaoniang"]
+    zhou = world.state.human.agents["zhou_qiaoniang"]
     tuning.textile.base_success_rate = 1.0
     tuning.textile.season_modifier = {}
     before = hh(world, zhou).cloth
@@ -358,7 +361,7 @@ def test_weave_success_adds_cloth(world):
 def test_weave_failure_produces_nothing(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    zhou = world.state.agents["zhou_qiaoniang"]
+    zhou = world.state.human.agents["zhou_qiaoniang"]
     tuning.textile.base_success_rate = 0.0
     before = hh(world, zhou).cloth
     p = mod._perceive(world, zhou)  # noqa: SLF001
@@ -369,7 +372,7 @@ def test_weave_failure_produces_nothing(world):
 
 def test_weave_impossible_without_stamina(world):
     mod = _module(world)
-    zhou = world.state.agents["zhou_qiaoniang"]
+    zhou = world.state.human.agents["zhou_qiaoniang"]
     zhou.stamina = 0.0
     p = mod._perceive(world, zhou)  # noqa: SLF001
     assert mod.score_action("weave", p, world.config.agents.tuning) == IMPOSSIBLE
@@ -377,7 +380,7 @@ def test_weave_impossible_without_stamina(world):
 
 def test_cloth_is_not_food(world):
     mod = _module(world)
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     _set_inventory(world, lin, cloth=3)
     lin.hunger = 90.0
     p = mod._perceive(world, lin)  # noqa: SLF001
@@ -387,7 +390,7 @@ def test_cloth_is_not_food(world):
 def test_winter_cold_penalty_without_cloth(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     _set_inventory(world, lin, cloth=0)
     lin.health = 60.0
     mod._apply_cold_exposure(world, lin, tuning, Season.WINTER)  # noqa: SLF001
@@ -407,7 +410,7 @@ def test_winter_cold_penalty_without_cloth(world):
 def test_winter_cold_penalty_waived_when_cloth_enough(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     hh(world, lin).cloth = tuning.textile.warmth_cloth_threshold
     lin.health = 60.0
     mod._apply_cold_exposure(world, lin, tuning, Season.WINTER)  # noqa: SLF001
@@ -419,7 +422,7 @@ def test_winter_cold_penalty_waived_when_cloth_enough(world):
 def test_cold_penalty_only_in_winter(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     _set_inventory(world, lin, cloth=0)
     lin.health = 60.0
     mod._apply_cold_exposure(world, lin, tuning, Season.SUMMER)  # noqa: SLF001
@@ -431,8 +434,8 @@ def test_one_cold_event_per_agent_per_day(world):
     """_process_one 是每日每人的结算单元，单次调用至多产生一条 cold_exposure。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
-    world.state.climate.season = Season.WINTER
-    lin = world.state.agents["lin_yuan"]
+    world.state.environment.climate.season = Season.WINTER
+    lin = world.state.human.agents["lin_yuan"]
     _set_inventory(world, lin, cloth=0)
     mod._process_one(world, lin, tuning)  # noqa: SLF001
     evs = [e for e in world.event_log.by_type("cold_exposure")
@@ -446,18 +449,18 @@ def test_one_cold_event_per_agent_per_day(world):
 def test_west_field_yields_vegetable_not_grain(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     assert work_node_of(world, lin) == "west_field"
     lin.stamina = 90.0
     hh(world, lin).grain = 10.0
     hh(world, lin).vegetable = 0.0
-    world.state.climate.season = Season.AUTUMN
-    world.state.field_growth["west_field"] = 90.0
+    world.state.environment.climate.season = Season.AUTUMN
+    world.state.environment.field_growth["west_field"] = 90.0
     p = mod._perceive(world, lin)  # noqa: SLF001
     mod._execute(world, lin, "harvest", p, tuning)  # noqa: SLF001
     # 任务30：产量含 moisture（当前灌溉档 low=0.85）
     moisture = world.config.natural_params.hydrology_evolution.moisture_by_gear[
-        world.state.irrigation_gear
+        world.state.environment.irrigation_gear
     ]
     assert hh(world, lin).vegetable == pytest.approx(
         tuning.agriculture.base_yield["vegetable"] * moisture
@@ -470,7 +473,7 @@ def test_west_field_yields_vegetable_not_grain(world):
 def test_vegetable_is_edible_after_grain_runs_out(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     _set_inventory(world, lin, vegetable=3.0)
     lin.hunger = 80.0
     p = mod._perceive(world, lin)  # noqa: SLF001
@@ -486,15 +489,15 @@ def test_crop_type_is_configurable_without_core_change(world):
             n.crop_type = "vegetable"
     mod = _module(world)
     tuning = world.config.agents.tuning
-    zhao = world.state.agents["zhao_cuilan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     zhao.stamina = 90.0
     hh(world, zhao).vegetable = 0.0
-    world.state.climate.season = Season.AUTUMN
-    world.state.field_growth["east_field"] = 90.0
+    world.state.environment.climate.season = Season.AUTUMN
+    world.state.environment.field_growth["east_field"] = 90.0
     p = mod._perceive(world, zhao)  # noqa: SLF001
     mod._execute(world, zhao, "harvest", p, tuning)  # noqa: SLF001
     moisture = world.config.natural_params.hydrology_evolution.moisture_by_gear[
-        world.state.irrigation_gear
+        world.state.environment.irrigation_gear
     ]
     assert hh(world, zhao).vegetable == pytest.approx(
         tuning.agriculture.base_yield["vegetable"] * moisture
@@ -505,7 +508,7 @@ def test_crop_type_is_configurable_without_core_change(world):
 # 五、第 4 个 NPC（织户）
 # --------------------------------------------------------------------------- #
 def test_fourth_npc_loaded_with_assets(world):
-    zhou = world.state.agents["zhou_qiaoniang"]
+    zhou = world.state.human.agents["zhou_qiaoniang"]
     cfg_zhou = next(a for a in world.config.agents.agents if a.id == "zhou_qiaoniang")
     assert zhou.name == "周巧娘"
     assert work_node_of(world, zhou) == "market"
@@ -515,7 +518,7 @@ def test_fourth_npc_loaded_with_assets(world):
 
 def test_non_field_worker_cannot_farm_or_harvest(world):
     mod = _module(world)
-    zhou = world.state.agents["zhou_qiaoniang"]
+    zhou = world.state.human.agents["zhou_qiaoniang"]
     zhou.stamina = 100.0
     p = mod._perceive(world, zhou)  # noqa: SLF001
     assert not p.work_node_is_field
@@ -525,7 +528,7 @@ def test_non_field_worker_cannot_farm_or_harvest(world):
 
 def test_weaver_can_weave(world):
     mod = _module(world)
-    zhou = world.state.agents["zhou_qiaoniang"]
+    zhou = world.state.human.agents["zhou_qiaoniang"]
     zhou.stamina = 100.0
     p = mod._perceive(world, zhou)  # noqa: SLF001
     assert mod.score_action("weave", p, world.config.agents.tuning) > IMPOSSIBLE
@@ -590,7 +593,7 @@ def test_survival_gate_forces_eat_when_hunger_would_cross_threshold(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
     phys = tuning.physiology
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     _set_inventory(world, lin, grain=3.0)
     hh(world, lin).water = 100.0  # 任务30：水足以覆盖全户日需求，隔离吃饭优先级断言
     lin.hunger = phys.hunger_health_damage_threshold - 1.0  # +hunger_gain 必跨阈值
@@ -608,7 +611,7 @@ def test_survival_gate_not_triggered_without_food(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
     phys = tuning.physiology
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     _set_inventory(world, lin)  # 所有食物字段为 0
     lin.hunger = 99.0
     lin.stamina = 100.0
@@ -630,14 +633,14 @@ def test_phase_two_long_run_has_survivors_and_no_errors(seed):
     for tick in range(1, 1081):
         run_tick(w)
         if tick % 200 == 0:
-            curve.append(sum(1 for a in w.state.agents.values() if a.alive))
-    survivors = [a for a in w.state.agents.values() if a.alive]
+            curve.append(sum(1 for a in w.state.human.agents.values() if a.alive))
+    survivors = [a for a in w.state.human.agents.values() if a.alive]
     assert survivors
     assert len(curve) == 5
     assert all(count >= 0 for count in curve)
     assert not w.event_log.by_type("agent_error")
     assert w.event_log.by_type("market_day_summary")  # 集市机制确实在跑
-    for a in w.state.agents.values():
+    for a in w.state.human.agents.values():
         for field in ("stamina", "health", "hunger"):
             assert getattr(a, field) >= 0.0, f"{a.name}.{field} 为负"
         for field in ("grain", "vegetable", "meat", "fish", "cloth", "debt"):
@@ -646,7 +649,7 @@ def test_phase_two_long_run_has_survivors_and_no_errors(seed):
 
 def test_water_shortage_forces_collection_before_farming(world):
     mod = _module(world)
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     household = hh(world, lin)
     household.water = 0.0
     lin.hunger = 30.0
@@ -674,7 +677,7 @@ def test_water_shortage_forces_collection_before_farming(world):
 
 def test_eating_is_unavailable_until_needed_to_avoid_hunger_damage(world):
     mod = _module(world)
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     household = hh(world, lin)
     household.grain = 100.0
     household.water = 100.0

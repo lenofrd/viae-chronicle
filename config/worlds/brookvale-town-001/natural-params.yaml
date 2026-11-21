@@ -37,6 +37,13 @@ hydrology_evolution:           # 任务30：单点水位演化（确定性，无
     scarce: 0.7
     dry: 0.5
 
+water_supply:                  # P3a 水源库存（环境域结算；取水经 contracts.water）
+  well:                        # 全镇唯一公共淡水点（spatial-units.yaml: well）
+    capacity: 6000             # [调参][临时值] 两年基线单日最大取水 720（30 次 × 24），容量留约 8 倍日峰缓冲
+    initial_ratio: null        # null = 取开局 water_level_ratio（0.60 → 3600）
+    regeneration_per_tick: 240 # [调参][临时值] 水位 1.0 时每日补水 240；按水位缩放后仍高于两年平均日取水 ≈41
+    extraction_limit_per_tick: 2880  # [调参][临时值] = 服务容量 120 次/日 × collect_amount 24；基线内不触顶
+
 climate_evolution:
   seasons:
     spring:

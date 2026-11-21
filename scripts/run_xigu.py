@@ -16,13 +16,8 @@ sys.path.insert(0, ROOT)
 from vale.core.config_loader import LoadedConfig, load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
-from vale.core.world import World
-from vale.modules.agents import AgentModule
-from vale.modules.climate import ClimateModule
-from vale.modules.ecology import EcologyModule
-from vale.modules.xigu_events import XiguEventsModule
-from vale.modules.tenancy_economy import TenancyEconomyModule
-from vale.worldgen.xigu import XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town
+from vale.world.assembly import build_world, full_modules
+from vale.world.xigu import XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town
 
 
 def main():
@@ -38,6 +33,7 @@ def main():
         spatial=generated.spatial,
         agents=build_xigu_agents_config(generated, base.agents.tuning, base.agents),
         terrain=generated.terrain,
+        resources=generated.resources,
     )
     db_dir = os.path.join(ROOT, "data", "worlds", config.world.world_id)
     os.makedirs(db_dir, exist_ok=True)
@@ -45,12 +41,7 @@ def main():
     if os.path.exists(db_path):
         os.remove(db_path)
     log = EventLog(db_path)
-    world = World(config.world.world_id, log, config.world.start_tick, config)
-    world.register(ClimateModule())
-    world.register(EcologyModule())
-    world.register(AgentModule())
-    world.register(TenancyEconomyModule())
-    world.register(XiguEventsModule(seed=args.seed))
+    world = build_world(config, log, modules=full_modules(args.seed))
     initial_population = len(config.agents.agents)
     for _ in range(args.days):
         run_tick(world)
@@ -76,7 +67,7 @@ def main():
     report = {
         "days": args.days,
         "initial_population": initial_population,
-        "final_population": sum(1 for a in world.state.agents.values() if a.alive),
+        "final_population": sum(1 for a in world.state.human.agents.values() if a.alive),
         "births": len(births),
         "deaths": len(deaths),
         "deaths_by_cause": dict(Counter(e["payload"].get("cause", "unknown") for e in deaths)),
@@ -87,7 +78,7 @@ def main():
         "descendants_at_work": len(descendant_workers),
         "agent_errors": sum(1 for e in events if e["event_type"] == "agent_error"),
         "food_stock": {
-            field: round(sum(float(getattr(h, field)) for h in world.state.households.values()), 2)
+            field: round(sum(float(getattr(h, field)) for h in world.state.human.households.values()), 2)
             for field in ("grain", "vegetable", "meat", "fish")
         },
     }

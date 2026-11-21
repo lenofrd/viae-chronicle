@@ -9,21 +9,21 @@ from __future__ import annotations
 
 from collections import Counter
 
-from household_helpers import hh
-from vale.core.household import home_node_of, work_node_of
+from household_helpers import attach_test_resource_pools, hh
+from vale.domains.society.households import home_node_of, work_node_of
 
 import random
 
 import pytest
 
-from config.schema.agents import GatheringActionTuning
-from config.schema.natural_params import Season, WeatherType
+from vale.config.schema.agents import GatheringActionTuning
+from vale.config.schema.natural_params import Season, WeatherType
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
 from vale.core.world import World
-from vale.modules.agents import IMPOSSIBLE, AgentModule, _candidate_actions, _target_node
-from vale.modules.climate import ClimateModule
+from vale.domains.society.agents import IMPOSSIBLE, AgentModule, _candidate_actions, _target_node
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 
 
@@ -31,7 +31,9 @@ def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     log = EventLog(":memory:")
     w = World(world_id=cfg.world.world_id, event_log=log,
-              start_tick=cfg.world.start_tick, config=cfg)
+              start_tick=cfg.world.start_tick, config=cfg,
+              allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     return w
@@ -61,7 +63,7 @@ def test_hunt_in_candidate_actions(world):
 
 
 def test_hunt_target_node_is_low_mountain(world):
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     assert _target_node("hunt", agent, world) == "low_mountain"
 
 
@@ -85,9 +87,9 @@ def test_hunt_action_occurs(world):
     故把人物置于浅山（就地）验证「可打猎时农闲窗口会选 hunt」。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
-    agent = world.state.agents["lin_yuan"]
+    agent = world.state.human.agents["lin_yuan"]
     cap = tuning.agriculture.max_field_growth
-    world.state.field_growth[work_node_of(world, agent)] = cap
+    world.state.environment.field_growth[work_node_of(world, agent)] = cap
     agent.location = "low_mountain"
     agent.hunger = 10.0
     agent.stamina = 100.0
@@ -99,7 +101,7 @@ def test_hunt_action_occurs(world):
 def test_gather_success_produces_meat(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    agent = world.state.agents["lin_yuan"]
+    agent = world.state.human.agents["lin_yuan"]
     agent.location = "low_mountain"
     agent.stamina = 100.0
     hunt = tuning.gathering.actions["hunt"]
@@ -121,14 +123,14 @@ def test_gather_success_produces_meat(world):
 def test_meat_is_non_negative(world):
     for _ in range(120):
         run_tick(world)
-    assert all(hh(world, a).meat >= 0 for a in world.state.agents.values())
+    assert all(hh(world, a).meat >= 0 for a in world.state.human.agents.values())
 
 
 # --------------------------------------------------------------------------- #
 # eat 多食物守恒消耗
 # --------------------------------------------------------------------------- #
 def test_eat_prefers_grain_over_meat(world):
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     hh(world, agent).grain = 5.0
     hh(world, agent).meat = 5.0
     agent.hunger = 90.0
@@ -139,7 +141,7 @@ def test_eat_prefers_grain_over_meat(world):
 
 
 def test_eat_consumes_meat_when_grain_insufficient(world):
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     hh(world, agent).grain = 0.0
     hh(world, agent).meat = 5.0
     agent.hunger = 90.0
@@ -151,7 +153,7 @@ def test_eat_consumes_meat_when_grain_insufficient(world):
 
 def test_eat_drains_largest_food_when_none_sufficient(world):
     """所有食物字段都 < cost 时，吃尽存量最多的字段，不产生负值。"""
-    agent = world.state.agents["lin_yuan"]
+    agent = world.state.human.agents["lin_yuan"]
     hh(world, agent).grain = 0.3
     hh(world, agent).meat = 0.0
     hh(world, agent).fish = 0.0
@@ -164,7 +166,7 @@ def test_eat_drains_largest_food_when_none_sufficient(world):
 
 
 def test_eat_impossible_when_no_food(world):
-    agent = world.state.agents["lin_yuan"]
+    agent = world.state.human.agents["lin_yuan"]
     hh(world, agent).grain = 0.0
     hh(world, agent).meat = 0.0
     hh(world, agent).fish = 0.0
@@ -181,7 +183,7 @@ def test_eat_impossible_when_no_food(world):
 def test_gather_injury_does_not_kill(world):
     """强制受伤触发时，健康不会降到 0 以下（max(0, ...)）。"""
     mod = _module(world)
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     agent.health = 10.0
     p = mod._perceive(world, agent)
     tuning = world.config.agents.tuning
@@ -198,7 +200,7 @@ def test_gather_injury_does_not_kill(world):
 def test_gather_success_when_rate_full(world):
     """base_success_rate=1 且无季节/天气惩罚时必成功。"""
     mod = _module(world)
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     p = mod._perceive(world, agent)
     tuning = world.config.agents.tuning
     cfg = tuning.gathering.actions["hunt"]
@@ -214,7 +216,7 @@ def test_gather_success_when_rate_full(world):
 def test_gather_fail_when_season_zeroes_rate(world):
     """季节修正把成功率乘到 0 时必失败。"""
     mod = _module(world)
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     p = mod._perceive(world, agent)
     tuning = world.config.agents.tuning
     cfg = tuning.gathering.actions["hunt"]
@@ -233,7 +235,7 @@ def test_gather_fail_when_season_zeroes_rate(world):
 def test_no_negative_grain_meat_debt_over_200_ticks(world):
     for _ in range(200):
         run_tick(world)
-    for a in world.state.agents.values():
+    for a in world.state.human.agents.values():
         assert hh(world, a).grain >= 0
         assert hh(world, a).meat >= 0
         assert hh(world, a).debt >= 0
@@ -250,7 +252,7 @@ def test_borrow_conserves_grain_over_200_ticks(world):
     # 004：死亡继承链路另写 debt_written_off（核销），同样计入
     forgiven = sum(e["payload"].get("amount", 0) for e in world.event_log.by_type("debt_forgiven"))
     written_off = sum(e["payload"].get("amount", 0) for e in world.event_log.by_type("debt_written_off"))
-    outstanding = sum(hh(world, a).debt for a in world.state.agents.values())
+    outstanding = sum(hh(world, a).debt for a in world.state.human.agents.values())
     assert abs(formed - repaid - collected - forgiven - written_off - outstanding) < 1e-6
 
 
@@ -265,8 +267,8 @@ def test_1080_ticks_not_all_extinct(seed):
     for tick in range(1, 1081):
         run_tick(w)
         if tick % 200 == 0:
-            curve.append(sum(1 for a in w.state.agents.values() if a.alive))
-    survivors = [a for a in w.state.agents.values() if a.alive]
+            curve.append(sum(1 for a in w.state.human.agents.values() if a.alive))
+    survivors = [a for a in w.state.human.agents.values() if a.alive]
     if not survivors:
         events = w.event_log.all()
         deaths = [e for e in events if e["event_type"] == "agent_died"]
@@ -277,7 +279,7 @@ def test_1080_ticks_not_all_extinct(seed):
             if int(e.get("tick", -1)) <= 60
         )
         stocks = {
-            field: round(sum(float(getattr(h, field)) for h in w.state.households.values()), 2)
+            field: round(sum(float(getattr(h, field)) for h in w.state.human.households.values()), 2)
             for field in ("grain", "fish", "meat", "vegetable")
         }
         pytest.fail(
@@ -289,7 +291,7 @@ def test_1080_ticks_not_all_extinct(seed):
     assert all(count >= 0 for count in curve)
     # 不变量（任务10：fish 加入守恒集合）
     assert all(hh(w, a).grain >= 0 and hh(w, a).meat >= 0 and hh(w, a).fish >= 0 and hh(w, a).debt >= 0
-               for a in w.state.agents.values())
+               for a in w.state.human.agents.values())
     assert not w.event_log.by_type("agent_error")
     # 失能/死亡事件幂等：每人至多一次
     for evt_type in ("agent_incapacitated", "agent_died"):
@@ -309,20 +311,21 @@ def test_candidate_actions_include_newly_configured_gather(world):
         bad_weather_injury_mult=1.0,
     )
     assert "fish" in _candidate_actions(tuning)
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     assert _target_node("fish", agent, world) == "well"
 
 
 def test_execute_gather_works_for_arbitrary_action_name(world):
     """_execute_gather 通用分支对任意配置动作（fish）生效，不写死 hunt。"""
     mod = _module(world)
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     tuning = world.config.agents.tuning
     tuning.gathering.actions["fish"] = GatheringActionTuning(
         target_node="well", output_field="meat", base_success_rate=1.0,
         output_amount=3, injury_risk=0.0, bad_weather_success_mult=1.0,
         bad_weather_injury_mult=1.0,
     )
+    attach_test_resource_pools(world)
     p = mod._perceive(world, agent)
     meat_before = hh(world, agent).meat
     mod._execute_gather(world, agent, "fish", p, tuning)
@@ -340,6 +343,7 @@ def test_core_settlement_still_runs_after_adding_action(world):
         output_amount=3, injury_risk=0.0, bad_weather_success_mult=1.0,
         bad_weather_injury_mult=1.0,
     )
+    attach_test_resource_pools(world)
     for _ in range(120):
         run_tick(world)
     # 核心结算事件仍出现（健康回血 / 债务事件）

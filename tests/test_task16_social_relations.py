@@ -14,28 +14,25 @@ import random
 
 import pytest
 
-from household_helpers import hh
+from household_helpers import attach_test_resource_pools, hh
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
-from vale.core.state import (
-    AcquaintanceEntry,
-    AcquaintanceLevel,
-    DebtRecord,
-    MemoryEntry,
-)
+from vale.domains.society.state import AcquaintanceEntry, AcquaintanceLevel, DebtRecord, MemoryEntry
 from vale.core.world import World
-from vale.modules import social
-from vale.modules.agents import AgentModule
-from vale.modules.climate import ClimateModule
+from vale.domains.society import social
+from vale.domains.society.agents import AgentModule
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 
 
 def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     w = World(world_id=cfg.world.world_id, event_log=EventLog(":memory:"),
-              start_tick=cfg.world.start_tick, config=cfg)
+              start_tick=cfg.world.start_tick, config=cfg,
+              allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     for m in w.modules:
@@ -58,8 +55,8 @@ def _module(world) -> AgentModule:
 
 def _pair(world):
     """非亲缘的 (债务方家庭, 债权方家庭)。"""
-    debtor = world.state.agents["lin_yuan"]
-    creditor = world.state.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
+    creditor = world.state.human.agents["li_quan"]
     return hh(world, debtor), hh(world, creditor)
 
 
@@ -89,7 +86,8 @@ def test_social_tuning_defaults_loaded(world):
 
 
 def test_agent_state_social_fields_default_empty(world):
-    from vale.core.state import AgentSex, AgentState
+    from vale.config.schema.agents import AgentSex
+    from vale.domains.society.state import AgentState
 
     probe = AgentState(
         agent_id="probe", name="probe", sex=AgentSex.MALE,
@@ -121,15 +119,15 @@ def test_kin_and_same_household_default_known(world):
     events_before_kin = len(acq_events)
 
     # 结构派生：结亲（配偶字段）→ apply_kin_defaults 后互为 KNOWN
-    a = world.state.agents["lin_yuan"]
-    b = world.state.agents["li_quan"]
+    a = world.state.human.agents["lin_yuan"]
+    b = world.state.human.agents["li_quan"]
     a.spouse_id, b.spouse_id = b.agent_id, a.agent_id
     social.apply_kin_defaults(world.state, world.current_tick)
     assert a.acquaintances[b.agent_id].level == int(AcquaintanceLevel.KNOWN)
     assert b.acquaintances[a.agent_id].level == int(AcquaintanceLevel.KNOWN)
 
     # 同户派生：第三人并入该户
-    c = world.state.agents["zhao_cuilan"]
+    c = world.state.human.agents["zhao_cuilan"]
     c.household_id = a.household_id
     social.apply_kin_defaults(world.state, world.current_tick)
     assert c.acquaintances[a.agent_id].level == int(AcquaintanceLevel.KNOWN)
@@ -144,8 +142,8 @@ def test_kin_and_same_household_default_known(world):
 # 行为差异 A/B（裁决 §五硬验收：方向断言，防只记不读）
 # --------------------------------------------------------------------------- #
 def _seed_creditor_memory(world, outcome):
-    creditor = world.state.agents["li_quan"]
-    debtor = world.state.agents["lin_yuan"]
+    creditor = world.state.human.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
     creditor.acquaintances[debtor.agent_id] = AcquaintanceEntry(
         level=int(AcquaintanceLevel.KNOWN), last_seen_tick=1,
     )
@@ -211,8 +209,8 @@ def test_dispute_outcome_written_back_both_sides(world):
     debtor_hh, creditor_hh = _pair(world)
     rec = _dispute_debt(world, debtor_hh, creditor_hh)
     debtor_hh.grain = 8.0
-    creditor = world.state.agents["li_quan"]
-    debtor = world.state.agents["lin_yuan"]
+    creditor = world.state.human.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
 
     result = module._negotiate_debt(  # noqa: SLF001
         world, world.config.agents.tuning, debtor_hh, creditor_hh,
@@ -230,8 +228,8 @@ def test_interaction_upgrades_acquaintance_both_ways_once_only(world):
     debtor_hh, creditor_hh = _pair(world)
     rec = _dispute_debt(world, debtor_hh, creditor_hh)
     debtor_hh.grain = 8.0
-    creditor = world.state.agents["li_quan"]
-    debtor = world.state.agents["lin_yuan"]
+    creditor = world.state.human.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
     assert creditor.agent_id not in debtor.acquaintances
 
     module._negotiate_debt(  # noqa: SLF001
@@ -259,7 +257,7 @@ def test_interaction_upgrades_acquaintance_both_ways_once_only(world):
 
 
 def _bare_agent(agent_id="x"):
-    from vale.core.state import AgentState
+    from vale.domains.society.state import AgentState
     return AgentState(agent_id=agent_id, name=agent_id, sex="male", birth_tick=0,
                       household_id=f"hh_{agent_id}", location="well",
                       health=100.0, hunger=0.0, stamina=100.0)
@@ -291,8 +289,8 @@ def test_is_forgotten_threshold():
 
 
 def test_get_social_view_filters_forgotten(world):
-    debtor = world.state.agents["lin_yuan"]
-    creditor = world.state.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
+    creditor = world.state.human.agents["li_quan"]
     creditor.acquaintances[debtor.agent_id] = AcquaintanceEntry(
         level=int(AcquaintanceLevel.KNOWN), last_seen_tick=0,
     )
@@ -307,8 +305,8 @@ def test_get_social_view_filters_forgotten(world):
 
 
 def test_cleanup_forgotten_removes_and_writes_event(world):
-    observer = world.state.agents["li_quan"]
-    for agent in world.state.agents.values():
+    observer = world.state.human.agents["li_quan"]
+    for agent in world.state.human.agents.values():
         agent.acquaintances.clear()
     world.current_tick = 720
     observer.acquaintances["lin_yuan"] = AcquaintanceEntry(level=2, last_seen_tick=0)
@@ -385,16 +383,16 @@ def test_runtime_replay_consistency_with_dispute(world):
 
     replayed = rebuild_state(events, world.config).state
 
-    assert set(replayed.agents) == set(world.state.agents)
-    for agent_id, rt in world.state.agents.items():
-        rp = replayed.agents[agent_id]
+    assert set(replayed.human.agents) == set(world.state.human.agents)
+    for agent_id, rt in world.state.human.agents.items():
+        rp = replayed.human.agents[agent_id]
         # 认知逐项相等（level + last_seen_tick）
         assert rp.acquaintances == rt.acquaintances, agent_id
         # 记忆逐项相等（tick/target/event_type/outcome）
         assert rp.recent_interactions == rt.recent_interactions, agent_id
 
     # 记忆确实由事件重建：债争双方有 debt_dispute 记录
-    creditor_rp = replayed.agents["li_quan"]
+    creditor_rp = replayed.human.agents["li_quan"]
     assert any(m.event_type == "debt_dispute" for m in creditor_rp.recent_interactions)
 
 
@@ -410,7 +408,7 @@ def test_multi_member_household_dispute_memory_on_heads(world):
     debtor_hh, creditor_hh = _pair(world)
     # 非户主成员并入债务方家庭：走 household_merged 事件（replay 可重建），
     # 运行时同构执行状态变更，保证两侧多成员结构一致
-    extra = world.state.agents["zhou_qiaoniang"]
+    extra = world.state.human.agents["zhou_qiaoniang"]
     extra.household_id = debtor_hh.household_id
     if extra.agent_id not in debtor_hh.member_ids:
         debtor_hh.member_ids.append(extra.agent_id)
@@ -432,9 +430,9 @@ def test_multi_member_household_dispute_memory_on_heads(world):
     )
     outcome = result["resolution"]
     # 记忆挂双方户主；非户主成员无债争记忆
-    creditor = world.state.agents["li_quan"]
+    creditor = world.state.human.agents["li_quan"]
     assert social.recall(creditor, "lin_yuan")[-1].outcome == outcome
-    assert social.recall(world.state.agents["lin_yuan"], "li_quan")[-1].outcome == outcome
+    assert social.recall(world.state.human.agents["lin_yuan"], "li_quan")[-1].outcome == outcome
     assert social.recall(creditor, "zhou_qiaoniang") == []
     assert social.recall(extra, "li_quan") == []
 
@@ -444,11 +442,11 @@ def test_multi_member_household_dispute_memory_on_heads(world):
     social.apply_kin_defaults(world.state, final_tick)
     rp = rebuild_state(events, world.config).state
     for agent_id in ("lin_yuan", "li_quan"):
-        rt = world.state.agents[agent_id]
-        assert rp.agents[agent_id].recent_interactions == rt.recent_interactions
-        assert rp.agents[agent_id].acquaintances == rt.acquaintances, agent_id
+        rt = world.state.human.agents[agent_id]
+        assert rp.human.agents[agent_id].recent_interactions == rt.recent_interactions
+        assert rp.human.agents[agent_id].acquaintances == rt.acquaintances, agent_id
     # replay 侧多成员经 household 字段重建：户主解析同样落在 lin_yuan/li_quan
-    assert rp.households[debtor_hh.household_id].head_id == "lin_yuan"
+    assert rp.human.households[debtor_hh.household_id].head_id == "lin_yuan"
 
 
 def test_replay_rebuilds_memory_and_forgetting_from_bare_events():
@@ -483,8 +481,8 @@ def test_replay_rebuilds_memory_and_forgetting_from_bare_events():
         }},
     ]
     state = rebuild_state(events, cfg).state
-    li = state.agents["li_quan"]
-    lin = state.agents["lin_yuan"]
+    li = state.human.agents["li_quan"]
+    lin = state.human.agents["lin_yuan"]
     # 双方记忆由 conflict_resolved 重建
     assert [(m.tick, m.target_id, m.event_type, m.outcome)
             for m in li.recent_interactions] == [(2, "lin_yuan", "debt_dispute", "partial_repaid")]

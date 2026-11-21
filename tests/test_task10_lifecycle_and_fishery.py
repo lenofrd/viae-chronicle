@@ -10,23 +10,23 @@
 """
 from __future__ import annotations
 
-from household_helpers import hh
-from vale.core.household import home_node_of, work_node_of
+from household_helpers import attach_test_resource_pools, hh
+from vale.domains.society.households import home_node_of, work_node_of
 
 import dataclasses
 import random
 
 import pytest
 
-from config.schema.agents import GatheringActionTuning
-from config.schema.natural_params import Season
+from vale.config.schema.agents import GatheringActionTuning
+from vale.config.schema.natural_params import Season
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
-from vale.core.state import DebtRecord, HouseholdState
+from vale.domains.society.state import DebtRecord, HouseholdState
 from vale.core.world import World
-from vale.modules.agents import AgentModule, _candidate_actions, _target_node
-from vale.modules.climate import ClimateModule
+from vale.domains.society.agents import AgentModule, _candidate_actions, _target_node
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 
 
@@ -34,7 +34,9 @@ def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     log = EventLog(":memory:")
     w = World(world_id=cfg.world.world_id, event_log=log,
-              start_tick=cfg.world.start_tick, config=cfg)
+              start_tick=cfg.world.start_tick, config=cfg,
+              allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     return w
@@ -57,12 +59,12 @@ def _move_out(world, agent):
     old.member_ids = [m for m in old.member_ids if m != agent.agent_id]
     old.head_id = old.member_ids[0] if old.member_ids else None
     new_id = f"hh_{agent.agent_id}_solo"
-    world.state.households[new_id] = HouseholdState(
+    world.state.human.households[new_id] = HouseholdState(
         household_id=new_id, member_ids=[agent.agent_id], head_id=agent.agent_id,
         home_node=old.home_node, work_node=old.work_node, formed_tick=world.current_tick,
     )
     agent.household_id = new_id
-    return world.state.households[new_id]
+    return world.state.human.households[new_id]
 
 
 # =========================================================================== #
@@ -70,7 +72,7 @@ def _move_out(world, agent):
 # =========================================================================== #
 def test_incapacitation_event_written_once(world):
     """health 触底 → 写一次 agent_incapacitated；多 tick 不重复。"""
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.health = 0.0
     for _ in range(5):
         run_tick(world)
@@ -80,12 +82,12 @@ def test_incapacitation_event_written_once(world):
     assert p["agent_id"] == "lin_yuan"
     assert p["reason"] == "health_bottomed"
     assert p["death_grace_ticks"] == world.config.agents.tuning.death.death_grace_ticks
-    assert world.state.agents["lin_yuan"].incapacitated is True
+    assert world.state.human.agents["lin_yuan"].incapacitated is True
 
 
 def test_incapacitated_agent_stops_taking_actions(world):
     """失能后不再产生任何新的 agent_action_taken（停止感知/决策/执行）。"""
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     baseline = len([e for e in world.event_log.by_type("agent_action_taken")
                     if e["payload"]["agent_id"] == "lin_yuan"])
     lin.health = 0.0
@@ -99,7 +101,7 @@ def test_incapacitated_agent_stops_taking_actions(world):
 def test_death_after_grace_ticks_event_once(world):
     """失能满 death_grace_ticks → 写一次 agent_died，alive=False；事件幂等。"""
     grace = world.config.agents.tuning.death.death_grace_ticks
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.health = 0.0
     for _ in range(grace + 2):
         run_tick(world)
@@ -108,7 +110,7 @@ def test_death_after_grace_ticks_event_once(world):
     p = died[0]["payload"]
     assert p["agent_id"] == "lin_yuan"
     assert p["died_tick"] == p["incapacitated_tick"] + grace
-    st = world.state.agents["lin_yuan"]
+    st = world.state.human.agents["lin_yuan"]
     assert st.alive is False
     assert st.died_tick is not None
     for _ in range(5):  # 死者继续留在状态中但绝不再写事件
@@ -124,9 +126,9 @@ def test_forgive_debts_traceable_no_grain_movement(world):
     test_death_reduces_world_debt_with_events 覆盖；此处单测核销本身不移动粮食。
     """
     module = _module(world)
-    lin = world.state.agents["lin_yuan"]
-    li_before = hh(world, world.state.agents["li_quan"]).grain
-    zhao_before = hh(world, world.state.agents["zhao_cuilan"]).grain
+    lin = world.state.human.agents["lin_yuan"]
+    li_before = hh(world, world.state.human.agents["li_quan"]).grain
+    zhao_before = hh(world, world.state.human.agents["zhao_cuilan"]).grain
     hh(world, lin).debts = [
         DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan",
                    amount=5.0, originated_tick=0, due_tick=9999),
@@ -140,13 +142,13 @@ def test_forgive_debts_traceable_no_grain_movement(world):
     assert sum(e["payload"]["amount"] for e in forgiven) == pytest.approx(12.0)
     assert all(e["payload"]["cause"] == "death" for e in forgiven)
     # 核销不移动粮食：债主存粮分文不变（坏账由债主承担，非粮转移）
-    assert hh(world, world.state.agents["li_quan"]).grain == pytest.approx(li_before)
-    assert hh(world, world.state.agents["zhao_cuilan"]).grain == pytest.approx(zhao_before)
+    assert hh(world, world.state.human.agents["li_quan"]).grain == pytest.approx(li_before)
+    assert hh(world, world.state.human.agents["zhao_cuilan"]).grain == pytest.approx(zhao_before)
 
 
 def test_incapacitated_skips_collection_and_recovery(world):
     """失能期间：不催收（无违约/催收事件）、不回血（health 保持 0）。"""
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.health = 0.0
     lin.hunger = 30.0
     lin.stamina = 80.0
@@ -159,7 +161,7 @@ def test_incapacitated_skips_collection_and_recovery(world):
                  for e in world.event_log.by_type(t)
                  if e["payload"].get("debtor_id") == "lin_yuan"]
     assert not debt_evts, "失能者不参与催收，避免对垂死之人刷违约"
-    assert world.state.agents["lin_yuan"].health == pytest.approx(0.0)
+    assert world.state.human.agents["lin_yuan"].health == pytest.approx(0.0)
 
 
 # =========================================================================== #
@@ -170,7 +172,7 @@ def test_defaulted_once_then_collection_attempts(world):
     module = _module(world)
     tuning = world.config.agents.tuning
     interval = tuning.debt.collection_interval_days
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     hh(world, lin).grain = 0.0
     hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=6.0,
                             originated_tick=0, due_tick=0)]  # 已到期
@@ -195,7 +197,7 @@ def test_full_payment_writes_no_default_or_attempt(world):
     """有粮足额清偿 → 只写 debt_collected，无违约/催收尝试。"""
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     hh(world, lin).grain = 8.0
     hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=6.0,
                             originated_tick=0, due_tick=0)]
@@ -218,7 +220,7 @@ def test_fish_action_configured(world):
     assert fish.output_field == "fish"
     assert "fish" in tuning.action.outdoor
     assert "fish" in _candidate_actions(tuning)
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     assert _target_node("fish", agent, world) == "river_town"
 
 
@@ -230,7 +232,7 @@ def test_fish_success_produces_fish(world):
     cfg.base_success_rate = 1.0
     cfg.season_modifier = {}
     cfg.injury_risk = 0.0
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     p = module._perceive(world, agent)  # noqa: SLF001
     p = dataclasses.replace(p, is_raining=False)
     fish_before = hh(world, agent).fish
@@ -249,7 +251,7 @@ def test_fish_fail_no_output(world):
     cfg.base_success_rate = 1.0
     cfg.season_modifier = {"summer": 0.0}
     cfg.injury_risk = 0.0
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     p = module._perceive(world, agent)  # noqa: SLF001
     p = dataclasses.replace(p, is_raining=False, season=Season.SUMMER)
     fish_before = hh(world, agent).fish
@@ -268,7 +270,7 @@ def test_fish_season_and_weather_modify_success_rate(world):
     cfg.base_success_rate = 0.5
     cfg.season_modifier = {"winter": 0.6}
     cfg.injury_risk = 0.0
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     p = module._perceive(world, agent)  # noqa: SLF001
     p = dataclasses.replace(p, is_raining=True, season=Season.WINTER)
     module.rng = random.Random(0)  # 0.844 ≥ 0.12 → 失败
@@ -282,7 +284,7 @@ def test_fish_season_and_weather_modify_success_rate(world):
 # eat 多食物优先级（粮 > 肉 > 鱼）
 # =========================================================================== #
 def test_eat_consumes_fish_when_grain_meat_empty(world):
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     hh(world, agent).grain = 0.0
     hh(world, agent).meat = 0.0
     hh(world, agent).vegetable = 0.0
@@ -297,7 +299,7 @@ def test_eat_consumes_fish_when_grain_meat_empty(world):
 
 def test_eat_prefers_meat_over_fish(world):
     """food_fields 优先级：grain(0) → meat；fish 不动。"""
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     hh(world, agent).grain = 0.0
     hh(world, agent).meat = 2.0
     hh(world, agent).vegetable = 0.0
@@ -317,22 +319,22 @@ def test_food_and_debt_non_negative_over_300_ticks(world):
     """300 tick：粮/肉/鱼/债非负、无 agent_error（错误隔离）。"""
     for _ in range(300):
         run_tick(world)
-    for a in world.state.agents.values():
+    for a in world.state.human.agents.values():
         assert hh(world, a).grain >= 0 and hh(world, a).meat >= 0 and hh(world, a).fish >= 0 and hh(world, a).debt >= 0
     assert not world.event_log.by_type("agent_error")
 
 
 def _world_debt(world) -> float:
     """世界总债（按家庭去重；同户多存活成员只计一次）。"""
-    households = {hh(world, a).household_id: hh(world, a) for a in world.state.agents.values()}
+    households = {hh(world, a).household_id: hh(world, a) for a in world.state.human.agents.values()}
     return sum(h.debt for h in households.values())
 
 
 def test_death_reduces_world_debt_with_events(world):
     """死亡使世界总债按继承比例减少：D11 = 0.5 转移给继承人、0.5 核销，两笔均有事件。"""
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    zhao = world.state.agents["zhao_cuilan"]
+    lin = world.state.human.agents["lin_yuan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     # 固定配偶关系，保证继承人有确定值（否则婚配结算会改变继承人）
     lin.spouse_id, zhao.spouse_id = zhao.agent_id, lin.agent_id
     _move_out(world, lin)  # 家庭模型：死者须为家庭最后成员，继承才发生
@@ -414,9 +416,10 @@ def test_new_gather_action_plugs_in_without_core_changes(world):
         output_amount=2, injury_risk=0.0, bad_weather_success_mult=1.0,
         bad_weather_injury_mult=1.0,
     )
+    attach_test_resource_pools(world)
     assert "cut_reed" in _candidate_actions(tuning)
     mod = _module(world)
-    agent = next(iter(world.state.agents.values()))
+    agent = next(iter(world.state.human.agents.values()))
     p = mod._perceive(world, agent)  # noqa: SLF001
     before = hh(world, agent).fish
     mod._execute_gather(world, agent, "cut_reed", p, tuning)  # noqa: SLF001
@@ -439,8 +442,8 @@ def test_1800_ticks_not_all_extinct_with_diverse_food(seed):
     for tick in range(1, 1801):
         run_tick(w)
         if tick % 200 == 0:
-            curve.append(sum(1 for a in w.state.agents.values() if a.alive))
-    alive = sum(1 for a in w.state.agents.values() if a.alive)
+            curve.append(sum(1 for a in w.state.human.agents.values() if a.alive))
+    alive = sum(1 for a in w.state.human.agents.values() if a.alive)
     if not alive:
         events = w.event_log.all()
         deaths = [e for e in events if e["event_type"] == "agent_died"]
@@ -452,7 +455,7 @@ def test_1800_ticks_not_all_extinct_with_diverse_food(seed):
             for action in sorted({e["payload"].get("action", "unknown") for e in actions})
         }
         stocks = {
-            field: round(sum(float(getattr(h, field)) for h in w.state.households.values()), 2)
+            field: round(sum(float(getattr(h, field)) for h in w.state.human.households.values()), 2)
             for field in ("grain", "fish", "meat", "vegetable")
         }
         pytest.fail(
@@ -461,7 +464,7 @@ def test_1800_ticks_not_all_extinct_with_diverse_food(seed):
         )
     assert len(curve) == 9
     assert all(count >= 0 for count in curve)
-    for a in w.state.agents.values():
+    for a in w.state.human.agents.values():
         assert hh(w, a).grain >= 0 and hh(w, a).meat >= 0 and hh(w, a).fish >= 0 and hh(w, a).debt >= 0
     assert not w.event_log.by_type("agent_error")
     # 事件幂等：每人失能/死亡至多一次

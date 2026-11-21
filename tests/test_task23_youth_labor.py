@@ -15,14 +15,15 @@ import random
 
 import pytest
 
+from household_helpers import attach_test_resource_pools
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
-from vale.core.state import AgentState
+from vale.domains.society.state import AgentState
 from vale.core.world import World
-from vale.modules.agents import AgentModule
-from vale.modules.climate import ClimateModule
+from vale.domains.society.agents import AgentModule
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 
 TICKS_PER_YEAR = 360
@@ -31,7 +32,9 @@ TICKS_PER_YEAR = 360
 def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     world = World(world_id=cfg.world.world_id, event_log=EventLog(":memory:"),
-                  start_tick=cfg.world.start_tick, config=cfg)
+                  start_tick=cfg.world.start_tick, config=cfg,
+                  allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
+    attach_test_resource_pools(world)
     world.register(ClimateModule(rng=random.Random(seed)))
     world.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     return world
@@ -57,8 +60,8 @@ def _add_child(world, agent_id: str, age: int, household_id: str = "hh_lin_yuan"
         health=70.0, hunger=40.0, stamina=40.0, alive=True,
         life_stage=tuning.aging.stage_for(age).name,
     )
-    world.state.agents[agent_id] = child
-    world.state.households[household_id].member_ids.append(agent_id)
+    world.state.human.agents[agent_id] = child
+    world.state.human.households[household_id].member_ids.append(agent_id)
     return child
 
 
@@ -104,8 +107,8 @@ def test_youth_farm_feasible_fish_absent(world):
     youth = _add_child(world, "youth9", age=9)
     youth.stamina = 60.0
     youth.hunger = 40.0
-    work_node = world.state.households["hh_lin_yuan"].work_node
-    world.state.field_growth[work_node] = 0.0
+    work_node = world.state.human.households["hh_lin_yuan"].work_node
+    world.state.environment.field_growth[work_node] = 0.0
     p = module._perceive(world, youth)  # noqa: SLF001
     assert module.score_action("farm", p, tuning) != float("-inf")
     assert "fish" not in module._candidate_actions_for(youth, tuning)  # noqa: SLF001
@@ -117,7 +120,7 @@ def test_youth_farm_feasible_fish_absent(world):
 def test_youth_increases_work_capacity_and_fields(world):
     module = _module(world)
     tuning = world.config.agents.tuning
-    household = world.state.households["hh_lin_yuan"]
+    household = world.state.human.households["hh_lin_yuan"]
     before_capable = module._work_capable_count(world, household, tuning)  # noqa: SLF001
     before_nodes = len(household.work_nodes)
     _add_child(world, "youth10", age=10)
@@ -170,7 +173,7 @@ def test_small_town_marriage_preserves_acquaintance_gate_without_freezing_fertil
             stage.allowed_actions = None
     for _ in range(3600):
         run_tick(world)
-    alive_agents = [a for a in world.state.agents.values() if a.alive]
+    alive_agents = [a for a in world.state.human.agents.values() if a.alive]
     alive = len(alive_agents)
     deaths = world.event_log.by_type("agent_died")
     starv = sum(1 for e in deaths if e["payload"].get("cause") == "starvation")

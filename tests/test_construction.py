@@ -4,14 +4,14 @@ import pytest
 
 from vale.core.config_loader import LoadedConfig, load_config
 from vale.core.event_log import EventLog
-from vale.core.state import BuildingState
-from vale.core.replay import rebuild_state
+from vale.domains.society.state import BuildingState
+from vale.world.replay import rebuild_state
 from vale.core.world import World
-from vale.modules.agents import AgentModule
-from vale.modules.construction import advance_construction, request_building, request_repair, request_expansion, request_demolition, share_building_access, pause_construction, resume_construction, cancel_construction, abandon_construction
-from vale.modules.governance import cast_council_vote, propose_council_decision, register_representative
-from vale.modules.land import change_land_use
-from vale.worldgen.xigu import build_xigu_agents_config, generate_xigu_town
+from vale.domains.society.agents import AgentModule
+from vale.domains.society.construction import advance_construction, request_building, request_repair, request_expansion, request_demolition, share_building_access, pause_construction, resume_construction, cancel_construction, abandon_construction
+from vale.domains.society.governance import cast_council_vote, propose_council_decision, register_representative
+from vale.domains.society.land import change_land_use
+from vale.world.xigu import build_xigu_agents_config, generate_xigu_town
 
 
 def make_world():
@@ -22,6 +22,7 @@ def make_world():
         spatial=generated.spatial,
         agents=build_xigu_agents_config(generated, base.agents.tuning, base.agents),
         terrain=generated.terrain,
+        resources=generated.resources,
     )
     log = EventLog(":memory:")
     world = World(config.world.world_id, log, config.world.start_tick, config)
@@ -30,14 +31,14 @@ def make_world():
 
 
 def approve(world, decision_id, subject, affected=(), major=True):
-    for household in world.state.households.values():
-        adult = next((world.state.agents[aid] for aid in household.member_ids
-                      if world.state.agents[aid].alive
-                      and (world.current_tick - world.state.agents[aid].birth_tick) // 365 >= 18), None)
-        if adult and (household.household_id not in world.state.representatives
-                      or not world.state.representatives[household.household_id].active):
+    for household in world.state.human.households.values():
+        adult = next((world.state.human.agents[aid] for aid in household.member_ids
+                      if world.state.human.agents[aid].alive
+                      and (world.current_tick - world.state.human.agents[aid].birth_tick) // 365 >= 18), None)
+        if adult and (household.household_id not in world.state.human.representatives
+                      or not world.state.human.representatives[household.household_id].active):
             register_representative(world, household.household_id, adult.agent_id)
-    reps = list(world.state.representatives.values())
+    reps = list(world.state.human.representatives.values())
     decision = propose_council_decision(
         world, decision_id, subject=subject,
         proposer_agent_id=reps[0].agent_id,
@@ -55,7 +56,7 @@ def approve(world, decision_id, subject, affected=(), major=True):
 def test_land_use_requires_matching_approved_major_decision():
     world, log, config = make_world()
     try:
-        parcel = next(p for p in world.state.land_parcels.values()
+        parcel = next(p for p in world.state.human.land_parcels.values()
                       if p.land_use == "farmland_irrigated" and p.owner_type == "collective" and p.owner_type == "collective")
         with pytest.raises(ValueError, match="matching approved major"):
             change_land_use(world, parcel.parcel_id, new_land_use="residential",
@@ -70,7 +71,7 @@ def test_land_use_requires_matching_approved_major_decision():
                 "land_right_granted", "land_right_revoked",
             }], config,
         ).state
-        assert replayed.land_parcels[parcel.parcel_id].buildable_area == parcel.area
+        assert replayed.human.land_parcels[parcel.parcel_id].buildable_area == parcel.area
     finally:
         log.close()
 
@@ -78,8 +79,8 @@ def test_land_use_requires_matching_approved_major_decision():
 def test_construction_requires_council_approval_materials_and_tick_labor_replay():
     world, log, config = make_world()
     try:
-        household = next(iter(world.state.households.values()))
-        parcel = next(p for p in world.state.land_parcels.values()
+        household = next(iter(world.state.human.households.values()))
+        parcel = next(p for p in world.state.human.land_parcels.values()
                       if p.land_use == "farmland_irrigated" and p.owner_type == "collective")
         land_decision = approve(
             world, "land-conversion", f"land_use_change:{parcel.parcel_id}:residential",
@@ -107,7 +108,7 @@ def test_construction_requires_council_approval_materials_and_tick_labor_replay(
             world.current_tick += 1
             advance_construction(world, project.project_id)
         assert project.status == "completed"
-        building = world.state.buildings["building:shed-001"]
+        building = world.state.human.buildings["building:shed-001"]
         assert building.completed_tick == world.current_tick
         replayed = rebuild_state(
             [e for e in log.all() if e["event_type"] in {
@@ -115,11 +116,11 @@ def test_construction_requires_council_approval_materials_and_tick_labor_replay(
                 "construction_worked", "building_created",
             }], config,
         ).state
-        assert replayed.construction_projects["shed-001"].status == "completed"
-        assert replayed.land_parcels[parcel.parcel_id].spatial_node_id == parcel.spatial_node_id
-        assert replayed.buildings["building:shed-001"].owner_id == household.household_id
-        assert replayed.households[household.household_id].coin == 18
-        assert replayed.households[household.household_id].hardwood == 26
+        assert replayed.human.construction_projects["shed-001"].status == "completed"
+        assert replayed.human.land_parcels[parcel.parcel_id].spatial_node_id == parcel.spatial_node_id
+        assert replayed.human.buildings["building:shed-001"].owner_id == household.household_id
+        assert replayed.human.households[household.household_id].coin == 18
+        assert replayed.human.households[household.household_id].hardwood == 26
     finally:
         log.close()
 
@@ -127,8 +128,8 @@ def test_construction_requires_council_approval_materials_and_tick_labor_replay(
 def test_construction_pause_resume_cancel_abandon():
     world, log, config = make_world()
     try:
-        household = next(iter(world.state.households.values()))
-        parcel = next(p for p in world.state.land_parcels.values()
+        household = next(iter(world.state.human.households.values()))
+        parcel = next(p for p in world.state.human.land_parcels.values()
                       if p.land_use == "farmland_irrigated" and p.owner_type == "collective" and p.owner_type == "collective")
         ld = approve(world, "land-x", f"land_use_change:{parcel.parcel_id}:residential", major=True)
         change_land_use(world, parcel.parcel_id, new_land_use="residential", approved_by="household_council", decision_id=ld.decision_id)
@@ -160,14 +161,14 @@ def test_construction_pause_resume_cancel_abandon():
 def test_household_can_choose_construction_as_agent_action():
     world, log, config = make_world()
     try:
-        household = next(iter(world.state.households.values()))
-        agent = world.state.agents[household.member_ids[0]]
+        household = next(iter(world.state.human.households.values()))
+        agent = world.state.human.agents[household.member_ids[0]]
         module = AgentModule()
         # Pick the nearest real parcel node so construction is a feasible
         # daily action while still paying its actual road-network commute.
         module._perceive(world, agent)  # initialize the same SpatialIndex used by step()
         field_parcels = [
-            p for p in world.state.land_parcels.values()
+            p for p in world.state.human.land_parcels.values()
             if p.land_use == "farmland_irrigated" and p.owner_type == "collective"
             and p.spatial_node_id in {n.id for n in world.config.spatial.nodes}
             and module._spatial.travel_tu(agent.location, p.spatial_node_id) < float("inf")
@@ -222,9 +223,9 @@ def test_household_can_choose_construction_as_agent_action():
 def test_repair_is_approved_multi_day_and_replayable():
     world, log, config = make_world()
     try:
-        household = next(iter(world.state.households.values()))
+        household = next(iter(world.state.human.households.values()))
         building = next(
-            b for b in world.state.buildings.values()
+            b for b in world.state.human.buildings.values()
             if b.building_type == "dwelling" and b.owner_id == household.household_id
         )
         building.condition = 50.0
@@ -253,7 +254,7 @@ def test_repair_is_approved_multi_day_and_replayable():
             }],
             config,
         ).state
-        assert replayed.buildings[building.building_id].condition == 100.0
+        assert replayed.human.buildings[building.building_id].condition == 100.0
     finally:
         log.close()
 
@@ -262,12 +263,12 @@ def test_repair_is_approved_multi_day_and_replayable():
 def test_expansion_and_demolition_are_approved_multi_step_projects_and_replay():
     world, log, config = make_world()
     try:
-        household = next(iter(world.state.households.values()))
+        household = next(iter(world.state.human.households.values()))
         building = next(
-            b for b in world.state.buildings.values()
+            b for b in world.state.human.buildings.values()
             if b.building_type == "dwelling" and b.owner_id == household.household_id
         )
-        parcel = world.state.land_parcels[building.parcel_id]
+        parcel = world.state.human.land_parcels[building.parcel_id]
         parcel.buildable_area = building.footprint_area + 0.25
         household.coin, household.hardwood = 20.0, 30.0
         before_area = building.footprint_area
@@ -306,8 +307,8 @@ def test_expansion_and_demolition_are_approved_multi_step_projects_and_replay():
             }],
             config,
         ).state
-        assert replayed.buildings[building.building_id].status == "demolished"
-        assert replayed.buildings[building.building_id].footprint_area == pytest.approx(before_area + 0.25)
+        assert replayed.human.buildings[building.building_id].status == "demolished"
+        assert replayed.human.buildings[building.building_id].footprint_area == pytest.approx(before_area + 0.25)
     finally:
         log.close()
 
@@ -316,9 +317,9 @@ def test_expansion_and_demolition_are_approved_multi_step_projects_and_replay():
 def test_shared_storehouse_is_an_alternative_to_duplicate_storage_and_replays():
     world, log, config = make_world()
     try:
-        households = list(world.state.households.values())
+        households = list(world.state.human.households.values())
         owner, beneficiary = households[0], households[1]
-        parcel = world.state.land_parcels[f"parcel:{owner.home_node}"]
+        parcel = world.state.human.land_parcels[f"parcel:{owner.home_node}"]
         building = BuildingState(
             building_id="building:shared-storehouse",
             parcel_id=parcel.parcel_id, building_type="storehouse",
@@ -326,7 +327,7 @@ def test_shared_storehouse_is_an_alternative_to_duplicate_storage_and_replays():
             footprint_area=0.2, condition=100.0, status="active",
             created_tick=world.current_tick,
         )
-        world.state.buildings[building.building_id] = building
+        world.state.human.buildings[building.building_id] = building
         log.append(world.current_tick, "building_created", {
             "building": building.model_dump(mode="json")
         })
@@ -356,15 +357,15 @@ def test_shared_storehouse_is_an_alternative_to_duplicate_storage_and_replays():
             }],
             config,
         ).state
-        assert beneficiary.household_id in replayed.buildings[building.building_id].attributes[
+        assert beneficiary.household_id in replayed.human.buildings[building.building_id].attributes[
             "shared_with_household_ids"
         ]
     finally:
         log.close()
 
 def test_building_need_can_be_resolved_by_an_existing_alternative():
-    from vale.core.state import BuildingNeedState
-    from vale.modules.construction import resolve_building_need
+    from vale.domains.society.state import BuildingNeedState
+    from vale.domains.society.construction import resolve_building_need
     world, log, config = make_world()
     try:
         need = BuildingNeedState(
@@ -372,8 +373,8 @@ def test_building_need_can_be_resolved_by_an_existing_alternative():
             target_building_type="dwelling", demand=6, capacity=5, pressure_days=30,
             stage="persistent", status="active", first_seen_tick=0, last_updated_tick=0,
         )
-        world.state.building_needs[need.need_id] = need
-        building = next(iter(world.state.buildings.values()))
+        world.state.human.building_needs[need.need_id] = need
+        building = next(iter(world.state.human.buildings.values()))
         building.attributes["shared_with_household_ids"] = ["other-household"]
         resolved = resolve_building_need(world, need.need_id, alternative="share",
                                          reference_id=building.building_id)

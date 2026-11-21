@@ -18,26 +18,23 @@ import random
 
 import pytest
 
-from household_helpers import hh
+from household_helpers import attach_test_resource_pools, hh
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
-from vale.core.state import (
-    AcquaintanceEntry,
-    AcquaintanceLevel,
-    DebtRecord,
-    MemoryEntry,
-)
+from vale.domains.society.state import AcquaintanceEntry, AcquaintanceLevel, DebtRecord, MemoryEntry
 from vale.core.world import World
-from vale.modules import social
-from vale.modules.agents import AgentModule
-from vale.modules.climate import ClimateModule
+from vale.domains.society import social
+from vale.domains.society.agents import AgentModule
+from vale.domains.environment.climate import ClimateModule
 
 
 def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     w = World(world_id=cfg.world.world_id, event_log=EventLog(":memory:"),
-              start_tick=cfg.world.start_tick, config=cfg)
+              start_tick=cfg.world.start_tick, config=cfg,
+              allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     for m in w.modules:
@@ -60,7 +57,7 @@ def _module(world) -> AgentModule:
 
 def _pair(world):
     """非亲缘的 (债务方家庭, 债权方家庭)。"""
-    return hh(world, world.state.agents["lin_yuan"]), hh(world, world.state.agents["li_quan"])
+    return hh(world, world.state.human.agents["lin_yuan"]), hh(world, world.state.human.agents["li_quan"])
 
 
 def _dispute_debt(world, debtor_hh, creditor_hh, amount=6.0) -> DebtRecord:
@@ -80,8 +77,8 @@ def _dispute_debt(world, debtor_hh, creditor_hh, amount=6.0) -> DebtRecord:
 
 def _seed_impression(world, outcomes: list[str]) -> str:
     """按给定 outcome 序列写债权方记忆，再用 P1 规则派生印象；返回 label。"""
-    creditor = world.state.agents["li_quan"]
-    debtor = world.state.agents["lin_yuan"]
+    creditor = world.state.human.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
     creditor.acquaintances[debtor.agent_id] = AcquaintanceEntry(
         level=int(AcquaintanceLevel.KNOWN), last_seen_tick=1,
     )

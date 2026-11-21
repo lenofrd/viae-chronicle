@@ -17,23 +17,25 @@ import random
 
 import pytest
 
-from household_helpers import hh
+from household_helpers import attach_test_resource_pools, hh
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
-from vale.core.state import DebtRecord
+from vale.domains.society.state import DebtRecord
 from vale.observability.query import EventFilter, apply_filter
 from vale.observability.render import render_event
-from vale.modules.agents import AgentModule
-from vale.modules.climate import ClimateModule
+from vale.domains.society.agents import AgentModule
+from vale.domains.environment.climate import ClimateModule
 from vale.core.world import World
 
 
 def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     w = World(world_id=cfg.world.world_id, event_log=EventLog(":memory:"),
-              start_tick=cfg.world.start_tick, config=cfg)
+              start_tick=cfg.world.start_tick, config=cfg,
+              allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     for m in w.modules:
@@ -55,8 +57,8 @@ def _module(world) -> AgentModule:
 
 
 def _pair(world):
-    debtor = world.state.agents["lin_yuan"]
-    creditor = world.state.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
+    creditor = world.state.human.agents["li_quan"]
     return hh(world, debtor), hh(world, creditor)
 
 
@@ -76,9 +78,9 @@ def _dispute_debt(world, debtor_hh, creditor_hh, amount=6.0) -> DebtRecord:
 
 
 def _seed_creditor_memory(world, outcome):
-    from vale.core.state import AcquaintanceEntry, MemoryEntry
-    creditor = world.state.agents["li_quan"]
-    debtor = world.state.agents["lin_yuan"]
+    from vale.domains.society.state import AcquaintanceEntry, MemoryEntry
+    creditor = world.state.human.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
     creditor.acquaintances[debtor.agent_id] = AcquaintanceEntry(
         level=2, last_seen_tick=1,
     )
@@ -109,8 +111,8 @@ def test_round1_metadata_written(world, memory, defaulted, kin,
                                  expect_proposal, expect_adjust, expect_basis):
     module = _module(world)
     debtor_hh, creditor_hh = _pair(world)
-    debtor = world.state.agents["lin_yuan"]
-    creditor = world.state.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
+    creditor = world.state.human.agents["li_quan"]
     if kin:
         debtor.mother_id = creditor.agent_id
         assert module._households_are_kin(world, debtor_hh, creditor_hh)  # noqa: SLF001
@@ -145,8 +147,8 @@ def test_round1_metadata_replay_ignored(world):
         rec, defaulted=set(), repaid=set(),
     )
     state = rebuild_state(world.event_log.all(), world.config).state
-    creditor = state.agents["li_quan"]
-    debtor = state.agents["lin_yuan"]
+    creditor = state.human.agents["li_quan"]
+    debtor = state.human.agents["lin_yuan"]
     # 预塞的 creditor 认知不写事件（同对只写一次），replay 侧本就无此条目；
     # debtor 侧认知全新，运行时写 acquaintance_changed，replay 重建 KNOWN。
     assert "lin_yuan" not in creditor.acquaintances
@@ -292,8 +294,8 @@ def test_replayed_events_hit_timeline(world):
         rec, defaulted=set(), repaid=set(),
     )
     events = world.event_log.all()
-    creditor_name = world.state.agents["li_quan"].name
-    debtor_name = world.state.agents["lin_yuan"].name
+    creditor_name = world.state.human.agents["li_quan"].name
+    debtor_name = world.state.human.agents["lin_yuan"].name
     for name in (creditor_name, debtor_name):
         out = apply_filter(events, EventFilter(agent=name, match_participants=True))
         types = {e["event_type"] for e in out}
@@ -301,7 +303,7 @@ def test_replayed_events_hit_timeline(world):
         assert {"conflict_started", "debt_repaid",
                 "conflict_negotiation_round"} <= types, types
     # 裸 id（negotiation_round initiator）同样命中
-    creditor_id = world.state.agents["li_quan"].agent_id
+    creditor_id = world.state.human.agents["li_quan"].agent_id
     out = apply_filter(events, EventFilter(agent=creditor_id, match_participants=True))
     assert any(e["event_type"] == "conflict_negotiation_round" for e in out)
 
@@ -368,8 +370,8 @@ def test_patch2_round_names_written(world):
         rec, defaulted=set(), repaid=set(),
     )
     r1, r2 = _rounds(world)
-    creditor = world.state.agents["li_quan"]
-    debtor = world.state.agents["lin_yuan"]
+    creditor = world.state.human.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
     assert (r1["initiator_name"], r1["responder_name"]) == (creditor.name, debtor.name)
     assert (r2["initiator_name"], r2["responder_name"]) == (debtor.name, creditor.name)
     # 既有 id 字段语义不变

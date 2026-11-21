@@ -11,22 +11,22 @@
 """
 from __future__ import annotations
 
-from household_helpers import hh
-from vale.core.household import home_node_of, work_node_of
+from household_helpers import attach_test_resource_pools, hh
+from vale.domains.society.households import home_node_of, work_node_of
 
 import random
 
 import pytest
 
-from config.schema.agents import AgentSex
-from config.schema.natural_params import Season, WeatherType
+from vale.config.schema.agents import AgentSex
+from vale.config.schema.natural_params import Season, WeatherType
 from vale.core.calendar import DAYS_PER_YEAR
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
-from vale.core.state import AgentState, DebtRecord, HouseholdState
+from vale.domains.society.state import AgentState, DebtRecord, HouseholdState
 from vale.core.world import World
-from vale.modules.agents import (
+from vale.domains.society.agents import (
     AgentModule,
     Perception,
     SpatialIndex,
@@ -34,7 +34,7 @@ from vale.modules.agents import (
     age_years,
     select_creditor,
 )
-from vale.modules.climate import ClimateModule
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.query import EventFilter, apply_filter
 from vale.observability.render import render_event
 
@@ -42,7 +42,9 @@ from vale.observability.render import render_event
 def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     w = World(world_id=cfg.world.world_id, event_log=EventLog(":memory:"),
-              start_tick=cfg.world.start_tick, config=cfg)
+              start_tick=cfg.world.start_tick, config=cfg,
+              allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     return w
@@ -71,7 +73,7 @@ def _add_child(world, *, agent_id="child_99", name="林小满", mother="zhao_cui
                father="lin_yuan", health=60.0, hunger=50.0,
                home="common_district") -> AgentState:
     """加入母亲家庭（家庭模型第 1 步：新生儿随母）；无母亲则建单人家庭。"""
-    mother_agent = world.state.agents.get(mother) if mother else None
+    mother_agent = world.state.human.agents.get(mother) if mother else None
     if mother_agent is not None:
         household = hh(world, mother_agent)
         household_id = household.household_id
@@ -79,7 +81,7 @@ def _add_child(world, *, agent_id="child_99", name="林小满", mother="zhao_cui
         home = household.home_node
     else:
         household_id = f"hh_{agent_id}"
-        world.state.households[household_id] = HouseholdState(
+        world.state.human.households[household_id] = HouseholdState(
             household_id=household_id, member_ids=[agent_id], head_id=agent_id,
             home_node=home, work_node=home, formed_tick=world.current_tick,
         )
@@ -90,7 +92,7 @@ def _add_child(world, *, agent_id="child_99", name="林小满", mother="zhao_cui
         health=health, hunger=hunger, stamina=50.0,
         mother_id=mother, father_id=father,
     )
-    world.state.agents[agent_id] = child
+    world.state.human.agents[agent_id] = child
     return child
 
 
@@ -101,7 +103,7 @@ def _inventory(world, agent: AgentState, fields: list[str]) -> float:
 def _world_inventory(world, fields: list[str]) -> float:
     """按“家庭”去重统计世界库存（同户多人只算一次）。"""
     return sum(sum(getattr(h, f, 0.0) for f in fields)
-               for h in world.state.households.values())
+               for h in world.state.human.households.values())
 
 
 def _move_out(world, agent: AgentState, *, suffix: str = "solo"):
@@ -110,12 +112,12 @@ def _move_out(world, agent: AgentState, *, suffix: str = "solo"):
     old.member_ids = [m for m in old.member_ids if m != agent.agent_id]
     old.head_id = old.member_ids[0] if old.member_ids else None
     new_id = f"hh_{agent.agent_id}_{suffix}"
-    world.state.households[new_id] = HouseholdState(
+    world.state.human.households[new_id] = HouseholdState(
         household_id=new_id, member_ids=[agent.agent_id], head_id=agent.agent_id,
         home_node=old.home_node, work_node=old.work_node, formed_tick=world.current_tick,
     )
     agent.household_id = new_id
-    return world.state.households[new_id]
+    return world.state.human.households[new_id]
 
 
 def _food_fields(world) -> list[str]:
@@ -134,19 +136,19 @@ def test_a1_runtime_newborn_participates_next_tick(world):
         if e["payload"]["agent_id"] == child.agent_id and e["tick"] == tick_before
     ]
     assert acts, "运行时新增的新生儿必须在下一 tick 参与决策与结算"
-    assert world.state.agents[child.agent_id].last_action is not None
-    assert world.state.agents[child.agent_id].alive
+    assert world.state.human.agents[child.agent_id].last_action is not None
+    assert world.state.human.agents[child.agent_id].alive
 
 
 # =========================================================================== #
 # A2：死者不进任何经济池
 # =========================================================================== #
 def test_a2_dead_agent_never_creditor_or_lender(world):
-    li = world.state.agents["li_quan"]
-    lin = world.state.agents["lin_yuan"]
+    li = world.state.human.agents["li_quan"]
+    lin = world.state.human.agents["lin_yuan"]
     li.alive = False
     hh(world, li).grain = 1000.0
-    for aid, agent in world.state.agents.items():
+    for aid, agent in world.state.human.agents.items():
         if aid != "lin_yuan":
             agent.alive = False
     assert select_creditor(world, "hh_lin_yuan", 10.0) is None
@@ -156,8 +158,8 @@ def test_a2_dead_agent_never_creditor_or_lender(world):
 def test_a2_dead_agent_not_marriage_candidate(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    li = world.state.agents["li_quan"]
-    zhao = world.state.agents["zhao_cuilan"]
+    li = world.state.human.agents["li_quan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     li.spouse_id = zhao.spouse_id = None  # 清掉开场结算可能形成的婚姻
     li.alive = False
     assert mod._marriage_eligible(world, li, tuning) is False  # noqa: SLF001
@@ -177,8 +179,8 @@ def test_a2_dead_agent_not_marriage_candidate(world):
 def test_a3_death_incapacitate_inherit_order_and_conservation(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    zhao = world.state.agents["zhao_cuilan"]
+    lin = world.state.human.agents["lin_yuan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     lin.spouse_id, zhao.spouse_id = zhao.agent_id, lin.agent_id
     _move_out(world, lin)  # 家庭模型：死者须为最后成员，继承人才在另一户
     _move_out(world, zhao)  # 继承人独立成户，避免与债权家庭重合
@@ -211,8 +213,8 @@ def test_a3_death_incapacitate_inherit_order_and_conservation(world):
 def test_a4_birth_does_not_transfer_assets(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    mother = world.state.agents["zhao_cuilan"]
-    father = world.state.agents["lin_yuan"]
+    mother = world.state.human.agents["zhao_cuilan"]
+    father = world.state.human.agents["lin_yuan"]
     hh(world, mother).grain, hh(world, mother).vegetable = 100.0, 10.0
     hh(world, father).grain, hh(world, father).fish = 50.0, 4.0
     fields = _food_fields(world)
@@ -220,7 +222,7 @@ def test_a4_birth_does_not_transfer_assets(world):
     father_before = _inventory(world, father, fields)
 
     mod._give_birth(world, mother, father, tuning)  # noqa: SLF001
-    child = world.state.agents["child_1"]
+    child = world.state.human.agents["child_1"]
     assert _inventory(world, mother, fields) == pytest.approx(mother_before)
     assert _inventory(world, father, fields) == pytest.approx(father_before)
     assert child.household_id == mother.household_id
@@ -231,13 +233,13 @@ def test_a4_birth_does_not_transfer_assets(world):
 def test_a4_newborn_household_has_no_extra_inventory(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    mother = world.state.agents["zhao_cuilan"]
-    father = world.state.agents["lin_yuan"]
+    mother = world.state.human.agents["zhao_cuilan"]
+    father = world.state.human.agents["lin_yuan"]
     hh(world, mother).grain = 1.0
     hh(world, father).grain = 0.0
     before = hh(world, mother).grain
     mod._give_birth(world, mother, father, tuning)  # noqa: SLF001
-    child = world.state.agents["child_1"]
+    child = world.state.human.agents["child_1"]
     assert hh(world, child).grain == pytest.approx(before)
     assert hh(world, mother).grain >= 0
 
@@ -249,8 +251,8 @@ def test_a5_birth_not_stopped_by_population_count(world):
     """生育不读取全镇人口阈值；资源充足且配偶合格时继续生育。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
-    mother = world.state.agents["zhao_cuilan"]
-    father = world.state.agents["lin_yuan"]
+    mother = world.state.human.agents["zhao_cuilan"]
+    father = world.state.human.agents["lin_yuan"]
     mother.spouse_id, father.spouse_id = father.agent_id, mother.agent_id
     mother.health = father.health = 90.0
     household = hh(world, mother)
@@ -266,7 +268,7 @@ def test_a5_birth_not_stopped_by_population_count(world):
 def test_a5_low_population_boost(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    agents = world.state.agents
+    agents = world.state.human.agents
     # 004：首 tick 可能已有新生儿——只留这对夫妇，隔离「有未成年子女不提升」的干扰
     for aid in list(agents):
         if aid not in ("lin_yuan", "zhao_cuilan"):
@@ -285,13 +287,13 @@ def test_a5_low_population_boost(world):
 # =========================================================================== #
 def test_d1_birth_tick_is_single_source_of_age(world):
     assert "age" not in AgentState.model_fields
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     assert age_years(lin.birth_tick, world.current_tick) == 18
     assert lin.life_stage == world.config.agents.tuning.aging.stage_for(18).name
 
 
 def test_d2_one_aged_event_per_person_per_year(world):
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     # 下一个 tick 恰好满 30 岁：青年 → 壮年
     lin.birth_tick = (world.current_tick + 1) - 30 * DAYS_PER_YEAR
     lin.health = 90.0
@@ -319,7 +321,7 @@ def test_d3_health_cap_stage_multiplier_and_decline(world):
 def test_d4_natural_death_requires_age_and_health(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.birth_tick = world.current_tick - 60 * DAYS_PER_YEAR
     lin.health = tuning.aging.natural_death_health_threshold + 1
     mod._check_natural_death(world, lin, tuning)  # noqa: SLF001
@@ -335,7 +337,7 @@ def test_d4_natural_death_requires_age_and_health(world):
 def test_d4_young_low_health_not_natural_death(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    zhao = world.state.agents["zhao_cuilan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     zhao.health = 10.0
     mod._check_natural_death(world, zhao, tuning)  # noqa: SLF001
     assert zhao.health == 10.0 and zhao.death_cause is None
@@ -344,7 +346,7 @@ def test_d4_young_low_health_not_natural_death(world):
 def test_d5_widow_remarriage_eligibility(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    zhao = world.state.agents["zhao_cuilan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     zhao.spouse_id = "someone_dead"
     zhao.health, hh(world, zhao).grain = 90.0, 100.0
     assert mod._marriage_eligible(world, zhao, tuning) is True  # noqa: SLF001
@@ -358,8 +360,8 @@ def test_d5_widow_remarriage_eligibility(world):
 def test_d6_birth_interval_and_probability(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    mother = world.state.agents["zhao_cuilan"]
-    father = world.state.agents["lin_yuan"]
+    mother = world.state.human.agents["zhao_cuilan"]
+    father = world.state.human.agents["lin_yuan"]
     mother.spouse_id, father.spouse_id = father.agent_id, mother.agent_id
     mother.health = father.health = 90.0
     interval = tuning.birth.interval_days
@@ -376,12 +378,12 @@ def test_d6_birth_interval_and_probability(world):
 def test_d7_newborn_attributes_use_parent_average_and_minimum(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    mother = world.state.agents["zhao_cuilan"]
-    father = world.state.agents["lin_yuan"]
+    mother = world.state.human.agents["zhao_cuilan"]
+    father = world.state.human.agents["lin_yuan"]
     mother.health, father.health = 80.0, 60.0
     mother.stamina, father.stamina = 60.0, 40.0
     mod._give_birth(world, mother, father, tuning)  # noqa: SLF001
-    child = world.state.agents["child_1"]
+    child = world.state.human.agents["child_1"]
     assert child.health == pytest.approx((80 + 60) / 2 * 0.8)
     assert child.stamina == pytest.approx((60 + 40) / 2 * 0.8)
 
@@ -394,12 +396,12 @@ def test_d8_newborn_uses_household_work_node(world):
     """
     mod = _module(world)
     tuning = world.config.agents.tuning
-    mother = world.state.agents["zhao_cuilan"]
-    father = world.state.agents["lin_yuan"]
+    mother = world.state.human.agents["zhao_cuilan"]
+    father = world.state.human.agents["lin_yuan"]
     household = hh(world, mother)
     household.work_node = "south_field"
     mod._give_birth(world, mother, father, tuning)  # noqa: SLF001
-    child = world.state.agents["child_1"]
+    child = world.state.human.agents["child_1"]
     assert child.work_node is None
     assert work_node_of(world, child) in household.work_nodes
     payload = world.event_log.by_type("agent_born")[-1]["payload"]
@@ -422,8 +424,8 @@ def test_d9_dependent_consumes_household_stock(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
     child = _add_child(world, health=90.0, hunger=80.0)
-    mother = world.state.agents["zhao_cuilan"]
-    father = world.state.agents["lin_yuan"]
+    mother = world.state.human.agents["zhao_cuilan"]
+    father = world.state.human.agents["lin_yuan"]
     # 004：日内动作改变婚配配对，父方可能已并入母户——显式分户，隔离跨户断言
     if father.household_id == mother.household_id:
         _move_out(world, father)
@@ -443,8 +445,8 @@ def test_d9_dependent_consumes_household_stock(world):
 def test_d9_adult_does_not_feed_from_parent(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    zhao = world.state.agents["zhao_cuilan"]
+    lin = world.state.human.agents["lin_yuan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     lin.mother_id, lin.father_id = zhao.agent_id, None
     hh(world, lin).grain = 0.0
     hh(world, zhao).grain = 100.0
@@ -457,8 +459,8 @@ def test_d9_adult_does_not_feed_from_parent(world):
 def test_d10_heir_priority_spouse_child_parent(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    zhao = world.state.agents["zhao_cuilan"]
+    lin = world.state.human.agents["lin_yuan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     lin.spouse_id = zhao.agent_id
     assert mod._select_heir(world, lin, tuning) is zhao  # noqa: SLF001
 
@@ -478,8 +480,8 @@ def test_d10_heir_priority_spouse_child_parent(world):
 def test_d11_debt_split_between_heir_and_forgiveness(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    zhao = world.state.agents["zhao_cuilan"]
+    lin = world.state.human.agents["lin_yuan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     lin.spouse_id = zhao.agent_id
     _move_out(world, zhao)  # 跨户继承才转移债务
     hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan",
@@ -498,10 +500,10 @@ def test_q5_creditor_dissolution_transfer_carries_each_debtor_household():
     mod = next(m for m in world.modules if m.name == "agents")
     mod._ensure_agents(world, world.config.agents)  # noqa: SLF001 — 只验证结算事件
     tuning = world.config.agents.tuning
-    zhao = world.state.agents["zhao_cuilan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     creditor_hh = hh(world, zhao)
-    debtor_agents = [world.state.agents["lin_yuan"], world.state.agents["zhou_qiaoniang"]]
-    heir = world.state.agents["li_quan"]
+    debtor_agents = [world.state.human.agents["lin_yuan"], world.state.human.agents["zhou_qiaoniang"]]
+    heir = world.state.human.agents["li_quan"]
     amounts = [3.0, 1.5]
 
     for agent, amount in zip(debtor_agents, amounts):
@@ -532,7 +534,7 @@ def test_q5_creditor_dissolution_transfer_carries_each_debtor_household():
 def test_d12_no_heir_assets_escheated_with_event(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.spouse_id = lin.mother_id = lin.father_id = None
     lin.children_ids = []
     hh(world, lin).grain, hh(world, lin).cloth = 20.0, 1.0
@@ -551,8 +553,8 @@ def test_d12_no_heir_assets_escheated_with_event(world):
 def test_d13_birth_and_debt_transfer_events_exist(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    mother = world.state.agents["zhao_cuilan"]
-    father = world.state.agents["lin_yuan"]
+    mother = world.state.human.agents["zhao_cuilan"]
+    father = world.state.human.agents["lin_yuan"]
     mother.spouse_id, father.spouse_id = father.agent_id, mother.agent_id
     hh(world, mother).grain, hh(world, father).grain = 100.0, 100.0
     mod._give_birth(world, mother, father, tuning)  # noqa: SLF001
@@ -593,7 +595,7 @@ def test_d14_participants_only_matched_when_enabled():
 def test_d15_close_kin_mating_forbidden(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     child = _add_child(world, mother=lin.agent_id, father="li_quan")
     lin.children_ids.append(child.agent_id)
     assert mod._is_close_kin(lin, child) is True  # noqa: SLF001
@@ -601,8 +603,8 @@ def test_d15_close_kin_mating_forbidden(world):
     sibling_b = _add_child(world, agent_id="child_b", name="林乙", mother="zhou_qiaoniang")
     assert mod._is_close_kin(sibling_a, sibling_b) is True  # noqa: SLF001
     # 无亲缘关系：不禁止
-    assert mod._is_close_kin(world.state.agents["lin_yuan"],
-                             world.state.agents["zhou_qiaoniang"]) is False
+    assert mod._is_close_kin(world.state.human.agents["lin_yuan"],
+                             world.state.human.agents["zhou_qiaoniang"]) is False
     assert tuning.marriage.forbid_close_kin is True
 
 

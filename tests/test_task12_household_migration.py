@@ -15,15 +15,15 @@ import random
 
 import pytest
 
-from household_helpers import hh, inv
-from vale.core.household import work_node_of
+from household_helpers import attach_test_resource_pools, hh, inv
+from vale.domains.society.households import work_node_of
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
 from vale.core.world import World
-from vale.modules.agents import AgentModule
-from vale.modules.climate import ClimateModule
+from vale.domains.society.agents import AgentModule
+from vale.domains.environment.climate import ClimateModule
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
@@ -31,7 +31,9 @@ FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     w = World(world_id=cfg.world.world_id, event_log=EventLog(":memory:"),
-              start_tick=cfg.world.start_tick, config=cfg)
+              start_tick=cfg.world.start_tick, config=cfg,
+              allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     return w
@@ -61,9 +63,9 @@ def test_each_config_agent_gets_single_household():
     module._ensure_agents(w, w.config.agents)  # noqa: SLF001 — 只验证初始化
     cfg = w.config
     for agent_cfg in cfg.agents.agents:
-        agent = w.state.agents[agent_cfg.id]
+        agent = w.state.human.agents[agent_cfg.id]
         assert agent.household_id == f"hh_{agent_cfg.id}"
-        household = w.state.households[agent.household_id]
+        household = w.state.human.households[agent.household_id]
         assert household.member_ids == [agent_cfg.id]
         assert household.head_id == agent_cfg.id
         assert household.grain == pytest.approx(agent_cfg.assets.grain)
@@ -75,19 +77,19 @@ def test_each_config_agent_gets_single_household():
 
 
 def test_household_ids_are_unique_and_heads_are_members(world):
-    households = world.state.households
+    households = world.state.human.households
     assert len({h.household_id for h in households.values()}) == len(households)
     for household in households.values():
         if household.member_ids:
             assert household.head_id in household.member_ids
-        assert all(mid in world.state.agents for mid in household.member_ids)
+        assert all(mid in world.state.human.agents for mid in household.member_ids)
 
 
 # --------------------------------------------------------------------------- #
 # 家庭是经济单位
 # --------------------------------------------------------------------------- #
 def test_action_events_carry_household_id_and_use_household_inventory(world):
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     household = hh(world, lin)
     household.grain = 5.0
     lin.hunger = 90.0
@@ -105,7 +107,7 @@ def test_action_events_carry_household_id_and_use_household_inventory(world):
 
 
 def test_household_inventory_matches_config_seed(world):
-    for agent in world.state.agents.values():
+    for agent in world.state.human.agents.values():
         assert inv(world, agent)["grain"] >= 0
         assert set(inv(world, agent)) == {"grain", "meat", "fish", "vegetable", "cloth"}
 
@@ -118,15 +120,15 @@ def test_legacy_replay_creates_single_households():
     events = _legacy_events()
     result = rebuild_state(events, cfg)
     state = result.state
-    assert state.agents and state.households
-    for agent in state.agents.values():
+    assert state.human.agents and state.human.households
+    for agent in state.human.agents.values():
         assert agent.household_id == f"hh_{agent.agent_id}"
-        household = state.households[agent.household_id]
+        household = state.human.households[agent.household_id]
         assert agent.agent_id in household.member_ids
         assert household.head_id in household.member_ids
     # 无孤儿家庭：每个家庭成员都在 agents 中
-    for household in state.households.values():
-        assert all(mid in state.agents for mid in household.member_ids)
+    for household in state.human.households.values():
+        assert all(mid in state.human.agents for mid in household.member_ids)
     assert not result.ignored_events.get("agent_died", 0)
 
 
@@ -135,8 +137,8 @@ def test_legacy_replay_matches_old_snapshots():
     expected = _expected()
     state = rebuild_state(_legacy_events(), cfg).state
     for agent_id, exp in expected["agents"].items():
-        agent = state.agents[agent_id]
-        household = state.households[agent.household_id]
+        agent = state.human.agents[agent_id]
+        household = state.human.households[agent.household_id]
         for field, value in exp["assets"].items():
             assert getattr(household, field) == pytest.approx(value, abs=1e-6), (
                 f"{agent_id}.{field} replay={getattr(household, field)} old={value}"
@@ -151,7 +153,7 @@ def test_legacy_replay_debt_ids_are_households():
     cfg = load_config("brookvale-town-001")
     state = rebuild_state(_legacy_events(), cfg).state
     seen = 0
-    for household in state.households.values():
+    for household in state.human.households.values():
         for rec in household.debts:
             seen += 1
             assert rec.debtor_household_id == household.household_id
@@ -175,8 +177,8 @@ def test_replay_debt_side_transfer_without_debtor_key_stays_compatible():
             "amount": 2.0, "due_tick": 500}},
     ]
     state = rebuild_state(events, cfg).state
-    assert state.households["hh_lin_yuan"].debt == pytest.approx(2.0)
-    assert state.households["hh_li_quan"].debt == pytest.approx(2.0)
+    assert state.human.households["hh_lin_yuan"].debt == pytest.approx(2.0)
+    assert state.human.households["hh_li_quan"].debt == pytest.approx(2.0)
 
 
 def test_replay_creditor_side_transfer_uses_debtor_household_id():
@@ -195,11 +197,11 @@ def test_replay_creditor_side_transfer_uses_debtor_household_id():
             "amount": 4.0, "due_tick": 500}},
     ]
     state = rebuild_state(events, cfg).state
-    debtor_hh = state.households["hh_lin_yuan"]
+    debtor_hh = state.human.households["hh_lin_yuan"]
     assert debtor_hh.debt == pytest.approx(4.0)
     assert debtor_hh.debts[0].creditor_household_id == "hh_li_quan"
-    assert state.households["hh_li_quan"].debts == []
-    assert state.households["hh_zhao_cuilan"].debts == []
+    assert state.human.households["hh_li_quan"].debts == []
+    assert state.human.households["hh_zhao_cuilan"].debts == []
 
 
 def test_legacy_replay_does_not_rewrite_events():
@@ -220,7 +222,7 @@ def _module(world):
 def test_household_adult_eat_consumes_household_stock(world):
     """覆盖 test_agents / test_task10 / test_hunting 中“单人进食”被隔离的语义。"""
     mod = _module(world)
-    agent = world.state.agents["lin_yuan"]
+    agent = world.state.human.agents["lin_yuan"]
     household = hh(world, agent)
     household.grain, household.vegetable, household.meat, household.fish = 5.0, 0.0, 0.0, 0.0
     agent.hunger = 90.0
@@ -233,26 +235,26 @@ def test_household_adult_eat_consumes_household_stock(world):
 def test_household_harvest_adds_to_household_stock(world):
     """覆盖 test_agents::test_harvest_autumn... 被隔离的家庭生产语义。"""
     mod = _module(world)
-    agent = world.state.agents["lin_yuan"]
+    agent = world.state.human.agents["lin_yuan"]
     household = hh(world, agent)
     tuning = world.config.agents.tuning
     household.grain = 0.0
     household.vegetable = 0.0
     household.meat, household.fish, household.cloth = 0.0, 0.0, 0.0
     node = work_node_of(world, agent)
-    world.state.field_growth[node] = 100.0
+    world.state.environment.field_growth[node] = 100.0
     agent.location = node
     mod._execute(world, agent, "harvest", mod._perceive(world, agent),
                  tuning)  # noqa: SLF001
     assert sum(inv(world, agent).values()) > 0.0
-    assert all(getattr(a, "grain", None) is None for a in world.state.agents.values())
+    assert all(getattr(a, "grain", None) is None for a in world.state.human.agents.values())
 
 
 def test_household_borrow_moves_grain_between_households(world):
     """覆盖 test_agents / test_economy 被隔离的借粮与债主选择语义。"""
     mod = _module(world)
-    debtor = world.state.agents["lin_yuan"]
-    creditor = world.state.agents["li_quan"]
+    debtor = world.state.human.agents["lin_yuan"]
+    creditor = world.state.human.agents["li_quan"]
     tuning = world.config.agents.tuning
     debtor_hh, creditor_hh = hh(world, debtor), hh(world, creditor)
     debtor_hh.grain = 0.0
@@ -272,8 +274,8 @@ def test_household_market_runs_once_per_household(world):
     """覆盖 test_task11 集市“每户一次”语义（被隔离测试的家庭对应项）。"""
     mod = _module(world)
     tuning = world.config.agents.tuning
-    for household in {a.household_id for a in world.state.agents.values()}:
-        world.state.households[household].home_node = tuning.market.market_node
+    for household in {a.household_id for a in world.state.human.agents.values()}:
+        world.state.human.households[household].home_node = tuning.market.market_node
     mod._settle_market(world, tuning)  # noqa: SLF001
     summary = world.event_log.by_type("market_day_summary")[-1]["payload"]
     households = [p["household_id"] for p in summary["participants"]]
@@ -283,10 +285,10 @@ def test_household_market_runs_once_per_household(world):
 def test_household_market_never_trades_within_same_household(world):
     mod = _module(world)
     tuning = world.config.agents.tuning
-    for household in {a.household_id for a in world.state.agents.values()}:
-        world.state.households[household].home_node = tuning.market.market_node
+    for household in {a.household_id for a in world.state.human.agents.values()}:
+        world.state.human.households[household].home_node = tuning.market.market_node
     mod._settle_market(world, tuning)  # noqa: SLF001
-    by_id = {h.household_id: h for h in world.state.households.values()}
+    by_id = {h.household_id: h for h in world.state.human.households.values()}
     for event in world.event_log.by_type("trade_executed"):
         p = event["payload"]
         seller_hh = p.get("seller_household_id")

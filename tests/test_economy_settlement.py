@@ -9,20 +9,20 @@
 
 from __future__ import annotations
 
-from household_helpers import hh
-from vale.core.household import home_node_of, work_node_of
+from household_helpers import attach_test_resource_pools, hh
+from vale.domains.society.households import home_node_of, work_node_of
 
 import pytest
 
-from config.schema.natural_params import Season
+from vale.config.schema.natural_params import Season
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
-from vale.core.state import DebtRecord
+from vale.domains.society.state import DebtRecord
 from vale.core.world import World
-from vale.modules.agents import IMPOSSIBLE, AgentModule, select_creditor
-from vale.modules.climate import ClimateModule
+from vale.domains.society.agents import IMPOSSIBLE, AgentModule, select_creditor
+from vale.domains.environment.climate import ClimateModule
 from vale.observability.render import render_event
 
 
@@ -35,7 +35,10 @@ def world():
         event_log=log,
         start_tick=cfg.world.start_tick,
         config=cfg,
+        # 孤立模块夹具：只注册气候 + 人物，显式允许缺失 ecology 等依赖
+        allow_missing_dependencies=True,
     )
+    attach_test_resource_pools(w)
     w.register(ClimateModule())
     w.register(AgentModule())
     # 任务12：单人借贷/债务单元测试，禁用婚配结算以隔离家庭合并对库存的影响
@@ -55,9 +58,9 @@ def _module(world) -> AgentModule:
 # --------------------------------------------------------------------------- #
 def test_select_creditor_picks_richest(world):
     run_tick(world)  # 初始化 agents
-    agents = world.state.agents
+    agents = world.state.human.agents
     # Isolate private-credit selection from the public granary's prior redistribution.
-    for household in world.state.households.values():
+    for household in world.state.human.households.values():
         household.grain = 0.0
     lin_household = hh(world, agents["lin_yuan"])
     li_household = hh(world, agents["li_quan"])
@@ -69,14 +72,14 @@ def test_select_creditor_picks_richest(world):
 def test_select_creditor_prefers_nearest_sufficient_household_with_spatial_index(world):
     run_tick(world)
     module = _module(world)
-    lin = world.state.agents["lin_yuan"]
-    li = world.state.agents["li_quan"]
-    zhao = world.state.agents["zhao_cuilan"]
+    lin = world.state.human.agents["lin_yuan"]
+    li = world.state.human.agents["li_quan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     debtor = hh(world, lin)
     far_rich = hh(world, li)
     near_solvent = hh(world, zhao)
 
-    for household in world.state.households.values():
+    for household in world.state.human.households.values():
         household.grain = 0.0
     debtor.home_node = "common_district"
     near_solvent.home_node = "market"
@@ -97,8 +100,8 @@ def test_select_creditor_prefers_nearest_sufficient_household_with_spatial_index
 
 def test_select_creditor_returns_none_when_none_sufficient(world):
     run_tick(world)  # 初始化 agents
-    lin_household = hh(world, world.state.agents["lin_yuan"])
-    for a in world.state.agents.values():
+    lin_household = hh(world, world.state.human.agents["lin_yuan"])
+    for a in world.state.human.agents.values():
         if a.agent_id != "lin_yuan":
             hh(world, a).grain = 3.0  # 都 < 5
     assert select_creditor(world, lin_household.household_id, 5.0) is None
@@ -114,13 +117,13 @@ def test_borrow_transaction_conserves_grain(world):
     故构造断粮状态（清空采集动作 + 零食物 + 高饥饿）触发借粮再验证守恒。
     """
     run_tick(world)
-    world.state.community_reserves.clear()
-    for building in world.state.buildings.values():
+    world.state.human.community_reserves.clear()
+    for building in world.state.human.buildings.values():
         if building.attributes.get("community_reserve"):
             building.status = "ruined"
     world.config.agents.tuning.gathering.actions.clear()
-    lin = world.state.agents["lin_yuan"]
-    hh(world, world.state.agents["li_quan"]).grain = 100.0
+    lin = world.state.human.agents["lin_yuan"]
+    hh(world, world.state.human.agents["li_quan"]).grain = 100.0
     # 断粮 = 四个食物字段全部清零（阶段三第1轮：捕鱼产出提高后，仅清 grain 会残留首日渔获，
     # 使“断粮”前置不成立、用例随未 seeded 气候/采集随机偶发失败）
     for field in ("grain", "vegetable", "meat", "fish"):
@@ -146,11 +149,11 @@ def test_borrow_chooses_creditor_with_sufficient_grain(world):
     test_borrow_grain_triggers_when_low_grain 覆盖。
     """
     run_tick(world)
-    lin = world.state.agents["lin_yuan"]
-    for household in world.state.households.values():
+    lin = world.state.human.agents["lin_yuan"]
+    for household in world.state.human.households.values():
         household.grain = 0.0
-    hh(world, world.state.agents["li_quan"]).grain = 3.0  # 存粮不足，借不出
-    zhao = world.state.agents["zhao_cuilan"]
+    hh(world, world.state.human.agents["li_quan"]).grain = 3.0  # 存粮不足，借不出
+    zhao = world.state.human.agents["zhao_cuilan"]
     hh(world, zhao).grain = 50.0
     hh(world, lin).grain = 1.0
     module = _module(world)
@@ -172,12 +175,12 @@ def test_borrow_food_transfers_and_collects_in_kind_with_replay(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    zhao = world.state.agents["zhao_cuilan"]
+    lin = world.state.human.agents["lin_yuan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
     debtor = hh(world, lin)
     lender = hh(world, zhao)
 
-    for household in world.state.households.values():
+    for household in world.state.human.households.values():
         for resource in ("grain", "fish", "meat", "vegetable"):
             setattr(household, resource, 0.0)
     debtor.home_node = "common_district"
@@ -209,17 +212,17 @@ def test_borrow_food_transfers_and_collects_in_kind_with_replay(world):
     assert debtor.debts == []
 
     rebuilt = rebuild_state(world.event_log.all(), world.config).state
-    assert rebuilt.households[debtor.household_id].fish == pytest.approx(3.0)
-    assert rebuilt.households[lender.household_id].fish == pytest.approx(30.0)
-    assert rebuilt.households[debtor.household_id].debts == []
+    assert rebuilt.human.households[debtor.household_id].fish == pytest.approx(3.0)
+    assert rebuilt.human.households[lender.household_id].fish == pytest.approx(30.0)
+    assert rebuilt.human.households[debtor.household_id].debts == []
 
 
 def test_market_credit_can_lend_fish_and_replay_in_kind(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    buyer_agent = world.state.agents["lin_yuan"]
-    seller_agent = world.state.agents["zhao_cuilan"]
+    buyer_agent = world.state.human.agents["lin_yuan"]
+    seller_agent = world.state.human.agents["zhao_cuilan"]
     buyer = hh(world, buyer_agent)
     seller = hh(world, seller_agent)
 
@@ -246,17 +249,17 @@ def test_market_credit_can_lend_fish_and_replay_in_kind(world):
     assert formed["creditor_fish_after"] == pytest.approx(70.0)
 
     rebuilt = rebuild_state(world.event_log.all(), world.config).state
-    assert rebuilt.households[buyer.household_id].fish == pytest.approx(30.0)
-    assert rebuilt.households[seller.household_id].fish == pytest.approx(70.0)
-    assert rebuilt.households[buyer.household_id].debts[-1].resource == "fish"
+    assert rebuilt.human.households[buyer.household_id].fish == pytest.approx(30.0)
+    assert rebuilt.human.households[seller.household_id].fish == pytest.approx(70.0)
+    assert rebuilt.human.households[buyer.household_id].debts[-1].resource == "fish"
 
 
 def test_borrow_score_impossible_when_no_creditor(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    for a in world.state.agents.values():
+    lin = world.state.human.agents["lin_yuan"]
+    for a in world.state.human.agents.values():
         if a.agent_id != "lin_yuan":
             hh(world, a).grain = 1.0
     hh(world, lin).grain = 1.0
@@ -269,7 +272,7 @@ def test_borrow_score_impossible_when_overdue(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     hh(world, lin).grain = 1.0
     hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=5.0,
                             originated_tick=0, due_tick=90, overdue=True)]
@@ -284,8 +287,8 @@ def test_collection_full_payment_clears_debt(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    li = world.state.agents["li_quan"]
+    lin = world.state.human.agents["lin_yuan"]
+    li = world.state.human.agents["li_quan"]
     hh(world, lin).grain = 20.0
     hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=10.0,
                             originated_tick=0, due_tick=90)]
@@ -307,8 +310,8 @@ def test_collection_partial_marks_overdue(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    li = world.state.agents["li_quan"]
+    lin = world.state.human.agents["lin_yuan"]
+    li = world.state.human.agents["li_quan"]
     hh(world, lin).grain = 4.0
     hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=10.0,
                             originated_tick=0, due_tick=90)]
@@ -330,8 +333,8 @@ def test_collection_defaulted_when_no_grain(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    li = world.state.agents["li_quan"]
+    lin = world.state.human.agents["lin_yuan"]
+    li = world.state.human.agents["li_quan"]
     hh(world, lin).grain = 0.0
     hh(world, lin).fish = 5.0  # 尚有其他可食物资，不属于断粮
     hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=10.0,
@@ -353,8 +356,8 @@ def test_collection_foodless_debt_written_off(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    li = world.state.agents["li_quan"]
+    lin = world.state.human.agents["lin_yuan"]
+    li = world.state.human.agents["li_quan"]
     debtor = hh(world, lin)
     for resource in ("grain", "fish", "meat", "vegetable"):
         setattr(debtor, resource, 0.0)
@@ -372,7 +375,7 @@ def test_collection_foodless_debt_written_off(world):
     assert debtor.debt == pytest.approx(0.0)
 
     rebuilt = rebuild_state(world.event_log.all(), world.config).state
-    assert rebuilt.households["hh_lin_yuan"].debts == []
+    assert rebuilt.human.households["hh_lin_yuan"].debts == []
 
 
 def test_collection_foodless_write_off_disabled_keeps_debt(world):
@@ -381,7 +384,7 @@ def test_collection_foodless_write_off_disabled_keeps_debt(world):
     module = _module(world)
     tuning = world.config.agents.tuning
     tuning.debt.write_off_unpayable = False
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     debtor = hh(world, lin)
     for resource in ("grain", "fish", "meat", "vegetable"):
         setattr(debtor, resource, 0.0)
@@ -399,7 +402,7 @@ def test_collection_interval_throttles_repeated_attempts(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     hh(world, lin).grain = 100.0
     hh(world, lin).debts = [DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=10.0,
                             originated_tick=0, due_tick=90)]
@@ -423,15 +426,15 @@ def test_harvest_repayment_earliest_due_first(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     hh(world, lin).grain = 100.0
     # 两笔债务：due 120 晚、due 90 早
     hh(world, lin).debts = [
         DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=20.0, originated_tick=0, due_tick=120),
         DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=20.0, originated_tick=0, due_tick=90),
     ]
-    world.state.climate.season = Season.AUTUMN
-    world.state.field_growth[work_node_of(world, lin)] = 90.0
+    world.state.environment.climate.season = Season.AUTUMN
+    world.state.environment.field_growth[work_node_of(world, lin)] = 90.0
     p = module._perceive(world, lin)  # noqa: SLF001
 
     module._execute(world, lin, "harvest", p, tuning)  # noqa: SLF001
@@ -452,7 +455,7 @@ def test_health_recovers_when_conditions_met(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.health = 50.0
     lin.hunger = 30.0   # < 阈值 40
     lin.stamina = 60.0  # > 阈值 50
@@ -470,7 +473,7 @@ def test_health_no_recovery_when_hunger_high(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.health = 50.0
     lin.hunger = 50.0   # ≥ 旧阈值 40、< 新阈值 60：新调参下允许回血 0.5
     lin.stamina = 60.0
@@ -487,7 +490,7 @@ def test_health_recovery_capped_at_100(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.health = 99.8
     lin.hunger = 30.0
     lin.stamina = 60.0
@@ -507,9 +510,9 @@ def test_farm_score_impossible_when_growth_capped(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     cap = tuning.agriculture.max_field_growth
-    world.state.field_growth[work_node_of(world, lin)] = cap
+    world.state.environment.field_growth[work_node_of(world, lin)] = cap
     p = module._perceive(world, lin)  # noqa: SLF001
     assert module.score_action("farm", p, tuning) == IMPOSSIBLE
 
@@ -518,8 +521,8 @@ def test_no_farm_event_after_growth_capped(world):
     run_tick(world)
     module = _module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
-    world.state.field_growth[work_node_of(world, lin)] = tuning.agriculture.max_field_growth
+    lin = world.state.human.agents["lin_yuan"]
+    world.state.environment.field_growth[work_node_of(world, lin)] = tuning.agriculture.max_field_growth
     farm_before = [e for e in world.event_log.by_type("agent_action_taken")
                    if e["payload"].get("agent_name") == "林远" and e["payload"].get("action") == "farm"]
 
@@ -535,7 +538,7 @@ def test_no_farm_event_after_growth_capped(world):
 # --------------------------------------------------------------------------- #
 def test_debt_aggregate_matches_sum_of_records(world):
     run_tick(world)
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     hh(world, lin).debts = [
         DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_li_quan", amount=3.0, originated_tick=0, due_tick=90),
         DebtRecord(debtor_household_id="hh_lin_yuan", creditor_household_id="hh_zhao_cuilan", amount=7.0, originated_tick=0, due_tick=90),
@@ -554,7 +557,7 @@ def test_invariant_no_negative_grain_or_debt_over_long_run(world):
     ticks = 200  # 跨过首个到期日(90)与多个催收间隔(90/120/150/180)
     for _ in range(ticks):
         run_tick(world)
-    for a in world.state.agents.values():
+    for a in world.state.human.agents.values():
         assert hh(world, a).grain >= 0, f"{a.name} 存粮为负: {hh(world, a).grain}"
         assert hh(world, a).debt >= 0, f"{a.name} 负债为负: {hh(world, a).debt}"
         for d in hh(world, a).debts:

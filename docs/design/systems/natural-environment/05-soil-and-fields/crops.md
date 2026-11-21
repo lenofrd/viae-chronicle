@@ -90,11 +90,11 @@
 影响范围：按田地片
 ```
 
-> **已落地（盈余经济阶段二，2026-11-15）**：`harvest` 改按本式结算，实现见 `vale.modules.agents.expected_yield`。
+> **已落地（盈余经济阶段二，2026-11-15）**：`harvest` 改按本式结算，实现见 `vale.domains.society.agents.production.expected_yield`（P5-d 分层归位前的路径为 `vale.modules.agents.expected_yield`）。
 > - `base_yield`：配置键 `agriculture.base_yield`（原 `crop_gain` 更名，数值 75/55 不变）。
 > - `area`：`spatial-units.yaml` 节点 `area`，默认 1.0。
-> - `fertility_factor`：`WorldState.field_fertility`，阶段二恒 1.0；连作衰减/休耕恢复**未启用**（阶段三）。
-> - `moisture_factor` / `growth_health` / `disaster_damage`：**moisture 已于任务30 接线**——取 `WorldState.irrigation_gear` 对应系数（充足 1.0 / 偏少 0.85 / 缺水 0.7 / 断水 0.5，`natural-params.hydrology_evolution.moisture_by_gear`）；`growth_health` / `disaster_damage` 仍取中性占位 1/0。
+> - `fertility_factor`：`WorldState.environment.fertility_factor`，阶段二恒 1.0；连作衰减/休耕恢复**未启用**（阶段三）。静态地力另存 `WorldState.environment.soil_quality`（地形生成值，不参与产量）。
+> - `moisture_factor` / `growth_health` / `disaster_damage`：**moisture 已于任务30 接线**——取 `WorldState.environment.irrigation_gear` 对应系数（充足 1.0 / 偏少 0.85 / 缺水 0.7 / 断水 0.5，`natural-params.hydrology_evolution.moisture_by_gear`）；`growth_health` / `disaster_damage` 仍取中性占位 1/0。
 > - 偏差：§4.6 的 `harvest_timing_factor` 未实现（阶段二保持实际收成 = expected_yield）；`growth_stage` 仍由长势阈值与季节近似。
 
 > **004 裁决（2026-11-17，待实现）——劳动定额与完成度**：

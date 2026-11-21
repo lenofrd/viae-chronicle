@@ -7,21 +7,21 @@ from __future__ import annotations
 
 import math
 
-from household_helpers import hh
-from vale.core.household import home_node_of, work_node_of
+from household_helpers import attach_test_resource_pools, hh
+from vale.domains.society.households import home_node_of, work_node_of
 
 import dataclasses
 
 import pytest
 
-from config.schema.natural_params import Season
+from vale.config.schema.natural_params import Season
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
-from vale.core.state import DebtRecord
+from vale.domains.society.state import DebtRecord
 from vale.core.world import World
-from vale.modules.agents import AgentModule
-from vale.modules.climate import ClimateModule
+from vale.domains.society.agents import AgentModule
+from vale.domains.environment.climate import ClimateModule
 
 
 @pytest.fixture
@@ -33,7 +33,10 @@ def world():
         event_log=log,
         start_tick=cfg.world.start_tick,
         config=cfg,
+        # 孤立模块夹具：只注册气候 + 人物，显式允许缺失 ecology 等依赖
+        allow_missing_dependencies=True,
     )
+    attach_test_resource_pools(w)
     w.register(ClimateModule())
     w.register(AgentModule())
     # 任务12：单人消费/债务单元测试，禁用婚配结算以隔离“配偶同户共同进食”
@@ -54,7 +57,7 @@ def _agent_module(world) -> AgentModule:
 def test_agents_loaded_from_config(world):
     """agents.yaml 的 4 个人物应在首次 step 后投影进 WorldState.agents。"""
     run_tick(world)
-    ids = set(world.state.agents.keys())
+    ids = set(world.state.human.agents.keys())
     assert ids == {"lin_yuan", "zhao_cuilan", "li_quan", "zhou_qiaoniang"}
 
     # 配置层：初始存粮正确加载（不受首 tick 行为影响）。任务10 [调参]：林远 15→30、
@@ -64,7 +67,7 @@ def test_agents_loaded_from_config(world):
     assert cfg_by_id["zhao_cuilan"].assets.grain == pytest.approx(35.0)
     assert cfg_by_id["li_quan"].assets.grain == pytest.approx(100.0)
 
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     assert lin.name == "林远"
     assert home_node_of(world, lin) == "common_district"
     assert work_node_of(world, lin) == "west_field"
@@ -81,11 +84,11 @@ def test_hungry_agent_eats_and_state_updates(world):
     """高饥饿 + 有粮 → 选 eat；饥饿降低、存粮减少、last_action 更新。"""
     run_tick(world)  # 初始化气候 + 空间索引 + 人物投影
     # Isolate meal accounting from the separate public-granary redistribution system.
-    world.state.community_reserves.clear()
-    for building in world.state.buildings.values():
+    world.state.human.community_reserves.clear()
+    for building in world.state.human.buildings.values():
         if building.attributes.get("community_reserve"):
             building.status = "ruined"
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.hunger = 90.0
     hh(world, lin).grain = 5.0
     # 任务12：关闭生育，避免出生资产转移扰动本条「进食消耗」断言
@@ -122,7 +125,7 @@ def test_satiated_low_stamina_agent_rests(world):
     run_tick(world)
     module = _agent_module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     hh(world, lin).grain = 5.0      # ≥ 借粮阈值 2，不会触发 borrow
     lin.hunger = 5.0     # 饱腹，eat 效用低
     lin.stamina = 1.0    # 低于农场/水井往返体力 → 移动闸不可行
@@ -143,7 +146,7 @@ def test_rain_multiplies_outdoor_score_and_leaves_indoor_unchanged(world):
     run_tick(world)  # 确保气候与空间索引就绪
     module = _agent_module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.stamina = 80.0  # 保证 farm 可行（首 tick 后体力可能已被消耗）
     p = module._perceive(world, lin)  # noqa: SLF001 — 测试需要构造感知
     p = dataclasses.replace(p, is_raining=False)  # 强制晴天基线，与随机气候解耦
@@ -170,8 +173,8 @@ def test_action_event_payload_has_expected_fields(world):
     run_tick(world)
     events = world.event_log.by_type("agent_action_taken")
     # 004：日内多动作——每人当日至少一条，4 个人物均参与
-    assert {e["payload"]["agent_id"] for e in events} == set(world.state.agents.keys())
-    for agent_id in world.state.agents:
+    assert {e["payload"]["agent_id"] for e in events} == set(world.state.human.agents.keys())
+    for agent_id in world.state.human.agents:
         slots = [e["payload"]["slot"] for e in events if e["payload"]["agent_id"] == agent_id]
         assert slots == list(range(1, len(slots) + 1))  # 日内序号 1 起连续
 
@@ -188,7 +191,7 @@ def test_action_event_payload_has_expected_fields(world):
     for ev in events:
         assert expected_keys <= set(ev["payload"].keys())
     # 快照投影与事件一致
-    for a in world.state.agents.values():
+    for a in world.state.human.agents.values():
         assert a.last_action is not None
         assert a.recent_actions  # 非空
 
@@ -201,16 +204,16 @@ def test_farm_raises_growth_does_not_produce_grain(world):
     run_tick(world)
     module = _agent_module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.stamina = 80.0
-    world.state.field_growth[work_node_of(world, lin)] = 10.0
+    world.state.environment.field_growth[work_node_of(world, lin)] = 10.0
     grain_before = hh(world, lin).grain
     p = module._perceive(world, lin)  # noqa: SLF001
 
     module._execute(world, lin, "farm", p, tuning)
 
     expected_growth = 10.0 + tuning.agriculture.field_growth_per_farm
-    assert world.state.field_growth[work_node_of(world, lin)] == pytest.approx(expected_growth)
+    assert world.state.environment.field_growth[work_node_of(world, lin)] == pytest.approx(expected_growth)
     assert hh(world, lin).grain == grain_before  # 不直接产粮
     assert lin.stamina < 80.0         # 消耗体力
 
@@ -223,16 +226,16 @@ def test_harvest_autumn_grains_growth_and_redeems_debt(world):
     run_tick(world)
     module = _agent_module(world)
     tuning = world.config.agents.tuning
-    zhao = world.state.agents["zhao_cuilan"]
-    li_quan = world.state.agents["li_quan"]
+    zhao = world.state.human.agents["zhao_cuilan"]
+    li_quan = world.state.human.agents["li_quan"]
     zhao.stamina = 80.0
     hh(world, zhao).grain = 10.0
     hh(world, zhao).debts = [DebtRecord(debtor_household_id="hh_zhao_cuilan",
                                          creditor_household_id="hh_li_quan",
                                          amount=20.0, originated_tick=0, due_tick=90)]
     lq_grain_before = hh(world, li_quan).grain
-    world.state.climate.season = Season.AUTUMN
-    world.state.field_growth[work_node_of(world, zhao)] = 90.0
+    world.state.environment.climate.season = Season.AUTUMN
+    world.state.environment.field_growth[work_node_of(world, zhao)] = 90.0
     p = module._perceive(world, zhao)  # noqa: SLF001
 
     module._execute(world, zhao, "harvest", p, tuning)
@@ -242,13 +245,13 @@ def test_harvest_autumn_grains_growth_and_redeems_debt(world):
     gain = ev["expected_yield"]
     assert ev["moisture"] == pytest.approx(
         world.config.natural_params.hydrology_evolution.moisture_by_gear[
-            world.state.irrigation_gear
+            world.state.environment.irrigation_gear
         ]
     )
     assert hh(world, zhao).grain == pytest.approx(10.0 + gain - 10.0)  # 10 + 秋收gain - 10(还债给李全)
     assert hh(world, zhao).debt == pytest.approx(10.0)    # 20 - 10（派生聚合）
     assert hh(world, li_quan).grain == pytest.approx(lq_grain_before + 10.0)  # 债主收粮，总粮守恒
-    assert world.state.field_growth[work_node_of(world, zhao)] == pytest.approx(0.0)
+    assert world.state.environment.field_growth[work_node_of(world, zhao)] == pytest.approx(0.0)
     repaid = world.event_log.by_type("debt_repaid")
     assert repaid and repaid[-1]["payload"]["creditor_id"] == "li_quan"
     assert repaid[-1]["payload"]["amount"] == pytest.approx(10.0)
@@ -259,10 +262,10 @@ def test_harvest_feasibility_gated_by_season_and_growth(world):
     run_tick(world)
     module = _agent_module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     lin.stamina = 80.0
-    world.state.field_growth[work_node_of(world, lin)] = 90.0
-    world.state.climate.season = Season.AUTUMN
+    world.state.environment.field_growth[work_node_of(world, lin)] = 90.0
+    world.state.environment.climate.season = Season.AUTUMN
     p = module._perceive(world, lin)  # noqa: SLF001
 
     assert module.score_action("harvest", p, tuning) != float("-inf")
@@ -284,21 +287,21 @@ def test_borrow_grain_triggers_when_low_grain(world):
     """
     run_tick(world)
     # Isolate the private-credit branch from the communal granary/cistern safety net.
-    world.state.community_reserves.clear()
-    for building in world.state.buildings.values():
+    world.state.human.community_reserves.clear()
+    for building in world.state.human.buildings.values():
         if building.attributes.get("community_reserve"):
             building.status = "ruined"
     world.config.agents.tuning.gathering.actions.clear()
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     # The opening tick may have pooled the richest household's surplus; restore
     # a known private creditor after disabling the communal safety net.
-    hh(world, world.state.agents["li_quan"]).grain = 100.0
+    hh(world, world.state.human.agents["li_quan"]).grain = 100.0
     hh(world, lin).grain = 0.0      # 无任何食物 → eat 不可行
     hh(world, lin).meat = 0.0
     hh(world, lin).fish = 0.0
     hh(world, lin).vegetable = 0.0
-    for field_node in world.state.field_growth:
-        world.state.field_growth[field_node] = world.config.agents.tuning.agriculture.max_field_growth
+    for field_node in world.state.environment.field_growth:
+        world.state.environment.field_growth[field_node] = world.config.agents.tuning.agriculture.max_field_growth
     lin.stamina = 100.0  # 体力满：消除 rest 的体力紧缺项，借粮(1.8) > rest(1.5)
     lin.hunger = 95.0
 
@@ -331,7 +334,7 @@ def test_borrow_not_feasible_when_grain_sufficient(world):
     run_tick(world)
     module = _agent_module(world)
     tuning = world.config.agents.tuning
-    lin = world.state.agents["lin_yuan"]
+    lin = world.state.human.agents["lin_yuan"]
     hh(world, lin).grain = 3.0  # ≥ 阈值 2
     lin.stamina = 80.0
     p = module._perceive(world, lin)  # noqa: SLF001
@@ -371,7 +374,7 @@ def test_single_agent_failure_isolated(world, monkeypatch):
 
     # 世界仍在推进，人物投影仍完整
     assert world.current_tick > 0
-    assert set(world.state.agents.keys()) == {"lin_yuan", "zhao_cuilan", "li_quan", "zhou_qiaoniang"}
+    assert set(world.state.human.agents.keys()) == {"lin_yuan", "zhao_cuilan", "li_quan", "zhou_qiaoniang"}
 
 
 # --------------------------------------------------------------------------- #
@@ -385,9 +388,9 @@ def _prepare_marriage_pair(world):
     module = _agent_module(world)
     # world fixture 默认关闭自动婚配；本测试显式恢复真实结算方法。
     module._settle_marriage = AgentModule._settle_marriage.__get__(module, AgentModule)  # noqa: SLF001
-    wife = world.state.agents["zhao_cuilan"]
-    husband = world.state.agents["lin_yuan"]
-    for agent in world.state.agents.values():
+    wife = world.state.human.agents["zhao_cuilan"]
+    husband = world.state.human.agents["lin_yuan"]
+    for agent in world.state.human.agents.values():
         agent.acquaintances.clear()
         agent.recent_interactions.clear()
         if agent.agent_id not in {wife.agent_id, husband.agent_id}:
@@ -400,15 +403,15 @@ def _prepare_marriage_pair(world):
         agent.spouse_id = None
         agent.married_tick = None
     # 测试只覆盖认知与家庭迁移；将两户放到同一可达地点，避免空间图距离干扰。
-    world.state.households[wife.household_id].home_node = "common_district"
-    world.state.households[husband.household_id].home_node = "common_district"
+    world.state.human.households[wife.household_id].home_node = "common_district"
+    world.state.human.households[husband.household_id].home_node = "common_district"
     wife.location = husband.location = "common_district"
     world.config.agents.tuning.marriage.max_distance_tu = 100.0
     return module, wife, husband
 
 
 def _set_mutual_known(world, a, b):
-    from vale.core.state import AcquaintanceEntry
+    from vale.domains.society.state import AcquaintanceEntry
 
     now = world.current_tick
     a.acquaintances[b.agent_id] = AcquaintanceEntry(level=2, last_seen_tick=now)
@@ -431,10 +434,10 @@ def test_shared_place_contact_creates_mutual_known(world):
     assert {event["payload"]["observer_id"] for event in changes} == {
         wife.agent_id, husband.agent_id
     }
-    from vale.core.replay import rebuild_state
+    from vale.world.replay import rebuild_state
     replayed = rebuild_state(world.event_log.all(), world.config).state
-    assert replayed.agents[wife.agent_id].acquaintances[husband.agent_id].level == 2
-    assert replayed.agents[husband.agent_id].acquaintances[wife.agent_id].level == 2
+    assert replayed.human.agents[wife.agent_id].acquaintances[husband.agent_id].level == 2
+    assert replayed.human.agents[husband.agent_id].acquaintances[wife.agent_id].level == 2
 
 
 def test_marriage_age_health_and_distance_thresholds_are_unchanged(world):
@@ -455,8 +458,8 @@ def test_marriage_age_health_and_distance_thresholds_are_unchanged(world):
     assert module._marriage_eligible(world, wife, tuning) is True  # noqa: SLF001
 
     _set_mutual_known(world, wife, husband)
-    world.state.households[wife.household_id].home_node = "common_district"
-    world.state.households[husband.household_id].home_node = "market"
+    world.state.human.households[wife.household_id].home_node = "common_district"
+    world.state.human.households[husband.household_id].home_node = "market"
     distance = module._spatial.travel_tu("common_district", "market")
     assert math.isfinite(distance) and distance > 0
     marriage.max_distance_tu = distance - 0.01
@@ -472,7 +475,7 @@ def test_marriage_age_health_and_distance_thresholds_are_unchanged(world):
 def test_marriage_requires_mutual_known_and_not_recent_memory(world):
     """单向认识不能结婚；双方 known 即可，有限近期记忆为空不撤销资格。"""
     module, wife, husband = _prepare_marriage_pair(world)
-    from vale.core.state import AcquaintanceEntry
+    from vale.domains.society.state import AcquaintanceEntry
 
     wife.acquaintances[husband.agent_id] = AcquaintanceEntry(
         level=2, last_seen_tick=world.current_tick
@@ -493,12 +496,12 @@ def test_marriage_requires_mutual_known_and_not_recent_memory(world):
 def test_marriage_moves_only_wife_and_keeps_two_households_independent(world):
     """女方原家庭的成年成员、既有子女、资产与债务留存；彩礼/陪嫁独立守恒。"""
     from vale.core.calendar import DAYS_PER_YEAR
-    from config.schema.agents import AgentSex
-    from vale.core.state import DebtRecord
+    from vale.config.schema.agents import AgentSex
+    from vale.domains.society.state import DebtRecord
 
     module, wife, husband = _prepare_marriage_pair(world)
-    source = world.state.households[wife.household_id]
-    target = world.state.households[husband.household_id]
+    source = world.state.human.households[wife.household_id]
+    target = world.state.human.households[husband.household_id]
 
     sibling = wife.model_copy(update={
         "agent_id": "marriage_adult_sibling", "name": "女方兄长",
@@ -516,8 +519,8 @@ def test_marriage_moves_only_wife_and_keeps_two_households_independent(world):
         "father_id": husband.agent_id, "children_ids": [],
         "acquaintances": {}, "recent_interactions": [], "impressions": {},
     })
-    world.state.agents[sibling.agent_id] = sibling
-    world.state.agents[child.agent_id] = child
+    world.state.human.agents[sibling.agent_id] = sibling
+    world.state.human.agents[child.agent_id] = child
     source.member_ids.extend([sibling.agent_id, child.agent_id])
     source.head_id = wife.agent_id
     world.event_log.append(world.current_tick, "household_member_registered", {
@@ -563,12 +566,12 @@ def test_marriage_moves_only_wife_and_keeps_two_households_independent(world):
     }
     assert not world.event_log.by_type("household_merged")
 
-    from vale.core.replay import rebuild_state
+    from vale.world.replay import rebuild_state
     replayed = rebuild_state(world.event_log.all(), world.config).state
-    assert replayed.households[source.household_id].grain == pytest.approx(source.grain)
-    assert replayed.households[target.household_id].grain == pytest.approx(target.grain)
-    assert replayed.households[source.household_id].member_ids == source.member_ids
-    assert replayed.households[target.household_id].member_ids == target.member_ids
+    assert replayed.human.households[source.household_id].grain == pytest.approx(source.grain)
+    assert replayed.human.households[target.household_id].grain == pytest.approx(target.grain)
+    assert replayed.human.households[source.household_id].member_ids == source.member_ids
+    assert replayed.human.households[target.household_id].member_ids == target.member_ids
 
 
 def test_birth_has_no_population_or_household_member_cap(world):
@@ -578,10 +581,10 @@ def test_birth_has_no_population_or_household_member_cap(world):
 
     run_tick(world)
     module = _agent_module(world)
-    mother = world.state.agents["zhao_cuilan"]
-    father = world.state.agents["lin_yuan"]
-    household = world.state.households[mother.household_id]
-    old_father_household = world.state.households[father.household_id]
+    mother = world.state.human.agents["zhao_cuilan"]
+    father = world.state.human.agents["lin_yuan"]
+    household = world.state.human.households[mother.household_id]
+    old_father_household = world.state.human.households[father.household_id]
     if father.agent_id in old_father_household.member_ids:
         old_father_household.member_ids.remove(father.agent_id)
     father.household_id = household.household_id
@@ -601,13 +604,13 @@ def test_birth_has_no_population_or_household_member_cap(world):
             "children_ids": [], "mother_id": None, "father_id": None,
             "acquaintances": {}, "recent_interactions": [], "impressions": {},
         })
-        world.state.agents[agent_id] = extra
+        world.state.human.agents[agent_id] = extra
         household.member_ids.append(agent_id)
 
-    for agent in world.state.agents.values():
+    for agent in world.state.human.agents.values():
         if agent.agent_id != mother.agent_id and agent.sex.value == "female":
             agent.health = 1.0
-    assert len([a for a in world.state.agents.values() if a.alive]) > 12
+    assert len([a for a in world.state.human.agents.values() if a.alive]) > 12
     assert len(household.member_ids) > 8
 
     household.grain = 1000.0
@@ -615,9 +618,9 @@ def test_birth_has_no_population_or_household_member_cap(world):
     tuning = world.config.agents.tuning
     tuning.birth.chance_per_day = 1.0
     module.rng = random.Random(0)
-    before = len(world.state.agents)
+    before = len(world.state.human.agents)
     module._settle_birth(world, tuning)  # noqa: SLF001
-    assert len(world.state.agents) == before + 1
+    assert len(world.state.human.agents) == before + 1
     assert any(
         event["payload"].get("mother_id") == mother.agent_id
         for event in world.event_log.by_type("agent_born")
@@ -629,8 +632,8 @@ def test_birth_probability_responds_to_food_and_water_security(world):
     """食物/用水库存连续调节生育概率，不通过人口数或户人数硬截断。"""
     run_tick(world)
     module = _agent_module(world)
-    mother = world.state.agents["zhao_cuilan"]
-    household = world.state.households[mother.household_id]
+    mother = world.state.human.agents["zhao_cuilan"]
+    household = world.state.human.households[mother.household_id]
     tuning = world.config.agents.tuning
 
     for field in tuning.physiology.food_fields:

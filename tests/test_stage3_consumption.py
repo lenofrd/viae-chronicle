@@ -7,21 +7,23 @@ from __future__ import annotations
 import random
 
 import pytest
-from config.schema.agents import AgentSex
-from household_helpers import hh
+from vale.config.schema.agents import AgentSex
+from household_helpers import attach_test_resource_pools, hh
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
-from vale.core.state import AgentState
+from vale.domains.society.state import AgentState
 from vale.core.world import World
-from vale.modules.agents import AgentModule, SpatialIndex, age_years
-from vale.modules.climate import ClimateModule
+from vale.domains.society.agents import AgentModule, SpatialIndex, age_years
+from vale.domains.environment.climate import ClimateModule
 
 
 def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     w = World(world_id=cfg.world.world_id, event_log=EventLog(":memory:"),
-              start_tick=cfg.world.start_tick, config=cfg)
+              start_tick=cfg.world.start_tick, config=cfg,
+              allow_missing_dependencies=True)  # 孤立模块夹具：显式允许缺失依赖
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     run_tick(w)
@@ -36,7 +38,7 @@ def _module(world) -> AgentModule:
 
 def _add_minor(world, host_id: str = "zhao_cuilan", agent_id: str = "child_88") -> AgentState:
     """把一个 0 岁未成年加入 host_id 所在家庭（随户消费）。"""
-    host = world.state.agents[host_id]
+    host = world.state.human.agents[host_id]
     household = hh(world, host)
     household.member_ids.append(agent_id)
     child = AgentState(
@@ -47,7 +49,7 @@ def _add_minor(world, host_id: str = "zhao_cuilan", agent_id: str = "child_88") 
         mother_id=host_id if host.sex == AgentSex.FEMALE else None,
         father_id=host_id if host.sex == AgentSex.MALE else None,
     )
-    world.state.agents[agent_id] = child
+    world.state.human.agents[agent_id] = child
     return child
 
 
@@ -85,7 +87,7 @@ def test_adult_ration_unchanged():
     w = _build()
     mod = _module(w)
     tuning = w.config.agents.tuning
-    lin = w.state.agents["lin_yuan"]
+    lin = w.state.human.agents["lin_yuan"]
     household = hh(w, lin)
     household.grain = 10.0
     lin.hunger = 80.0
@@ -115,7 +117,7 @@ def test_consumption_conserves_household_stock():
     w = _build()
     mod = _module(w)
     tuning = w.config.agents.tuning
-    lin = w.state.agents["lin_yuan"]
+    lin = w.state.human.agents["lin_yuan"]
     child = _add_minor(w, host_id="lin_yuan")
     household = hh(w, lin)
     household.grain = 10.0

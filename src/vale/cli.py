@@ -2,6 +2,7 @@
 
 用法：
   python src/vale/cli.py run 30          跑 30 天，打印故事流，并落盘事件库
+  python src/vale/cli.py run 30 --seed 1 指定随机种子（同种子事件流一致）
   python src/vale/cli.py agent 林远       查询某人物当前状态与最近行动
 
 事件库落盘路径：data/worlds/brookvale-town-001/cli_run.db（每次 run 覆盖重建）。
@@ -25,9 +26,7 @@ from vale.core.config_loader import load_config  # noqa: E402
 from vale.core.event_log import EventLog  # noqa: E402
 from vale.core.scheduler import run_tick  # noqa: E402
 from vale.core.world import World  # noqa: E402
-from vale.modules.agents import AgentModule  # noqa: E402
-from vale.modules.climate import ClimateModule  # noqa: E402
-from vale.modules.ecology import EcologyModule  # noqa: E402
+from vale.world.assembly import DEFAULT_SEED, base_town_modules, build_world  # noqa: E402
 from vale.observability.export import EXPORT_FORMATS  # noqa: E402
 from vale.observability.query import EventFilter, apply_filter  # noqa: E402
 from vale.observability.render import payload_preview, render_event  # noqa: E402
@@ -93,23 +92,14 @@ def _date_str(tick: int, cfg) -> str:
     return f"{year}年{month}月{day}日 {solar_term}"
 
 
-def _bootstrap(run_db: bool = True) -> World:
+def _bootstrap(run_db: bool = True, seed: int = DEFAULT_SEED) -> World:
     cfg = load_config(WORLD_ID)
     if run_db:
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         if os.path.exists(DB_PATH):
             os.remove(DB_PATH)
     event_log = EventLog(DB_PATH if run_db else ":memory:")
-    world = World(
-        world_id=cfg.world.world_id,
-        event_log=event_log,
-        start_tick=cfg.world.start_tick,
-        config=cfg,
-    )
-    world.register(ClimateModule())
-    world.register(EcologyModule())
-    world.register(AgentModule())
-    return world
+    return build_world(cfg, event_log, modules=base_town_modules(seed))
 
 
 def _narrate(ev: dict, names: dict[str, str]) -> str:
@@ -156,7 +146,7 @@ def _narrate(ev: dict, names: dict[str, str]) -> str:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    world = _bootstrap(run_db=True)
+    world = _bootstrap(run_db=True, seed=args.seed)
     names = _node_names(world.config.spatial)
     start_tick = world.current_tick  # run_tick 内部会自增，记录起点以便把 tick 映射回“第几天”
 
@@ -164,7 +154,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     for day in range(1, args.days + 1):
         run_tick(world)
         climate_by_day[day] = (
-            world.state.climate.model_dump() if world.state.climate else {}
+            world.state.environment.climate.model_dump() if world.state.environment.climate else {}
         )
 
     # 事件溯源：先按 tick 分组，再映射到第几天（day = tick - start_tick + 1）
@@ -172,7 +162,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     for ev in world.event_log.all():
         events_by_tick.setdefault(ev["tick"], []).append(ev)
 
-    print(f"世界 溪谷镇（{WORLD_ID}）启动，连跑 {args.days} 天。")
+    print(f"世界 溪谷镇（{WORLD_ID}）启动，连跑 {args.days} 天，seed={args.seed}。")
     print(f"事件库落盘：{DB_PATH}")
     print("-" * 80)
     for day in range(1, args.days + 1):
@@ -387,6 +377,10 @@ def main() -> None:
 
     p_run = sub.add_parser("run", help="连跑 N 天并打印故事流")
     p_run.add_argument("days", type=int, help="天数（Tick 数）")
+    p_run.add_argument(
+        "--seed", type=int, default=DEFAULT_SEED,
+        help=f"随机种子（默认 {DEFAULT_SEED}；同种子产生一致事件流）",
+    )
     p_run.set_defaults(func=cmd_run)
 
     p_agent = sub.add_parser("agent", help="查询人物状态与最近行动")

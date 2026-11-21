@@ -3,7 +3,7 @@
 > **落地状态（任务 16 阶段二，2026-11-16）**：本文件为长期设计蓝图。已落地的最小切片：
 > 两级认知 `AgentState.acquaintances`（`unknown → met → known`；共同居住地点或工作地点按日轮转接触并双向升至 KNOWN，
 > MET 预留）+ 短期交互记忆 `AgentState.recent_interactions`（容量 N 环形缓冲）+
-> TTL 查询时遗忘与低频清理。机制见 `src/vale/modules/social.py`，参数 `SocialTuning`
+> TTL 查询时遗忘与低频清理。机制见 `src/vale/domains/society/social.py`，参数 `SocialTuning`
 > （临时初值待复核）。与本文的偏差：信任/恩怨（relation_memory）、空间记忆、
 > 性别规范、认知偏差均未实现；记忆强度衰减以容量淘汰替代（衰减曲线留
 > `decay_relation` 接口）。位置感知（进入/离开地点）受 `agent.location` 不实时

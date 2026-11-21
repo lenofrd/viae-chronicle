@@ -1,4 +1,8 @@
-"""阶段四验收脚本：加载真实配置，落盘数据库，跑 10 个 Tick，打印每日气候摘要。
+"""独立气候演示入口（非正式模拟运行入口）。
+
+只注册 ``ClimateModule``，跑 10 个 Tick 并打印每日气候摘要，用于气候子系统单独
+验收。正式模拟与可视化走 ``world.assembly`` 统一组装（``scripts/run_xigu.py``、
+``vale/cli.py``、``viz/sim_worker.py``），本文件不得再演化为第二套完整世界组装。
 
 运行：python src/vale/main.py
 """
@@ -16,7 +20,7 @@ from vale.core.config_loader import load_config  # noqa: E402
 from vale.core.event_log import EventLog  # noqa: E402
 from vale.core.scheduler import run_tick  # noqa: E402
 from vale.core.world import World  # noqa: E402
-from vale.modules.climate import ClimateModule  # noqa: E402
+from vale.domains.environment.climate import ClimateModule  # noqa: E402
 
 
 def main() -> None:
@@ -37,14 +41,14 @@ def main() -> None:
     )
     world.register(ClimateModule())
 
-    print(f"世界 {cfg.world.name}（{cfg.world.world_id}）启动，start_tick={cfg.world.start_tick}")
+    print(f"[演示入口] 世界 {cfg.world.name}（{cfg.world.world_id}）启动，start_tick={cfg.world.start_tick}")
     print(f"数据库落盘：{db_path}")
     print("-" * 100)
 
     for _ in range(10):
         t = world.current_tick
         run_tick(world)
-        s = world.state.climate
+        s = world.state.environment.climate
         print(
             f"Tick {t:>2}: {s.year}年{s.month}月{s.day}日 {s.solar_term:<2} "
             f"season={s.season.value:>6} progress={s.season_progress:.3f} "

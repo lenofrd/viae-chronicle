@@ -1,8 +1,8 @@
-"""Forty-year generated-town integration test.
+"""Generated-town long-run gates.
 
-Tracks three generations, including second- and third-generation marriages, and descendants entering the labor force. The
-failure message includes enough economic and demographic evidence to diagnose
-the first collapse rather than reporting only an empty population.
+2 年基线（默认 `long_run`）：婚育由 agent 自主发生后婚姻数/新生儿数为正、
+人口存活、无模块错误。40 年门禁：终局人口 > 0；承载力缺口 G1 未解，
+当前按现状登记为 strict xfail，解 G1 后必须移除标记。
 """
 from __future__ import annotations
 
@@ -15,12 +15,13 @@ from vale.core.config_loader import LoadedConfig, load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
 from vale.core.world import World
-from vale.modules.agents import AgentModule, SpatialIndex, age_years
-from vale.modules.climate import ClimateModule
-from vale.modules.ecology import EcologyModule
-from vale.modules.tenancy_economy import TenancyEconomyModule
-from vale.modules.xigu_events import XiguEventsModule
-from vale.worldgen.xigu import XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town
+from vale.domains.society.agents import AgentModule, SpatialIndex, age_years
+from vale.domains.environment.climate import ClimateModule
+from vale.domains.environment.resources import EcologyModule
+from vale.domains.society.economy import TenancyEconomyModule
+from vale.domains.wildlife.wildlife import WildlifeModule
+from vale.world.scenarios.xigu.events import XiguEventsModule
+from vale.world.xigu import XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town
 
 
 TICKS_PER_YEAR = 360
@@ -28,6 +29,9 @@ TICKS_PER_YEAR = 360
 # 婚姻数与新生儿数是否为正、人口是否存活、无模块错误。40 年世代链指标保留在
 # _diagnostics 里作观察，但不再作为断言。
 HORIZON = 2 * TICKS_PER_YEAR
+# 40 年门禁（2026-11-21 裁决④）：终局人口 > 0。承载力缺口 G1 未解，按现状
+# 登记为 strict xfail；解 G1 后移除标记，让门禁真正生效（XPASS 会直接变红）。
+FORTY_YEAR_HORIZON = 40 * TICKS_PER_YEAR
 
 
 def _build(seed: int) -> World:
@@ -39,10 +43,12 @@ def _build(seed: int) -> World:
         spatial=generated.spatial,
         agents=build_xigu_agents_config(generated, base.agents.tuning, base.agents),
         terrain=generated.terrain,
+        resources=generated.resources,
     )
     world = World(config.world.world_id, EventLog(":memory:"), config.world.start_tick, config)
     world.register(ClimateModule(rng=random.Random(seed)))
     world.register(EcologyModule())
+    world.register(WildlifeModule())
     world.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     world.register(TenancyEconomyModule())
     world.register(XiguEventsModule(seed=seed))
@@ -118,21 +124,21 @@ def _diagnostics(world, population_curve, checkpoints):
         or e["payload"].get("spouse_id") in generation_2_ids
     ]
     generation_2_alive_adults = [
-        a for a in world.state.agents.values()
+        a for a in world.state.human.agents.values()
         if a.agent_id in generation_1_ids and a.alive
         and age_years(a.birth_tick, world.current_tick) >= world.config.agents.tuning.marriage.min_age
     ]
     generation_3_alive = [
-        world.state.agents[agent_id]
+        world.state.human.agents[agent_id]
         for agent_id in generation_2_ids
-        if agent_id in world.state.agents and world.state.agents[agent_id].alive
+        if agent_id in world.state.human.agents and world.state.human.agents[agent_id].alive
     ]
     descendants_at_work = {
         e["payload"].get("agent_id")
         for e in actions
         if e["payload"].get("agent_id") in generation_1_ids
         and e["payload"].get("action") in {"farm", "harvest", "fish", "hunt", "weave"}
-        and (agent := world.state.agents.get(e["payload"].get("agent_id"))) is not None
+        and (agent := world.state.human.agents.get(e["payload"].get("agent_id"))) is not None
         and age_years(agent.birth_tick, int(e.get("tick", 0))) >= 16
     }
     first_death = min((e["tick"] for e in deaths), default=None)
@@ -159,17 +165,17 @@ def _diagnostics(world, population_curve, checkpoints):
         e["payload"].get("action", "unknown") for e in events
         if e["event_type"] == "gather_success" and int(e.get("tick", -1)) <= 30
     )
-    final_alive = [a for a in world.state.agents.values() if a.alive]
+    final_alive = [a for a in world.state.human.agents.values() if a.alive]
     agent_module = next(m for m in world.modules if isinstance(m, AgentModule))
     water_fetches = Counter(
         e["payload"].get("household_id")
         for e in actions if e["payload"].get("action") == "collect_water"
     )
     water_access_by_household = []
-    for household in world.state.households.values():
+    for household in world.state.human.households.values():
         members = [
-            world.state.agents[mid] for mid in household.member_ids
-            if mid in world.state.agents
+            world.state.human.agents[mid] for mid in household.member_ids
+            if mid in world.state.human.agents
         ]
         water_access_by_household.append({
             "household_id": household.household_id,
@@ -192,26 +198,26 @@ def _diagnostics(world, population_curve, checkpoints):
         key=lambda item: (item["well_distance_tu"] is None, item["well_distance_tu"] or 0)
     )
     food = {
-        "grain": round(sum(h.grain for h in world.state.households.values()), 2),
-        "fish": round(sum(h.fish for h in world.state.households.values()), 2),
-        "meat": round(sum(h.meat for h in world.state.households.values()), 2),
-        "vegetable": round(sum(h.vegetable for h in world.state.households.values()), 2),
+        "grain": round(sum(h.grain for h in world.state.human.households.values()), 2),
+        "fish": round(sum(h.fish for h in world.state.human.households.values()), 2),
+        "meat": round(sum(h.meat for h in world.state.human.households.values()), 2),
+        "vegetable": round(sum(h.vegetable for h in world.state.human.households.values()), 2),
     }
-    living = [agent for agent in world.state.agents.values() if agent.alive]
+    living = [agent for agent in world.state.human.agents.values() if agent.alive]
     ages = [age_years(agent.birth_tick, world.current_tick) for agent in living]
     active_households = [
-        household for household in world.state.households.values()
+        household for household in world.state.human.households.values()
         if any(
-            member_id in world.state.agents and world.state.agents[member_id].alive
+            member_id in world.state.human.agents and world.state.human.agents[member_id].alive
             for member_id in household.member_ids
         )
     ]
     occupied_home_nodes = {household.home_node for household in active_households}
-    dwellings = [b for b in world.state.buildings.values() if b.building_type == "dwelling"]
+    dwellings = [b for b in world.state.human.buildings.values() if b.building_type == "dwelling"]
     dwelling_nodes = {
         b.building_id: (
-            world.state.land_parcels[b.parcel_id].spatial_node_id
-            if b.parcel_id in world.state.land_parcels else None
+            world.state.human.land_parcels[b.parcel_id].spatial_node_id
+            if b.parcel_id in world.state.human.land_parcels else None
         )
         for b in dwellings
     }
@@ -282,7 +288,7 @@ def _diagnostics(world, population_curve, checkpoints):
         "final_children_under_16": sum(age < 16 for age in ages),
         "final_working_age_population": sum(16 <= age < 55 for age in ages),
         "final_population_55_plus": sum(age >= 55 for age in ages),
-        "household_count": len(world.state.households),
+        "household_count": len(world.state.human.households),
         "active_household_count": len(active_households),
         "dwelling_count": len(dwellings),
         "occupied_dwellings": sum(
@@ -296,10 +302,10 @@ def _diagnostics(world, population_curve, checkpoints):
             and b.status in {"active", "vacant"}
         ),
         "ruined_dwellings": sum(1 for b in dwellings if b.status == "ruined"),
-        "field_count": len(world.state.field_growth),
-        "fields_with_growth": sum(1 for value in world.state.field_growth.values() if value > 0),
+        "field_count": len(world.state.environment.field_growth),
+        "fields_with_growth": sum(1 for value in world.state.environment.field_growth.values() if value > 0),
         "harvestable_fields": sum(
-            1 for value in world.state.field_growth.values()
+            1 for value in world.state.environment.field_growth.values()
             if value >= world.config.agents.tuning.agriculture.harvest_growth_threshold
         ),
         "final_food_stock": food,
@@ -315,15 +321,15 @@ def _diagnostics(world, population_curve, checkpoints):
         ]),
         "community_reserve_final": {
             key: round(float(value), 2)
-            for key, value in world.state.community_reserves.items()
+            for key, value in world.state.human.community_reserves.items()
         },
         "community_reserve_initialization": any(
             b.building_type == "storehouse" and b.attributes.get("community_reserve")
-            for b in world.state.buildings.values()
+            for b in world.state.human.buildings.values()
         ),
         "first_death_household_work_node": (
-            world.state.households[first_death_event["payload"].get("household_id")].work_node
-            if first_death_event and first_death_event["payload"].get("household_id") in world.state.households
+            world.state.human.households[first_death_event["payload"].get("household_id")].work_node
+            if first_death_event and first_death_event["payload"].get("household_id") in world.state.human.households
             else None
         ),
         "first_death_household_reserve_events": [
@@ -341,10 +347,10 @@ def _diagnostics(world, population_curve, checkpoints):
             for e in events if e["event_type"] == "cold_exposure"
         ), 2),
         "distinct_initial_work_fields": len({
-            h.work_node for h in world.state.households.values()
-            if h.work_node in world.state.field_growth
+            h.work_node for h in world.state.human.households.values()
+            if h.work_node in world.state.environment.field_growth
         }),
-        "seasonal_field_labor_records": len(world.state.field_season_labor),
+        "seasonal_field_labor_records": len(world.state.human.field_season_labor),
         "minimum_population": min(population_curve, default=0),
         "minimum_household_food_stock": min(
             (float(c["household_food_stock_min"]) for c in checkpoints), default=0.0
@@ -387,32 +393,32 @@ def test_two_year_xigu_run_records_agent_driven_marriages_and_births():
             run_tick(world)
             simulated_ticks = tick
             if tick % 30 == 0:
-                alive = sum(1 for a in world.state.agents.values() if a.alive)
+                alive = sum(1 for a in world.state.human.agents.values() if a.alive)
                 population_curve.append(alive)
                 food = {
-                    field: round(sum(float(getattr(h, field)) for h in world.state.households.values()), 2)
+                    field: round(sum(float(getattr(h, field)) for h in world.state.human.households.values()), 2)
                     for field in ("grain", "fish", "meat", "vegetable")
                 }
                 household_stocks = sorted(
                     sum(float(getattr(h, field)) for field in ("grain", "fish", "meat", "vegetable"))
-                    for h in world.state.households.values()
+                    for h in world.state.human.households.values()
                 )
                 checkpoints.append({
                     "tick": tick, "population": alive, "food": food,
                     "households_with_food": sum(stock > 0 for stock in household_stocks),
                     "households_empty": sum(stock <= 0 for stock in household_stocks),
-                    "households_with_water": sum(h.water > 0 for h in world.state.households.values()),
-                    "households_without_water": sum(h.water <= 0 for h in world.state.households.values()),
-                    "total_water": round(sum(h.water for h in world.state.households.values()), 2),
+                    "households_with_water": sum(h.water > 0 for h in world.state.human.households.values()),
+                    "households_without_water": sum(h.water <= 0 for h in world.state.human.households.values()),
+                    "total_water": round(sum(h.water for h in world.state.human.households.values()), 2),
                     "household_food_stock_min": round(household_stocks[0], 2) if household_stocks else 0.0,
                     "household_food_stock_median": round(household_stocks[len(household_stocks) // 2], 2) if household_stocks else 0.0,
                     "household_food_stock_max": round(household_stocks[-1], 2) if household_stocks else 0.0,
                     "harvestable_fields": sum(
-                        1 for value in world.state.field_growth.values()
+                        1 for value in world.state.environment.field_growth.values()
                         if value >= world.config.agents.tuning.agriculture.harvest_growth_threshold
                     ),
                 })
-            if not any(a.alive for a in world.state.agents.values()):
+            if not any(a.alive for a in world.state.human.agents.values()):
                 break
         diagnostics = _diagnostics(world, population_curve, checkpoints)
         diagnostics["simulated_ticks"] = simulated_ticks
@@ -430,5 +436,31 @@ def test_two_year_xigu_run_records_agent_driven_marriages_and_births():
                 "final_food_stock", "agent_errors",
             )
         })
+    finally:
+        world.event_log.close()
+
+
+@pytest.mark.long_run
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "G1 家庭口粮承载力未解：40 年终局人口归零（2026-11-21 裁决④登记）；"
+        "解 G1 后移除 xfail，让门禁真正生效"
+    ),
+)
+def test_forty_year_xigu_run_keeps_population_alive():
+    """40 年门禁：终局人口 > 0（当前按 G1 承载力缺口登记为 strict xfail）。"""
+    seed = 20261118
+    world = _build(seed)
+    try:
+        for tick in range(1, FORTY_YEAR_HORIZON + 1):
+            run_tick(world)
+            if not any(a.alive for a in world.state.human.agents.values()):
+                break
+        final_population = sum(1 for a in world.state.human.agents.values() if a.alive)
+        assert final_population > 0, (
+            f"40-year town extinct at tick {world.current_tick}: "
+            f"final_population={final_population}（seed {seed}）"
+        )
     finally:
         world.event_log.close()

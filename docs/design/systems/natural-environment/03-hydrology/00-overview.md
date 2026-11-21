@@ -4,6 +4,8 @@
 定义河段的水位、流速、可渡性、取水与灌溉条件、河道淤积如何随气候和人类活动变化，以及水文如何驱动土壤湿度、山洪、通行条件。
 
 > **004 裁决（2026-11-17，M5 + 任务30）——生活用水最小切片**：`water_level_ratio` 与 `irrigation_gear` 随降水演化，驱动灌溉和产量 `moisture`；它们**不是地下水位**，当前不控制水井出水。溪古镇唯一饮用水来源是公共水井，翠溪/灌溉渠不自动视为可饮用水。`collect_water` 每次从水井取 12 单位并计入家庭库存，往返移动时间计入工作窗；取水后人物回到家，不能在井边连续零通勤取水。家庭每日按存活成员数消耗生活用水（1×人数），每次进食另耗 0.5（烹饪/佐餐），水不足则该次无法进食。远户在春/秋可达时按季节可达性自行储备，以应对夏/冬工作窗缩短；家庭库存无容量上限。水井当前没有有限地下水库存或枯竭模拟。饮用水健康惩罚、水质处理、水存储上限、水权冲突**不在本切片**；完整河段与地下水模型为后续版本目标，实现顺序见 [decisions/004](../../../decisions/004-intraday-time-and-production-base.md) §2.7–2.8。
+>
+> **P3a 已落地（2026-11-20，架构审计阶段二）——水源库存**：水井取得有限存量，状态挂在 `EnvironmentState.water_sources`（`capacity` / `current_stock` / `regeneration_per_tick` / `extraction_limit_per_tick`），由 `vale/modules/hydrology.py` 统一「读-校验-写」结算（P3a 期间结算在 `vale/contracts/water.py`，P3c 按契约所有权裁决移交环境域所有者，人类模块经 `contracts.resources.ResourceService.withdraw_water` 路由），人类模块不得直接改库存。每 tick 按 `regeneration_per_tick × water_level_ratio` 补水（到容量即止），同 tick 全部取水合计不超过 `extraction_limit_per_tick`；存量或额度不足时写 `water_withdrawal_refused`，实际给付量可小于请求量。容量与额度按现量标定（[调参][临时值]，见 `config/worlds/brookvale-town-001/natural-params.yaml` 的 `water_supply.well`），两年基线内不触顶、取水行为与 P3a 前逐 tick 等价。地下水、河段取水点与水质仍不在本切片。
 
 ## 2. 核心概念
 - **河段**：河流按上下游划分的空间单元，第一版为上游段、镇前段、下游段。
@@ -41,6 +43,8 @@
 - `siltation_changed`：{segment_id, old, new, cause}
 - `upstream_withdrawal`：{segment_id, amount, cause}（人类截水事件，由人物系统写入）
 - `silt_cleared`：{segment_id, amount, cause}（清淤事件，由人物系统写入）
+
+P3a 水源库存事件（已实现）：`water_source_initialized`、`water_source_regenerated`、`water_withdrawn`（含 `requester_id`、`stock_before/stock_after`）、`water_withdrawal_refused`（含 `requested/granted/reason`）。
 
 ## 6. 与其他系统的接口
 - **读**：
