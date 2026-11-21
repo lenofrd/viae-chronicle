@@ -4,8 +4,8 @@ import pytest
 
 from vale.core.config_loader import LoadedConfig, load_config
 from vale.core.event_log import EventLog
-from vale.core.state import BuildingState
-from vale.core.replay import rebuild_state
+from vale.domains.society.state import BuildingState
+from vale.world.replay import rebuild_state
 from vale.core.world import World
 from vale.domains.society.agents import AgentModule
 from vale.domains.society.construction import advance_construction, request_building, request_repair, request_expansion, request_demolition, share_building_access, pause_construction, resume_construction, cancel_construction, abandon_construction
@@ -364,7 +364,7 @@ def test_shared_storehouse_is_an_alternative_to_duplicate_storage_and_replays():
         log.close()
 
 def test_building_need_can_be_resolved_by_an_existing_alternative():
-    from vale.core.state import BuildingNeedState
+    from vale.domains.society.state import BuildingNeedState
     from vale.domains.society.construction import resolve_building_need
     world, log, config = make_world()
     try:

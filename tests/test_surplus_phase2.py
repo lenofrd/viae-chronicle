@@ -17,9 +17,9 @@ from household_helpers import attach_test_resource_pools, hh
 from vale.core.calendar import DAYS_PER_YEAR
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.household import work_node_of
+from vale.domains.society.households import work_node_of
 from vale.core.scheduler import run_tick
-from vale.core.state import AgentState, HouseholdState
+from vale.domains.society.state import AgentState, HouseholdState
 from vale.core.world import World
 from vale.config.schema.agents import AgentSex
 from vale.config.schema.natural_params import Season

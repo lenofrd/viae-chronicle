@@ -320,7 +320,7 @@ living_households(world)   # 经济层：家庭仍有存活成员即参与
 
 ### 14.1 重放入口（迁移阶段新增）
 
-`src/vale/core/replay.py`：
+`src/vale/world/replay.py`（P6 起由 `src/vale/core/replay.py` 迁入）：
 
 ```python
 def rebuild_state(events: list[dict], config) -> WorldState

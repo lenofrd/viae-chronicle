@@ -19,23 +19,25 @@
 
 ```text
 src/vale/              模拟核心
-  core/                事件库、世界状态、调度器、日历、回放、快照、世界注册
+  core/                基础设施：事件库、WorldState 组合根、调度器、日历、资源池账本、
+                       跨领域只读快照（snapshots）；领域状态模型在各领域内
   contracts/           跨领域契约（只读查询 queries；写入契约 resources / impacts 只路由，
                        结算在领域所有者模块）
   config/schema/       配置模型与校验（Pydantic；世界 YAML 数据仍在仓库根 config/）
   domains/             领域层（ADR 009）
-    environment/       环境域：climate 气候、hydrology 水文库存、terrain 地形栅格、
-                       fields 田块生态、resources 植被类资源池（引导/再生/采集结算）
-    wildlife/          动物域：wildlife 鱼/猎物存量池（个体与种群留待后续）
-    society/           人文社会域：land 土地、community 社区设施、social 社会互动、
+    environment/       环境域：state 状态模型、climate 气候、hydrology 水文库存、
+                       terrain 地形栅格、fields 田块生态、resources 植被类资源池
+    wildlife/          动物域：state 状态模型、wildlife 鱼/猎物存量池（个体与种群留待后续）
+    society/           人文社会域：state 状态模型、households 家庭访问器、
+                       land 土地、community 社区设施、social 社会互动、
                        governance 治理、construction 建造、economy 租佃经济；
                        agents/ 人物子系统（module 协调日结算，lifecycle 生命周期、
                        labor 劳动、decision 决策、actions 动作、household 家庭日常、
                        market 集市、mortality 死亡继承、marriage 婚配、
                        reproduction 分家生育、debt 债务催收、perception 感知、
                        production 生产口径、spatial 距离索引、demographics 人口基础）
-  world/               世界生成（nature 自然段：地形栅格/资源池目录/静态植被栖息地描述；
-                       settlement 聚落段：布点/路网/距离矩阵；xigu 组合门面按种子生成西谷镇）
+  world/               世界协调：replay 事件重建（唯一投影入口）、xigu 世界生成组合门面
+                       与 nature/settlement 分段
   world/scenarios/xigu/ 溪古镇场景独有逻辑（xigu_events 季节性灾害/村落事件），不进通用领域
   observability/       只读观察层（事件查询、文本渲染、导出、CLI viewer）
   cli.py, main.py      命令行入口（events list / timeline / run 等）

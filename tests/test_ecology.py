@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from vale.core.state import ResourcePoolSpec, ResourcePoolState
+from vale.core.pools import ResourcePoolSpec, ResourcePoolState
 from vale.domains.environment.resources import EcologyModule
 from vale.domains.wildlife.wildlife import WildlifeModule
 

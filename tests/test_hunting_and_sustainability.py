@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import Counter
 
 from household_helpers import attach_test_resource_pools, hh
-from vale.core.household import home_node_of, work_node_of
+from vale.domains.society.households import home_node_of, work_node_of
 
 import random
 

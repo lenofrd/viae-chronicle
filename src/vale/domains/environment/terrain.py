@@ -6,7 +6,7 @@ P4 归口：``EnvironmentState.terrain_cells`` 只承载生成器产出的静态
 """
 from __future__ import annotations
 
-from vale.core.state import TerrainCellState
+from vale.domains.environment.state import TerrainCellState
 
 
 def ensure_terrain_cells(world) -> None:

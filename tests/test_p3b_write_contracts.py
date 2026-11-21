@@ -15,9 +15,9 @@ from vale.contracts.impacts import EcologicalImpact
 from vale.contracts.resources import ResourceService
 from vale.core.config_loader import LoadedConfig, load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
-from vale.core.state import ResourcePoolState
+from vale.core.pools import ResourcePoolState
 from vale.core.world import World
 from vale.domains.society.agents import AgentModule
 from vale.domains.environment.climate import ClimateModule

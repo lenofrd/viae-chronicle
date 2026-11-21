@@ -9,8 +9,8 @@ from vale.config.schema.agents import AgentSex, AgentTuning
 from vale.config.schema.natural_params import Season
 from vale.contracts.queries import EnvironmentQuery, SpatialQuery
 from vale.core.calendar import DAYS_PER_YEAR
-from vale.core.household import home_node_of, household_of, work_node_of
-from vale.core.state import AgentState
+from vale.domains.society.households import home_node_of, household_of, work_node_of
+from vale.domains.society.state import AgentState
 from vale.domains.society.agents.constants import IMPOSSIBLE, RAIN_WEATHERS
 from vale.domains.society.agents.demographics import age_years
 from vale.domains.society.agents.perception import Perception, _lender_node, select_creditor, select_food_creditor

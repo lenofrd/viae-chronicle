@@ -16,10 +16,10 @@ import random
 import pytest
 
 from household_helpers import attach_test_resource_pools, hh, inv
-from vale.core.household import work_node_of
+from vale.domains.society.households import work_node_of
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
 from vale.core.world import World
 from vale.domains.society.agents import AgentModule

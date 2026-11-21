@@ -6,8 +6,8 @@ import math
 
 from vale.config.schema.agents import AgentTuning
 from vale.contracts.queries import EnvironmentQuery, SpatialQuery
-from vale.core.household import home_node_of, work_node_of
-from vale.core.state import AgentState, HouseholdState
+from vale.domains.society.households import home_node_of, work_node_of
+from vale.domains.society.state import AgentState, HouseholdState
 from vale.domains.society.agents.perception import _food_lender_node, _lender_node
 
 # crops.md §4.5 产量公式的中性因子：病虫害/灾害尚未接入，取值等价既有产出。

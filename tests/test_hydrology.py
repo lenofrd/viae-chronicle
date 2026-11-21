@@ -18,7 +18,7 @@ from vale.domains.environment.hydrology import (
 )
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
 from vale.core.world import World
 from vale.domains.environment.climate import ClimateModule

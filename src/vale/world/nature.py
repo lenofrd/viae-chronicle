@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from vale.core.state import ResourcePoolSpec
+from vale.core.pools import ResourcePoolSpec
 
 
 @dataclass(frozen=True)

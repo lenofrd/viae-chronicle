@@ -8,7 +8,7 @@ from __future__ import annotations
 import math
 
 from household_helpers import attach_test_resource_pools, hh
-from vale.core.household import home_node_of, work_node_of
+from vale.domains.society.households import home_node_of, work_node_of
 
 import dataclasses
 
@@ -18,7 +18,7 @@ from vale.config.schema.natural_params import Season
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
-from vale.core.state import DebtRecord
+from vale.domains.society.state import DebtRecord
 from vale.core.world import World
 from vale.domains.society.agents import AgentModule
 from vale.domains.environment.climate import ClimateModule
@@ -409,7 +409,7 @@ def _prepare_marriage_pair(world):
 
 
 def _set_mutual_known(world, a, b):
-    from vale.core.state import AcquaintanceEntry
+    from vale.domains.society.state import AcquaintanceEntry
 
     now = world.current_tick
     a.acquaintances[b.agent_id] = AcquaintanceEntry(level=2, last_seen_tick=now)
@@ -432,7 +432,7 @@ def test_shared_place_contact_creates_mutual_known(world):
     assert {event["payload"]["observer_id"] for event in changes} == {
         wife.agent_id, husband.agent_id
     }
-    from vale.core.replay import rebuild_state
+    from vale.world.replay import rebuild_state
     replayed = rebuild_state(world.event_log.all(), world.config).state
     assert replayed.human.agents[wife.agent_id].acquaintances[husband.agent_id].level == 2
     assert replayed.human.agents[husband.agent_id].acquaintances[wife.agent_id].level == 2
@@ -473,7 +473,7 @@ def test_marriage_age_health_and_distance_thresholds_are_unchanged(world):
 def test_marriage_requires_mutual_known_and_not_recent_memory(world):
     """单向认识不能结婚；双方 known 即可，有限近期记忆为空不撤销资格。"""
     module, wife, husband = _prepare_marriage_pair(world)
-    from vale.core.state import AcquaintanceEntry
+    from vale.domains.society.state import AcquaintanceEntry
 
     wife.acquaintances[husband.agent_id] = AcquaintanceEntry(
         level=2, last_seen_tick=world.current_tick
@@ -495,7 +495,7 @@ def test_marriage_moves_only_wife_and_keeps_two_households_independent(world):
     """女方原家庭的成年成员、既有子女、资产与债务留存；彩礼/陪嫁独立守恒。"""
     from vale.core.calendar import DAYS_PER_YEAR
     from vale.config.schema.agents import AgentSex
-    from vale.core.state import DebtRecord
+    from vale.domains.society.state import DebtRecord
 
     module, wife, husband = _prepare_marriage_pair(world)
     source = world.state.human.households[wife.household_id]
@@ -564,7 +564,7 @@ def test_marriage_moves_only_wife_and_keeps_two_households_independent(world):
     }
     assert not world.event_log.by_type("household_merged")
 
-    from vale.core.replay import rebuild_state
+    from vale.world.replay import rebuild_state
     replayed = rebuild_state(world.event_log.all(), world.config).state
     assert replayed.human.households[source.household_id].grain == pytest.approx(source.grain)
     assert replayed.human.households[target.household_id].grain == pytest.approx(target.grain)

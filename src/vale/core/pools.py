@@ -11,7 +11,7 @@ P4 起资源池按域归属：植被类池归 ``domains.environment.resources``�
 """
 from __future__ import annotations
 
-from vale.core.state import ResourcePoolSpec, ResourcePoolState
+from pydantic import BaseModel, Field
 
 
 def pool_specs(world) -> dict[str, ResourcePoolSpec]:
@@ -122,3 +122,43 @@ def settle_pool_harvest(world, pool: ResourcePoolState, node_id: str,
         "agent_id": agent_id, "household_id": household_id,
     })
     return granted
+
+
+
+class ResourcePoolSpec(BaseModel):
+    """资源池生成参数（P4）：世界生成自然段产出的池目录条目。
+
+    由生成器写入 ``LoadedConfig.resources``（键 = 资源节点 id），供领域所有者
+    首 tick 引导建池；``current_stock`` 即初始存量。池参数唯一真相源从节点
+    attributes 副本迁到本目录（2026-11-21 P4 裁决）。
+    """
+
+    resource_id: str
+    resource_type: str
+    current_stock: float = Field(default=0.0, ge=0)
+    max_stock: float = Field(default=0.0, ge=0)
+    regeneration_per_tick: float = Field(default=0.0, ge=0)
+    extraction_limit_per_tick: float = Field(default=0.0, ge=0)
+    seasonal_weights: dict[str, float] = Field(default_factory=dict)
+    degradation: float = Field(default=0.0, ge=0)
+    restricted: bool = False
+
+
+class ResourcePoolState(BaseModel):
+    """资源池运行时投影（P4，事件溯源）；字段序即事件载荷键序。
+
+    ``current_stock`` / ``harvested_this_tick`` / ``degradation`` 由领域所有者
+    结算：植被类池归环境域（``domains.environment.resources``），鱼/猎物池归动物域
+    （``domains.wildlife.wildlife``，2026-11-21 裁决）。
+    """
+
+    resource_type: str
+    current_stock: float = Field(default=0.0, ge=0)
+    max_stock: float = Field(default=0.0, ge=0)
+    regeneration_per_tick: float = Field(default=0.0, ge=0)
+    extraction_limit_per_tick: float = Field(default=0.0, ge=0)
+    seasonal_weights: dict[str, float] = Field(default_factory=dict)
+    restricted: bool = False
+    degradation: float = Field(default=0.0, ge=0)
+    harvested_this_tick: float = Field(default=0.0, ge=0)
+    harvest_tick: int = Field(default=-1, ge=0)

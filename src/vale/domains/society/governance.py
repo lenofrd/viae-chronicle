@@ -9,12 +9,7 @@ from __future__ import annotations
 import math
 
 from vale.core.calendar import DAYS_PER_YEAR
-from vale.core.state import (
-    AppealState,
-    CouncilDecisionState,
-    HouseholdRepresentativeState,
-    VillageElectionState,
-)
+from vale.domains.society.state import AppealState, CouncilDecisionState, HouseholdRepresentativeState, VillageElectionState
 from vale.domains.society.agents.demographics import age_years
 
 

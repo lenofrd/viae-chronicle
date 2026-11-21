@@ -17,22 +17,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from vale.core.calendar import DAYS_PER_YEAR
-from vale.core.state import (
-    AcquaintanceEntry,
-    AgentState,
-    BuildingNeedState,
-    BuildingState,
-    ConstructionProjectState,
-    DebtRecord,
-    HouseholdState,
-    ImpressionEntry,
-    LandParcelState,
-    LandRightState,
-    ResourcePoolState,
-    WaterSourceState,
-    WILDLIFE_RESOURCE_TYPES,
-    WorldState,
-)
+from vale.core.pools import ResourcePoolState
+from vale.core.state import WorldState
+from vale.domains.environment.state import WaterSourceState
+from vale.domains.society.state import AcquaintanceEntry, AgentState, BuildingNeedState, BuildingState, ConstructionProjectState, DebtRecord, HouseholdState, ImpressionEntry, LandParcelState, LandRightState
+from vale.domains.wildlife.state import WILDLIFE_RESOURCE_TYPES
 from vale.domains.society.social import apply_kin_defaults, record_memory
 
 _ASSET_FIELDS = ("grain", "meat", "fish", "vegetable", "cloth", "firewood", "herbs", "hardwood", "coin", "water")
@@ -204,7 +193,7 @@ class _Replayer:
             parcel = self.state.human.land_parcels.get(lease.get("parcel_id"))
             right = payload.get("land_right")
             if parcel is not None and right:
-                from vale.core.state import LandRightState
+                from vale.domains.society.state import LandRightState
                 if not any(item.right_id == right["right_id"] for item in parcel.use_rights):
                     parcel.use_rights.append(LandRightState.model_validate(right))
             self._apply_household_inventories({payload.get("lessee_household_id"): payload.get("lessee_inventory_after") or {}})
@@ -1250,7 +1239,7 @@ class _Replayer:
         data = payload.get("project")
         if not data:
             return
-        from vale.core.state import ConstructionProjectState
+        from vale.domains.society.state import ConstructionProjectState
         project = ConstructionProjectState.model_validate(data)
         self.state.human.construction_projects[project.project_id] = project
         # Rebuild household members from the canonical Brookvale agent config.
@@ -1270,7 +1259,7 @@ class _Replayer:
                     setattr(household, field_name, max(0.0, float(payload[key])))
 
     def _on_construction_worked(self, payload: dict, tick: int) -> None:
-        from vale.core.state import ConstructionProjectState
+        from vale.domains.society.state import ConstructionProjectState
         data = payload.get("project")
         if data:
             project = ConstructionProjectState.model_validate(data)
@@ -1301,7 +1290,7 @@ class _Replayer:
     def _on_representative_registered(self, payload: dict, tick: int) -> None:
         data = payload.get("representative")
         if data:
-            from vale.core.state import HouseholdRepresentativeState
+            from vale.domains.society.state import HouseholdRepresentativeState
             rep = HouseholdRepresentativeState.model_validate(data)
             self.state.human.representatives[rep.household_id] = rep
 
@@ -1311,7 +1300,7 @@ class _Replayer:
             rep.active = False
 
     def _on_election_opened(self, payload: dict, tick: int) -> None:
-        from vale.core.state import VillageElectionState
+        from vale.domains.society.state import VillageElectionState
         data = payload.get("election")
         if data:
             election = VillageElectionState.model_validate(data)
@@ -1374,7 +1363,7 @@ class _Replayer:
         self.state.human.acting_headman_id = str(payload["deputy_id"])
 
     def _on_council_decision_proposed(self, payload: dict, tick: int) -> None:
-        from vale.core.state import CouncilDecisionState
+        from vale.domains.society.state import CouncilDecisionState
         data = payload.get("decision")
         if data:
             decision = CouncilDecisionState.model_validate(data)
@@ -1392,7 +1381,7 @@ class _Replayer:
             decision.resolved_tick = tick
 
     def _on_appeal_submitted(self, payload: dict, tick: int) -> None:
-        from vale.core.state import AppealState
+        from vale.domains.society.state import AppealState
         data = payload.get("appeal")
         if data:
             appeal = AppealState.model_validate(data)

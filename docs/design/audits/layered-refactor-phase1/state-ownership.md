@@ -64,3 +64,9 @@
 - 本文 §1 的两处越界已消除：采集改由 `ResourceService` 路由、结算在资源所有者；灾害改由 `EcologicalImpact` 路由、田块生态结算在环境域；野遇伤害由 `domains.society.agents.demographics.apply_wildlife_attack` 结算（人文域所有者）。
 - 人文侧：`agents`/`households` 的写入者是最小必要子集——`agents.demographics`（开局播种）、`agents.lifecycle`（健康/体力/存活）、`agents.marriage`、`agents.reproduction`、`agents.actions`、`agents.module`（日末归位），以及 `domains.society.land`/`social`/`construction` 的既有职责；`field_season_labor` 归 `agents.actions`（农事劳动簿记）。
 - `modules.*` 包已不存在；`xigu_events` 迁 `world.scenarios.xigu.events`。
+
+## 6. P6 完成后的状态模型归属（2026-11-21）
+
+- 状态模型本身也按领域落位：`domains/environment/state.py`、`domains/wildlife/state.py`、`domains/society/state.py`。
+- `core/state.py` 只剩 `WorldState` 组合根；跨领域共享值对象在 `core/snapshots.py`（气候快照）与 `core/pools.py`（资源池形状）。
+- 投影（Replay）迁 `world/replay.py`：它是重建三个领域状态的协调机制，不再属于基础设施，也不再反向依赖领域业务模块（D3 已消除）。

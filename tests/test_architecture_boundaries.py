@@ -18,12 +18,10 @@ from pathlib import Path
 from vale.core.config_loader import LoadedConfig, load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
-from vale.core.state import (
-    EnvironmentState,
-    HumanState,
-    WildlifeState,
-    WorldState,
-)
+from vale.core.state import WorldState
+from vale.domains.environment.state import EnvironmentState
+from vale.domains.society.state import HumanState
+from vale.domains.wildlife.state import WildlifeState
 from vale.core.world import World
 from vale.domains.society.agents import AgentModule
 from vale.domains.environment.climate import ClimateModule
@@ -41,7 +39,7 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "vale"
 # 一、状态所有权：谁可以写 WorldState 的哪个字段
 # ---------------------------------------------------------------------------
 
-# 字段 -> 允许写入的模块。投影模块（core.replay）单独豁免：它按事件重建状态，
+# 字段 -> 允许写入的模块。投影模块（world.replay）单独豁免：它按事件重建状态，
 # 是投影而非领域写入。未登记的字段会在 test_world_state_fields_have_declared_owner 失败。
 STATE_OWNERS: dict[str, set[str]] = {
     # Environment（自然）
@@ -121,7 +119,7 @@ CONTAINER_OF: dict[str, str] = {
 # P3b 把采集/取水与灾害收敛到写入契约；P3c 进一步把结算移交领域所有者，契约只路由（见红线测试）。
 KNOWN_CROSS_DOMAIN_WRITES: dict[tuple[str, str], str] = {}
 
-PROJECTION_MODULES = {"core.replay"}
+PROJECTION_MODULES = {"world.replay"}
 
 # P2 读侧收口：人类模块只能经 EnvironmentQuery 读环境。
 # 农事四字段已按 2026-11-21 裁决移交：田块生态（field_growth/fertility_factor/
@@ -347,8 +345,19 @@ AGENTS_COORDINATOR = "domains.society.agents.module"
 ENTRY_MODULES = {"vale.cli", "vale.main", "vale.api.main"}
 
 # 已知越界：core 依赖领域、领域互相依赖。修掉后必须删条目。
-KNOWN_IMPORT_VIOLATIONS: dict[tuple[str, str], str] = {
-    ("core.replay", "domains.society.social"): "D3：基础设施依赖人类领域（P1 消除）",
+KNOWN_IMPORT_VIOLATIONS: dict[tuple[str, str], str] = {}
+
+# 组合根豁免：WorldState 由三个领域容器组成（ADR 009 §2.1「World、WorldState 组合根」
+# 属基础设施职责）。仅此一个 core 模块可导入领域状态；新增豁免须有同样明确的架构依据。
+CORE_DOMAIN_IMPORT_EXEMPTIONS: dict[str, str] = {
+    "core.state": "组合根：WorldState = EnvironmentState + HumanState + WildlifeState",
+}
+
+# 领域状态归属（P6）：各领域的 state 模块只能导入基础设施，不得导入其他领域的 state。
+DOMAIN_STATE_MODULES = {
+    "domains.environment.state": "domains.environment",
+    "domains.wildlife.state": "domains.wildlife",
+    "domains.society.state": "domains.society",
 }
 
 
@@ -400,7 +409,8 @@ def test_import_direction_rules():
         if _is_entry(imported) or imported == "scripts":
             violations.add((importer, imported))
         if importer.startswith("core.") and imported.startswith(("modules.", "domains.")):
-            violations.add((importer, imported))
+            if importer not in CORE_DOMAIN_IMPORT_EXEMPTIONS:
+                violations.add((importer, imported))
         if importer in ENVIRONMENT_MODULES | HUMAN_MODULES:
             if importer in ENVIRONMENT_MODULES and imported in HUMAN_MODULES:
                 violations.add((importer, imported))
@@ -424,6 +434,30 @@ def test_import_direction_rules():
         "台账里的依赖越界已不存在，请删除条目：\n"
         + "\n".join(f"  {a} -> {b}（{KNOWN_IMPORT_VIOLATIONS[(a, b)]}）" for a, b in sorted(stale))
     )
+    assert CORE_DOMAIN_IMPORT_EXEMPTIONS, "组合根豁免不得为空"
+
+
+def test_domain_state_modules_do_not_import_other_domains():
+    """P6：领域状态模型归各领域所有，不得导入其他领域的状态模型绕过契约。"""
+    leaks = sorted({
+        (importer, imported)
+        for importer, imported in internal_import_edges()
+        if importer in DOMAIN_STATE_MODULES
+        and imported.startswith("domains.")
+        and not imported.startswith(DOMAIN_STATE_MODULES[importer])
+    })
+    assert leaks == [], f"领域状态模块导入了其他领域：{leaks}"
+
+
+def test_core_state_is_composition_root_only():
+    """P6：core/state.py 只留组合根，不再定义领域专属状态模型与值对象。"""
+    tree = ast.parse((SRC / "core/state.py").read_text(encoding="utf-8"))
+    defined = {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
+    assert defined == {"WorldState"}, (
+        f"core/state.py 只允许组合根 WorldState：{sorted(defined)}"
+    )
+    for module, path in DOMAIN_STATE_MODULES.items():
+        assert (SRC / (path.replace(".", "/") + "/state.py")).exists(), f"缺少领域状态模块 {module}"
 
 
 # ---------------------------------------------------------------------------

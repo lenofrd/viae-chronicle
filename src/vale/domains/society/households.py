@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from vale.core.calendar import DAYS_PER_YEAR
-from vale.core.state import AgentState, HouseholdState
+from vale.domains.society.state import AgentState, HouseholdState
 
 
 def household_of(world, agent: AgentState) -> HouseholdState:

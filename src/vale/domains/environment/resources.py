@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from vale.contracts.queries import EnvironmentQuery
 from vale.core.pools import bootstrap_pool, pool_specs, regenerate_pool, settle_pool_harvest
-from vale.core.state import WILDLIFE_RESOURCE_TYPES
+from vale.domains.wildlife.state import WILDLIFE_RESOURCE_TYPES
 from vale.domains.environment.terrain import ensure_terrain_cells
 
 

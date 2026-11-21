@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Optional
 
 from vale.config.schema.agents import AgentSex, AgentTuning
-from vale.core.household import household_members, household_of, living_households, work_node_of
-from vale.core.state import AgentState, DebtRecord, HouseholdState
+from vale.domains.society.households import household_members, household_of, living_households, work_node_of
+from vale.domains.society.state import AgentState, DebtRecord, HouseholdState
 from vale.domains.society.agents.demographics import age_years, living_agents
 from vale.domains.society.agents.production import _inventory
 

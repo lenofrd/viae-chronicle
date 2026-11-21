@@ -4,7 +4,7 @@ import pytest
 
 from vale.core.config_loader import LoadedConfig, load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.world import World
 from vale.domains.society.agents import AgentModule
 from vale.domains.society.land import (

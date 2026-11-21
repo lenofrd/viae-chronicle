@@ -7,8 +7,8 @@ import math
 from typing import Optional
 
 from vale.config.schema.natural_params import Season, WeatherType
-from vale.core.household import home_node_of, living_households
-from vale.core.state import AgentState, HouseholdState
+from vale.domains.society.households import home_node_of, living_households
+from vale.domains.society.state import AgentState, HouseholdState
 
 @dataclass
 class Perception:

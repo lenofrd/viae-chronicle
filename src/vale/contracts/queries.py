@@ -11,7 +11,7 @@ from typing import Any, Mapping, Optional
 
 from vale.config.schema.natural_params import Season, WeatherType
 from vale.config.schema.spatial_units import SpatialNode
-from vale.core.state import ClimateSnapshot
+from vale.core.snapshots import ClimateSnapshot
 from vale.core.world import World
 
 _DEFAULT_SEASON = Season.SPRING
@@ -32,39 +32,46 @@ class EnvironmentQuery:
     """自然环境只读快照：气候、水文与由此派生的农事系数。"""
 
     @staticmethod
-    def climate(world: World) -> Optional[ClimateSnapshot]:
+    def _climate(world: World) -> Optional[ClimateSnapshot]:
+        """域内派生读取（不复制，仅供本类只读派生用）。"""
         return world.state.environment.climate
 
     @staticmethod
+    def climate(world: World) -> Optional[ClimateSnapshot]:
+        """气候快照的独立副本：调用方改副本不会影响环境域状态（P6 只读契约）。"""
+        climate = EnvironmentQuery._climate(world)
+        return climate.model_copy() if climate is not None else None
+
+    @staticmethod
     def season(world: World) -> Season:
-        climate = EnvironmentQuery.climate(world)
+        climate = EnvironmentQuery._climate(world)
         return climate.season if climate is not None else _DEFAULT_SEASON
 
     @staticmethod
     def weather(world: World) -> WeatherType:
-        climate = EnvironmentQuery.climate(world)
+        climate = EnvironmentQuery._climate(world)
         return climate.current_weather if climate is not None else _DEFAULT_WEATHER
 
     @staticmethod
     def temperature_c(world: World) -> float:
-        climate = EnvironmentQuery.climate(world)
+        climate = EnvironmentQuery._climate(world)
         return climate.temperature_c if climate is not None else 0.0
 
     @staticmethod
     def year(world: World) -> int:
-        climate = EnvironmentQuery.climate(world)
+        climate = EnvironmentQuery._climate(world)
         return climate.year if climate is not None else 1
 
     @staticmethod
     def season_name(world: World) -> str:
         """季节名；气候尚未初始化时返回空串（保持旧读取口径）。"""
-        climate = EnvironmentQuery.climate(world)
+        climate = EnvironmentQuery._climate(world)
         return climate.season.value if climate is not None else ""
 
     @staticmethod
     def weather_name(world: World) -> str:
         """天气名；气候尚未初始化时返回空串（保持旧读取口径）。"""
-        climate = EnvironmentQuery.climate(world)
+        climate = EnvironmentQuery._climate(world)
         return climate.current_weather.value if climate is not None else ""
 
     @staticmethod

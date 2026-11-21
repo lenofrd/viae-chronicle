@@ -1,7 +1,7 @@
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.world import World
-from vale.core.state import HouseholdState, LandParcelState, BuildingState
+from vale.domains.society.state import BuildingState, HouseholdState, LandParcelState
 from vale.domains.society.economy import (
     create_land_lease, settle_land_rent, settle_household_trade,
     deposit_shared_storage, withdraw_shared_storage,
@@ -73,7 +73,7 @@ def test_collective_lease_pays_village_treasury():
     w = _world()
     parcel = w.state.human.land_parcels["p"]
     parcel.owner_type, parcel.owner_id = "collective", "village"
-    from vale.core.state import CouncilDecisionState
+    from vale.domains.society.state import CouncilDecisionState
     w.state.human.council_decisions["d"] = CouncilDecisionState(
         decision_id="d", subject="lease:p:b", proposer_agent_id="a1",
         status="approved", created_tick=0,

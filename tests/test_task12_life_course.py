@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from household_helpers import attach_test_resource_pools, hh
-from vale.core.household import home_node_of, work_node_of
+from vale.domains.society.households import home_node_of, work_node_of
 
 import random
 
@@ -24,7 +24,7 @@ from vale.core.calendar import DAYS_PER_YEAR
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
-from vale.core.state import AgentState, DebtRecord, HouseholdState
+from vale.domains.society.state import AgentState, DebtRecord, HouseholdState
 from vale.core.world import World
 from vale.domains.society.agents import (
     AgentModule,

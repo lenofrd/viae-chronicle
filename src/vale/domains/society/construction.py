@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from vale.contracts.queries import EnvironmentQuery
-from vale.core.state import BuildingNeedState, BuildingState, ConstructionProjectState
+from vale.domains.society.state import BuildingNeedState, BuildingState, ConstructionProjectState
 from vale.domains.society.agents.demographics import age_years
 
 # Costs are deliberately explicit and modest; future economy balancing can

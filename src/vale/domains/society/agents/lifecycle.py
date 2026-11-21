@@ -9,8 +9,8 @@ from vale.config.schema.natural_params import Season
 from vale.contracts.impacts import EcologicalImpact
 from vale.contracts.queries import EnvironmentQuery
 from vale.core.calendar import DAYS_PER_YEAR
-from vale.core.household import home_node_of, household_of
-from vale.core.state import AgentState, HouseholdState
+from vale.domains.society.households import home_node_of, household_of
+from vale.domains.society.state import AgentState, HouseholdState
 from vale.domains.society.agents.constants import _candidate_actions
 from vale.domains.society.agents.demographics import age_years, living_agents
 

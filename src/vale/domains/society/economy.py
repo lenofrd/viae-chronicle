@@ -1,7 +1,7 @@
 """Land leasing, household commerce, shared storage and FIFO public queues."""
 from __future__ import annotations
 from copy import deepcopy
-from vale.core.state import LandRightState
+from vale.domains.society.state import LandRightState
 
 def _household(world, household_id):
     household = world.state.human.households.get(household_id)

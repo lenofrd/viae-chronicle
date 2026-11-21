@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from vale.config.schema.agents import AgentTuning
 from vale.contracts.queries import SpatialQuery
-from vale.core.household import home_node_of, living_households
-from vale.core.state import HouseholdState
+from vale.domains.society.households import home_node_of, living_households
+from vale.domains.society.state import HouseholdState
 from vale.domains.society.agents.constants import IMPOSSIBLE
 from vale.domains.society.agents.demographics import age_years, living_agents
 from vale.domains.society.agents.spatial import SpatialIndex

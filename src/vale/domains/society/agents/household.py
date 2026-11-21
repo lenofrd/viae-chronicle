@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from vale.config.schema.agents import AgentTuning
-from vale.core.household import home_node_of, work_node_of
-from vale.core.state import AgentState
+from vale.domains.society.households import home_node_of, work_node_of
+from vale.domains.society.state import AgentState
 from vale.domains.society import social
 from vale.domains.society.agents.demographics import living_agents
 

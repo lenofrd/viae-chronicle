@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from vale.config.schema.agents import AgentTuning
-from vale.core.household import household_of, living_households
-from vale.core.state import AgentState, DebtRecord, HouseholdState
+from vale.domains.society.households import household_of, living_households
+from vale.domains.society.state import AgentState, DebtRecord, HouseholdState
 from vale.domains.society import social
 
 

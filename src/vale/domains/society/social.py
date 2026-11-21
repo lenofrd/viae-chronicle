@@ -15,12 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 
-from vale.core.state import (
-    AcquaintanceEntry,
-    AcquaintanceLevel,
-    ImpressionEntry,
-    MemoryEntry,
-)
+from vale.domains.society.state import AcquaintanceEntry, AcquaintanceLevel, ImpressionEntry, MemoryEntry
 
 if TYPE_CHECKING:
     from vale.core.state import WorldState

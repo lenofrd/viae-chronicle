@@ -22,12 +22,7 @@ from household_helpers import attach_test_resource_pools, hh
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
-from vale.core.state import (
-    AcquaintanceEntry,
-    AcquaintanceLevel,
-    DebtRecord,
-    MemoryEntry,
-)
+from vale.domains.society.state import AcquaintanceEntry, AcquaintanceLevel, DebtRecord, MemoryEntry
 from vale.core.world import World
 from vale.domains.society import social
 from vale.domains.society.agents import AgentModule

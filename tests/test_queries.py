@@ -8,7 +8,8 @@ import pytest
 from vale.config.schema.natural_params import Season, WeatherType
 from vale.config.schema.spatial_units import DistanceEdge, NodeType, SpatialConfig, SpatialNode
 from vale.contracts.queries import EnvironmentQuery, SpatialQuery, WildlifeQuery
-from vale.core.state import ClimateSnapshot, WorldState
+from vale.core.snapshots import ClimateSnapshot
+from vale.core.state import WorldState
 
 
 def _world(*, climate=None, gear: str = "low", spatial: SpatialConfig | None = None):
@@ -124,7 +125,7 @@ def test_wildlife_query_exposes_read_only_pools_view():
     world = _world()
     assert WildlifeQuery.populations(world)["pools"] == {}
 
-    from vale.core.state import ResourcePoolState
+    from vale.core.pools import ResourcePoolState
     world.state.wildlife.pools["river_town"] = ResourcePoolState(
         resource_type="fish", current_stock=90.0, max_stock=140.0)
     view = WildlifeQuery.populations(world)

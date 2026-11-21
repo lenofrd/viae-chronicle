@@ -5,13 +5,13 @@
 """
 from __future__ import annotations
 
-from vale.core.household import (
+from vale.domains.society.households import (
     home_node_of,
     household_of,
     inventory_of,
     work_node_of,
 )
-from vale.core.state import ResourcePoolSpec
+from vale.core.pools import ResourcePoolSpec
 from vale.core.pools import bootstrap_pool
 
 ITEMS = ("grain", "meat", "fish", "vegetable", "cloth")

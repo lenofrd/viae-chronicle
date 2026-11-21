@@ -7,7 +7,7 @@ collect_water 产水与守恒、日耗按成员数扣减、moisture 接入产量
 from __future__ import annotations
 
 from household_helpers import hh
-from vale.core.household import work_node_of
+from vale.domains.society.households import work_node_of
 
 import random
 
@@ -18,7 +18,7 @@ from household_helpers import attach_test_resource_pools
 from vale.config.schema.natural_params import HydrologyEvolutionParams, Season
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
 from vale.core.world import World
 from vale.domains.society.agents import AgentModule, SpatialIndex, expected_yield

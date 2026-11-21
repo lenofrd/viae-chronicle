@@ -99,21 +99,25 @@
 - `public_treasury` 是否有生产写入路径（仅见 tenancy_economy 结算函数，调用者待查）。
 - `land.initialize_land` 在首个 tick 创建住宅与公共仓房（[L123-L164](file:///F:/viae-chronicle/src/vale/modules/land.py#L123-L164)）；`construction` 只负责后续改造。建筑状态的"创建者"与"改造者"不是同一个模块，迁移时需明确归口。
 
-## 8. P5 完成后的依赖现状（2026-11-21）
+## 8. P5/P6 完成后的依赖现状（2026-11-21）
 
 §2 的导入图是 P0 审计基线 `c9f29a5` 的快照，`modules.*` 路径与行号已失效。P5 之后的实际依赖以代码为准，摘要：
 
 ```text
 入口: cli / main / scripts.run_xigu / viz.sim_worker
+  world.replay -> domains.{society,environment,wildlife}.state、core.pools、domains.society.social
+  core.state -> domains.*.state（组合根：WorldState 由三个领域容器组成，架构闸唯一豁免）
+  core.pools / core.snapshots -> 无内部依赖（跨领域共享值对象）
   domains.society.agents.module -> agents.{lifecycle,labor,decision,actions,household,
         market,mortality,marriage,reproduction,debt}、agents.{perception,production,
         spatial,demographics,constants}、domains.society.social、domains.society.community
-  各 mixin -> core.*、contracts.*、domains.society.{community,social}、同包子模块
+  各 mixin -> core.*、contracts.*、domains.society.{households,community,social}、同包子模块
   domains.society.{construction,governance} -> domains.society.agents.demographics (age_years)
   domains.environment.{climate,hydrology,fields,resources,terrain} -> core.*、contracts.*、core.pools
   domains.wildlife.wildlife -> core.*、contracts.*、core.pools
   world.scenarios.xigu.events -> core.*（场景独有，不进领域）
-  core.replay -> domains.society.social   ← 仍存在的唯一基础设施倒置（D3，P6 处理）
 ```
 
 §6 的 6 条改造项在 P3b/P3c/P5 已全部落地（采集、灾害、野遇、取水走契约；天气/水位/土壤走 `EnvironmentQuery`；`construction`/`land` 不再读 `agents` 主模块，只依赖 `agents.demographics.age_years` 派生函数）。`agents` 协调器不再被其他人类子系统反向依赖，架构闸以此设红线。
+
+P6（2026-11-21）：D3（`core.replay → domains.society.social`）已消除——Replay 整体迁入 `world/replay.py`；`core/household.py` 迁 `domains/society/households.py`；`core/state.py` 只留组合根，且是唯一被豁免的 core→domain 导入。当前 `KNOWN_IMPORT_VIOLATIONS` 为空。

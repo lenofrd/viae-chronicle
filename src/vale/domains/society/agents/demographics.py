@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from vale.core.calendar import DAYS_PER_YEAR
-from vale.core.state import AgentState
+from vale.domains.society.state import AgentState
 
 def age_years(birth_tick: int, tick: int) -> int:
     """当前年龄（整年）。``birth_tick`` 允许为负（开局前出生），唯一真相源。"""

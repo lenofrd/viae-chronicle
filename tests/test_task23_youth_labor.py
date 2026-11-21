@@ -18,9 +18,9 @@ import pytest
 from household_helpers import attach_test_resource_pools
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
-from vale.core.state import AgentState
+from vale.domains.society.state import AgentState
 from vale.core.world import World
 from vale.domains.society.agents import AgentModule
 from vale.domains.environment.climate import ClimateModule

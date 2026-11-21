@@ -22,7 +22,7 @@ from vale.core.calendar import (
     season_progress_from_day_of_year,
     start_day_of_year,
 )
-from vale.core.state import ClimateSnapshot
+from vale.core.snapshots import ClimateSnapshot
 from vale.config.schema.natural_params import DroughtState, IrrigationGear, Season, WeatherType
 from vale.domains.environment.hydrology import regenerate_water_sources
 

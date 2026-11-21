@@ -10,16 +10,16 @@
 from __future__ import annotations
 
 from household_helpers import attach_test_resource_pools, hh
-from vale.core.household import home_node_of, work_node_of
+from vale.domains.society.households import home_node_of, work_node_of
 
 import pytest
 
 from vale.config.schema.natural_params import Season
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
-from vale.core.state import DebtRecord
+from vale.domains.society.state import DebtRecord
 from vale.core.world import World
 from vale.domains.society.agents import IMPOSSIBLE, AgentModule, select_creditor
 from vale.domains.environment.climate import ClimateModule

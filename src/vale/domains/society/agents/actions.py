@@ -9,8 +9,8 @@ from vale.config.schema.agents import AgentTuning
 from vale.contracts.impacts import EcologicalImpact
 from vale.contracts.queries import EnvironmentQuery, SpatialQuery
 from vale.contracts.resources import ResourceService
-from vale.core.household import home_node_of, household_of, inventory_of, work_node_of
-from vale.core.state import AgentState, DebtRecord
+from vale.domains.society.households import home_node_of, household_of, inventory_of, work_node_of
+from vale.domains.society.state import AgentState, DebtRecord
 from vale.domains.society.agents.demographics import age_years
 from vale.domains.society.agents.perception import Perception, select_creditor, select_food_creditor
 from vale.domains.society.agents.production import _node_crop_type, _target_node, expected_yield

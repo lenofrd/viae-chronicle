@@ -4,8 +4,8 @@ from vale.config.schema.natural_params import Season
 from vale.core.config_loader import LoadedConfig, load_config
 import pytest
 from vale.core.event_log import EventLog
-from vale.core.state import BuildingState
-from vale.core.replay import rebuild_state
+from vale.domains.society.state import BuildingState
+from vale.world.replay import rebuild_state
 from vale.core.world import World
 from vale.domains.society.agents import AgentModule, SpatialIndex
 from vale.domains.society.community import (

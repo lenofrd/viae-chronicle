@@ -6,8 +6,8 @@ import math
 from typing import Optional
 
 from vale.config.schema.agents import AgentSex, AgentTuning
-from vale.core.household import home_node_of, household_of
-from vale.core.state import AgentState, HouseholdState
+from vale.domains.society.households import home_node_of, household_of
+from vale.domains.society.state import AgentState, HouseholdState
 from vale.domains.society import social
 from vale.domains.society.agents.demographics import age_years, living_agents
 from vale.domains.society.agents.production import _inventory

@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from household_helpers import hh
-from vale.core.household import home_node_of, work_node_of
+from vale.domains.society.households import home_node_of, work_node_of
 
 import random
 

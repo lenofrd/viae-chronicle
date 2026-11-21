@@ -241,8 +241,8 @@ def update_building_needs(world, tuning) -> None:
     Existing alternatives (repair, extension, sharing, relocation) remain visible.
     """
     from math import ceil
-    from vale.core.state import BuildingNeedState
-    from vale.core.household import living_households
+    from vale.domains.society.state import BuildingNeedState
+    from vale.domains.society.households import living_households
 
     def update(need_id: str, need_type: str, node_id: str, building_type: str,
                demand: float, capacity: float, pressured: bool) -> None:

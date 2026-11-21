@@ -5,7 +5,7 @@ building records on top of those nodes; it does not create a second map.
 """
 from __future__ import annotations
 
-from vale.core.state import BuildingState, LandParcelState, LandRightState
+from vale.domains.society.state import BuildingState, LandParcelState, LandRightState
 
 
 def _node_type(node) -> str:

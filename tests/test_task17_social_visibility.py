@@ -20,9 +20,9 @@ import pytest
 from household_helpers import attach_test_resource_pools, hh
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
-from vale.core.state import DebtRecord
+from vale.domains.society.state import DebtRecord
 from vale.observability.query import EventFilter, apply_filter
 from vale.observability.render import render_event
 from vale.domains.society.agents import AgentModule
@@ -77,7 +77,7 @@ def _dispute_debt(world, debtor_hh, creditor_hh, amount=6.0) -> DebtRecord:
 
 
 def _seed_creditor_memory(world, outcome):
-    from vale.core.state import AcquaintanceEntry, MemoryEntry
+    from vale.domains.society.state import AcquaintanceEntry, MemoryEntry
     creditor = world.state.human.agents["li_quan"]
     debtor = world.state.human.agents["lin_yuan"]
     creditor.acquaintances[debtor.agent_id] = AcquaintanceEntry(

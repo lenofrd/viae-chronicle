@@ -17,14 +17,9 @@ import pytest
 from household_helpers import attach_test_resource_pools, hh
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
-from vale.core.replay import rebuild_state
+from vale.world.replay import rebuild_state
 from vale.core.scheduler import run_tick
-from vale.core.state import (
-    AcquaintanceEntry,
-    AcquaintanceLevel,
-    DebtRecord,
-    MemoryEntry,
-)
+from vale.domains.society.state import AcquaintanceEntry, AcquaintanceLevel, DebtRecord, MemoryEntry
 from vale.core.world import World
 from vale.domains.society import social
 from vale.domains.society.agents import AgentModule
@@ -90,7 +85,8 @@ def test_social_tuning_defaults_loaded(world):
 
 
 def test_agent_state_social_fields_default_empty(world):
-    from vale.core.state import AgentSex, AgentState
+    from vale.config.schema.agents import AgentSex
+    from vale.domains.society.state import AgentState
 
     probe = AgentState(
         agent_id="probe", name="probe", sex=AgentSex.MALE,
@@ -260,7 +256,7 @@ def test_interaction_upgrades_acquaintance_both_ways_once_only(world):
 
 
 def _bare_agent(agent_id="x"):
-    from vale.core.state import AgentState
+    from vale.domains.society.state import AgentState
     return AgentState(agent_id=agent_id, name=agent_id, sex="male", birth_tick=0,
                       household_id=f"hh_{agent_id}", location="well",
                       health=100.0, hunger=0.0, stamina=100.0)
