@@ -122,10 +122,12 @@ def test_harvest_refuses_empty_stock_without_writing_state():
     assert refused["reason"] == "stock_depleted"
 
 
-def test_harvest_without_registered_pool_keeps_legacy_grant():
+def test_harvest_without_registered_pool_is_refused():
+    """2026-11-21 裁决：无池目录不等资源无限，未登记池一律拒绝（不再原额给付）。"""
     world = _world()
     assert ResourceService.is_resource_node(world, "well") is False
-    assert ResourceService.harvest(world, "well", 3.0) == pytest.approx(3.0)
+    with pytest.raises(ValueError, match="unregistered"):
+        ResourceService.harvest(world, "well", 3.0)
     assert not world.event_log.by_type("resource_harvested")
 
 

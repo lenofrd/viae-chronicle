@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from household_helpers import hh
+from household_helpers import attach_test_resource_pools, hh
 from vale.core.household import home_node_of, work_node_of
 
 import random
@@ -32,6 +32,7 @@ def _build(seed: int = 0) -> World:
     log = EventLog(":memory:")
     w = World(world_id=cfg.world.world_id, event_log=log,
               start_tick=cfg.world.start_tick, config=cfg)
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     return w
@@ -323,6 +324,7 @@ def test_execute_gather_works_for_arbitrary_action_name(world):
         output_amount=3, injury_risk=0.0, bad_weather_success_mult=1.0,
         bad_weather_injury_mult=1.0,
     )
+    attach_test_resource_pools(world)
     p = mod._perceive(world, agent)
     meat_before = hh(world, agent).meat
     mod._execute_gather(world, agent, "fish", p, tuning)
@@ -340,6 +342,7 @@ def test_core_settlement_still_runs_after_adding_action(world):
         output_amount=3, injury_risk=0.0, bad_weather_success_mult=1.0,
         bad_weather_injury_mult=1.0,
     )
+    attach_test_resource_pools(world)
     for _ in range(120):
         run_tick(world)
     # 核心结算事件仍出现（健康回血 / 债务事件）

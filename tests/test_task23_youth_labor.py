@@ -15,6 +15,7 @@ import random
 
 import pytest
 
+from household_helpers import attach_test_resource_pools
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.replay import rebuild_state
@@ -32,6 +33,7 @@ def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     world = World(world_id=cfg.world.world_id, event_log=EventLog(":memory:"),
                   start_tick=cfg.world.start_tick, config=cfg)
+    attach_test_resource_pools(world)
     world.register(ClimateModule(rng=random.Random(seed)))
     world.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     return world

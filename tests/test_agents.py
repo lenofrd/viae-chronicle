@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 
-from household_helpers import hh
+from household_helpers import attach_test_resource_pools, hh
 from vale.core.household import home_node_of, work_node_of
 
 import dataclasses
@@ -34,6 +34,7 @@ def world():
         start_tick=cfg.world.start_tick,
         config=cfg,
     )
+    attach_test_resource_pools(w)
     w.register(ClimateModule())
     w.register(AgentModule())
     # 任务12：单人消费/债务单元测试，禁用婚配结算以隔离“配偶同户共同进食”

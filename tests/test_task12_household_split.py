@@ -8,6 +8,7 @@ import pytest
 from config.schema.agents import AgentSex
 from vale.core.calendar import DAYS_PER_YEAR
 from vale.core.config_loader import load_config
+from household_helpers import attach_test_resource_pools
 from vale.core.event_log import EventLog
 from vale.core.household import household_of
 from vale.core.state import AgentState, DebtRecord, HouseholdState
@@ -26,6 +27,7 @@ def world():
         config=cfg,
     )
     mod = AgentModule(rng=random.Random(7))
+    attach_test_resource_pools(w)
     w.register(mod)
     mod._ensure_agents(w, cfg.agents)  # noqa: SLF001
     w.current_tick = 100

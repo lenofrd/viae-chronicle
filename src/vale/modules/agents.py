@@ -468,15 +468,19 @@ class AgentModule:
         """
         if world.state.human.agents:
             return
-        # P4 收敛（2026-11-21 裁决）：带池目录的世界，采集动作的目标节点必须在
-        # 目录登记，坏配置启动即报错（取消未登记池原额给付 fallback）；无池目录
-        # 的手工世界（基础 YAML 世界未编池）不校验，采集走 legacy 满额给付。
+        # 2026-11-21 裁决：无池目录不等于资源无限。有池目录→采集目标必须在目录登记；
+        # 无目录但配置了采集动作→启动即报错；无目录且无采集动作→允许（基础世界可不编池）。
         catalog = getattr(world.config, "resources", None) or {}
+        actions = cfg.tuning.gathering.actions
+        if not catalog and actions:
+            raise ValueError(
+                "world configures gathering actions but has no resource pool catalog: "
+                f"{sorted(g.target_node for g in actions.values())}"
+            )
         unregistered = sorted({
-            gcfg.target_node for gcfg in cfg.tuning.gathering.actions.values()
-            if gcfg.target_node not in catalog
+            g.target_node for g in actions.values() if g.target_node not in catalog
         })
-        if catalog and unregistered:
+        if unregistered:
             raise ValueError(
                 f"gathering actions target unregistered resource pools: {unregistered}"
             )

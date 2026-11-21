@@ -10,7 +10,7 @@
 """
 from __future__ import annotations
 
-from household_helpers import hh
+from household_helpers import attach_test_resource_pools, hh
 from vale.core.household import home_node_of, work_node_of
 
 import dataclasses
@@ -35,6 +35,7 @@ def _build(seed: int = 0) -> World:
     log = EventLog(":memory:")
     w = World(world_id=cfg.world.world_id, event_log=log,
               start_tick=cfg.world.start_tick, config=cfg)
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     return w
@@ -414,6 +415,7 @@ def test_new_gather_action_plugs_in_without_core_changes(world):
         output_amount=2, injury_risk=0.0, bad_weather_success_mult=1.0,
         bad_weather_injury_mult=1.0,
     )
+    attach_test_resource_pools(world)
     assert "cut_reed" in _candidate_actions(tuning)
     mod = _module(world)
     agent = next(iter(world.state.human.agents.values()))

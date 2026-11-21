@@ -164,3 +164,33 @@ def test_gathering_target_outside_pool_catalog_fails_at_startup():
     world = World(config.world.world_id, EventLog(":memory:"), config.world.start_tick, config)
     with _pytest.raises(ValueError, match="low_mountain"):
         AgentModule()._ensure_agents(world, config.agents)
+
+
+def test_world_with_gathering_but_no_pool_catalog_fails_at_startup():
+    """2026-11-21 裁决：无池目录但配置了采集动作 → 启动即报错。"""
+    import pytest as _pytest
+
+    from vale.core.config_loader import load_config
+    from vale.core.event_log import EventLog
+    from vale.core.world import World
+    from vale.modules.agents import AgentModule
+
+    base = load_config("brookvale-town-001")
+    assert base.agents.tuning.gathering.actions  # 基础世界自带 hunt/fish
+    world = World(base.world.world_id, EventLog(":memory:"), base.world.start_tick, base)
+    with _pytest.raises(ValueError, match="no resource pool catalog"):
+        AgentModule()._ensure_agents(world, base.agents)
+
+
+def test_world_without_gathering_may_skip_pool_catalog():
+    """2026-11-21 裁决：无采集行为的基础世界可以不配资源池。"""
+    from vale.core.config_loader import load_config
+    from vale.core.event_log import EventLog
+    from vale.core.world import World
+    from vale.modules.agents import AgentModule
+
+    base = load_config("brookvale-town-001")
+    base.agents.tuning.gathering.actions.clear()
+    world = World(base.world.world_id, EventLog(":memory:"), base.world.start_tick, base)
+    AgentModule()._ensure_agents(world, base.agents)
+    assert world.state.human.agents

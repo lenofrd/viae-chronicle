@@ -21,10 +21,10 @@ class ResourceService:
                 household_id: str = "", action: str = "") -> float:
         """从节点资源池结算采集，返回实际给付量（0 表示被拒）。
 
-        先查环境域池，miss 再查动物域池（P4 按域分流）。两者都未登记时：
-        有池目录（``config.resources`` 非空）的世界属状态异常，抛错快速失败
-        （P4 收敛：不再对未登记池原额给付）；无池目录的手工世界（基础 YAML
-        世界未编池）保留 legacy 满额给付，待老板裁决是否为其编池。
+        先查环境域池，miss 再查动物域池（P4 按域分流）。两者都未登记即抛错
+        快速失败：无池目录不等于资源无限（2026-11-21 裁决），未登记资源一律
+        拒绝，不做原额给付，否则资源守恒可被绕过。无采集行为的世界不会走到
+        这里——启动校验已拦住「有采集动作却无池目录」的配置。
         """
         requested = max(0.0, float(requested))
         if world.state.environment.ecological_resources.get(node_id) is not None:
@@ -37,8 +37,6 @@ class ResourceService:
                 world, node_id, requested,
                 agent_id=agent_id, household_id=household_id, action=action,
             )
-        if not ecology.pool_specs(world):
-            return requested  # 无池目录世界：legacy 满额给付（待裁决）
         raise ValueError(f"harvest targets unregistered resource pool: {node_id}")
 
     @staticmethod

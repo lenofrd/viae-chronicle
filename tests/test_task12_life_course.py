@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from household_helpers import hh
+from household_helpers import attach_test_resource_pools, hh
 from vale.core.household import home_node_of, work_node_of
 
 import random
@@ -43,6 +43,7 @@ def _build(seed: int = 0) -> World:
     cfg = load_config("brookvale-town-001")
     w = World(world_id=cfg.world.world_id, event_log=EventLog(":memory:"),
               start_tick=cfg.world.start_tick, config=cfg)
+    attach_test_resource_pools(w)
     w.register(ClimateModule(rng=random.Random(seed)))
     w.register(AgentModule(rng=random.Random(seed * 7 + 13)))
     return w
