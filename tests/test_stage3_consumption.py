@@ -7,7 +7,7 @@ from __future__ import annotations
 import random
 
 import pytest
-from config.schema.agents import AgentSex
+from vale.config.schema.agents import AgentSex
 from household_helpers import attach_test_resource_pools, hh
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog

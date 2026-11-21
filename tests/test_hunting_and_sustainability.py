@@ -16,8 +16,8 @@ import random
 
 import pytest
 
-from config.schema.agents import GatheringActionTuning
-from config.schema.natural_params import Season, WeatherType
+from vale.config.schema.agents import GatheringActionTuning
+from vale.config.schema.natural_params import Season, WeatherType
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick

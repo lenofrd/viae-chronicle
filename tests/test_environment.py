@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from config.schema.natural_params import Season
+from vale.config.schema.natural_params import Season
 from vale.core.config_loader import LoadedConfig, load_config
 import pytest
 from vale.core.event_log import EventLog

@@ -21,8 +21,8 @@ from vale.core.household import work_node_of
 from vale.core.scheduler import run_tick
 from vale.core.state import AgentState, HouseholdState
 from vale.core.world import World
-from config.schema.agents import AgentSex
-from config.schema.natural_params import Season
+from vale.config.schema.agents import AgentSex
+from vale.config.schema.natural_params import Season
 from vale.modules.agents import AgentModule, SpatialIndex, expected_yield
 from vale.modules.climate import ClimateModule
 from vale.observability.render import render_event

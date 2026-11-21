@@ -19,8 +19,8 @@ import math
 import random
 from dataclasses import dataclass, field
 
-from config.schema.agents import AgentAssets, AgentConfig, AgentSex, AgentsConfig, GatheringActionTuning
-from config.schema.spatial_units import NodeType, SpatialConfig, SpatialNode
+from vale.config.schema.agents import AgentAssets, AgentConfig, AgentSex, AgentsConfig, GatheringActionTuning
+from vale.config.schema.spatial_units import NodeType, SpatialConfig, SpatialNode
 
 from vale.worldgen import settlement
 from vale.worldgen.nature import ResourcePoolSpec, TerrainCell, VegetationProfile, generate_nature

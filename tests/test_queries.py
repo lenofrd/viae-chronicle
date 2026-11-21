@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from config.schema.natural_params import Season, WeatherType
-from config.schema.spatial_units import DistanceEdge, NodeType, SpatialConfig, SpatialNode
+from vale.config.schema.natural_params import Season, WeatherType
+from vale.config.schema.spatial_units import DistanceEdge, NodeType, SpatialConfig, SpatialNode
 from vale.contracts.queries import EnvironmentQuery, SpatialQuery, WildlifeQuery
 from vale.core.state import ClimateSnapshot, WorldState
 

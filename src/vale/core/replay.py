@@ -1422,7 +1422,7 @@ class _Replayer:
 
 
 def _sex(value) -> "AgentSex":
-    from config.schema.agents import AgentSex
+    from vale.config.schema.agents import AgentSex
 
     if isinstance(value, AgentSex):
         return value

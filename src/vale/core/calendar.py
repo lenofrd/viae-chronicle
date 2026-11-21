@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from config.schema.natural_params import Season
+from vale.config.schema.natural_params import Season
 
 # 时间常数
 DAYS_PER_MONTH = 30

@@ -22,6 +22,7 @@ src/vale/              模拟核心
   core/                事件库、世界状态、调度器、日历、回放、快照、世界注册
   contracts/           跨领域契约（只读查询 queries；写入契约 resources / impacts 只路由，
                        结算在领域所有者模块）
+  config/schema/       配置模型与校验（Pydantic；世界 YAML 数据仍在仓库根 config/）
   modules/             可插拔模拟模块（climate 气候、agents 人物/家庭/经济、community 社区设施、
                        land 土地、construction 建造、governance 治理、tenancy_economy 租佃经济、
                        ecology 生态（植被类资源池+田块生态）、wildlife 动物（鱼/猎物池）、
@@ -32,8 +33,7 @@ src/vale/              模拟核心
   cli.py, main.py      命令行入口（events list / timeline / run 等）
   api/                 HTTP/查询接口占位（routes），当前非主要入口
 
-config/                世界配置与校验
-  schema/              Pydantic schema（配置缺省值、启动期校验）
+config/                世界配置数据（纯 YAML，不含 Python 包）
   shared/              跨世界共享参数
   worlds/              具体世界实例（brookvale-town-001）与 _template
 

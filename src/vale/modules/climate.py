@@ -16,7 +16,7 @@ from __future__ import annotations
 import random
 from typing import Any
 
-from config.schema.natural_params import DroughtState, IrrigationGear, Season, WeatherType
+from vale.config.schema.natural_params import DroughtState, IrrigationGear, Season, WeatherType
 from vale.modules.hydrology import regenerate_water_sources
 
 from ..core.calendar import (

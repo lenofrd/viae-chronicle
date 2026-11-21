@@ -9,8 +9,8 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Any, Mapping, Optional
 
-from config.schema.natural_params import Season, WeatherType
-from config.schema.spatial_units import SpatialNode
+from vale.config.schema.natural_params import Season, WeatherType
+from vale.config.schema.spatial_units import SpatialNode
 from vale.core.state import ClimateSnapshot
 from vale.core.world import World
 

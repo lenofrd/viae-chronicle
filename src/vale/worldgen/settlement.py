@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Iterable
 
-from config.schema.spatial_units import DistanceEdge, NodeType, SpatialConfig, SpatialNode
+from vale.config.schema.spatial_units import DistanceEdge, NodeType, SpatialConfig, SpatialNode
 
 from vale.worldgen.nature import terrain_at
 

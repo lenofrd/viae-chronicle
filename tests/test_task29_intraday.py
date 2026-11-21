@@ -17,8 +17,8 @@ import pytest
 from pydantic import ValidationError
 
 from household_helpers import attach_test_resource_pools
-from config.schema.agents import ActionTuning
-from config.schema.natural_params import Season
+from vale.config.schema.agents import ActionTuning
+from vale.config.schema.natural_params import Season
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick

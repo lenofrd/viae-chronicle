@@ -14,7 +14,7 @@ import dataclasses
 
 import pytest
 
-from config.schema.natural_params import Season
+from vale.config.schema.natural_params import Season
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
@@ -494,7 +494,7 @@ def test_marriage_requires_mutual_known_and_not_recent_memory(world):
 def test_marriage_moves_only_wife_and_keeps_two_households_independent(world):
     """女方原家庭的成年成员、既有子女、资产与债务留存；彩礼/陪嫁独立守恒。"""
     from vale.core.calendar import DAYS_PER_YEAR
-    from config.schema.agents import AgentSex
+    from vale.config.schema.agents import AgentSex
     from vale.core.state import DebtRecord
 
     module, wife, husband = _prepare_marriage_pair(world)

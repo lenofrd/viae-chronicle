@@ -14,7 +14,7 @@ from vale.core.household import home_node_of, work_node_of
 
 import pytest
 
-from config.schema.natural_params import Season
+from vale.config.schema.natural_params import Season
 from vale.core.config_loader import load_config
 from vale.core.event_log import EventLog
 from vale.core.replay import rebuild_state

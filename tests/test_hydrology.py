@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import ValidationError
 
-from config.schema.natural_params import WaterSupplyParams
+from vale.config.schema.natural_params import WaterSupplyParams
 from vale.modules.hydrology import (
     ensure_source,
     regenerate_water_sources,

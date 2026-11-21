@@ -5,7 +5,7 @@ import random
 
 import pytest
 
-from config.schema.agents import AgentSex
+from vale.config.schema.agents import AgentSex
 from vale.core.calendar import DAYS_PER_YEAR
 from vale.core.config_loader import load_config
 from household_helpers import attach_test_resource_pools

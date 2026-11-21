@@ -2,7 +2,7 @@
 
 不允许模块往裸 dict 里乱塞。每个子系统的快照在此定义字段结构，
 后续模块（水文、植被等）必须按对应结构读取。
-气候快照的取值枚举复用 config.schema.natural_params，保持单一真相源。
+气候快照的取值枚举复用 vale.config.schema.natural_params，保持单一真相源。
 """
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, computed_field
 
-from config.schema.agents import AgentSex
-from config.schema.natural_params import (
+from vale.config.schema.agents import AgentSex
+from vale.config.schema.natural_params import (
     DroughtState,
     FloodState,
     Season,

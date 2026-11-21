@@ -15,8 +15,8 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from config.schema.agents import AgentSex, AgentTuning
-from config.schema.natural_params import Season, WeatherType
+from vale.config.schema.agents import AgentSex, AgentTuning
+from vale.config.schema.natural_params import Season, WeatherType
 from vale.core.calendar import DAYS_PER_YEAR
 from vale.core.household import (
     home_node_of,

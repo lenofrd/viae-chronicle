@@ -12,10 +12,10 @@ import os
 
 import yaml
 
-from config.schema.agents import AgentsConfig
-from config.schema.natural_params import NaturalConfig
-from config.schema.spatial_units import SpatialConfig
-from config.schema.world_config import WorldConfig
+from vale.config.schema.agents import AgentsConfig
+from vale.config.schema.natural_params import NaturalConfig
+from vale.config.schema.spatial_units import SpatialConfig
+from vale.config.schema.world_config import WorldConfig
 
 
 class LoadedConfig:
