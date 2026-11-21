@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from vale.contracts.queries import EnvironmentQuery
 from vale.core.pools import bootstrap_pool, pool_specs, regenerate_pool, settle_pool_harvest
+from vale.core.world import PHASE_ECOLOGY
 from vale.domains.wildlife.state import WILDLIFE_RESOURCE_TYPES
 from vale.domains.environment.terrain import ensure_terrain_cells
 
@@ -30,6 +31,7 @@ def owns_resource_type(resource_type: str) -> bool:
 
 class EcologyModule:
     name = "ecology"
+    phase = PHASE_ECOLOGY
     depends_on = ["climate"]
 
     def step(self, world) -> None:

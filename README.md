@@ -39,7 +39,8 @@ src/vale/              模拟核心
                        market 集市、mortality 死亡继承、marriage 婚配、
                        reproduction 分家生育、debt 债务催收、perception 感知、
                        production 生产口径、spatial 距离索引、demographics 人口基础）
-  world/               世界协调：replay 注册三领域投影并暴露 rebuild_state、xigu 世界生成组合门面
+  world/               世界协调：assembly 统一组装入口（模块清单/profile 唯一来源）、
+                       replay 注册三领域投影并暴露 rebuild_state、xigu 世界生成组合门面
                        与 nature/settlement 分段
   world/scenarios/xigu/ 溪古镇场景独有逻辑（xigu_events 季节性灾害/村落事件），不进通用领域
   observability/       只读观察层（事件查询、文本渲染、导出、CLI viewer）

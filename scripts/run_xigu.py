@@ -16,13 +16,7 @@ sys.path.insert(0, ROOT)
 from vale.core.config_loader import LoadedConfig, load_config
 from vale.core.event_log import EventLog
 from vale.core.scheduler import run_tick
-from vale.core.world import World
-from vale.domains.society.agents import AgentModule
-from vale.domains.environment.climate import ClimateModule
-from vale.domains.environment.resources import EcologyModule
-from vale.domains.wildlife.wildlife import WildlifeModule
-from vale.world.scenarios.xigu.events import XiguEventsModule
-from vale.domains.society.economy import TenancyEconomyModule
+from vale.world.assembly import build_world, full_modules
 from vale.world.xigu import XiguGenerationConfig, build_xigu_agents_config, generate_xigu_town
 
 
@@ -47,13 +41,7 @@ def main():
     if os.path.exists(db_path):
         os.remove(db_path)
     log = EventLog(db_path)
-    world = World(config.world.world_id, log, config.world.start_tick, config)
-    world.register(ClimateModule())
-    world.register(EcologyModule())
-    world.register(WildlifeModule())
-    world.register(AgentModule())
-    world.register(TenancyEconomyModule())
-    world.register(XiguEventsModule(seed=args.seed))
+    world = build_world(config, log, modules=full_modules(args.seed))
     initial_population = len(config.agents.agents)
     for _ in range(args.days):
         run_tick(world)

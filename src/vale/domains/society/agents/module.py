@@ -7,6 +7,7 @@ import traceback
 from typing import Optional
 
 from vale.config.schema.agents import AgentTuning
+from vale.core.world import PHASE_SOCIETY
 from vale.domains.society.households import home_node_of
 from vale.domains.society.state import AgentState
 from vale.domains.society import social
@@ -38,6 +39,7 @@ class AgentModule(
     DebtMixin,
 ):
     name = "agents"
+    phase = PHASE_SOCIETY
     depends_on = ["climate", "ecology"]
 
     def __init__(self, rng=None) -> None:

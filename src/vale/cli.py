@@ -25,9 +25,7 @@ from vale.core.config_loader import load_config  # noqa: E402
 from vale.core.event_log import EventLog  # noqa: E402
 from vale.core.scheduler import run_tick  # noqa: E402
 from vale.core.world import World  # noqa: E402
-from vale.domains.society.agents import AgentModule  # noqa: E402
-from vale.domains.environment.climate import ClimateModule  # noqa: E402
-from vale.domains.environment.resources import EcologyModule  # noqa: E402
+from vale.world.assembly import base_town_modules, build_world  # noqa: E402
 from vale.observability.export import EXPORT_FORMATS  # noqa: E402
 from vale.observability.query import EventFilter, apply_filter  # noqa: E402
 from vale.observability.render import payload_preview, render_event  # noqa: E402
@@ -100,16 +98,7 @@ def _bootstrap(run_db: bool = True) -> World:
         if os.path.exists(DB_PATH):
             os.remove(DB_PATH)
     event_log = EventLog(DB_PATH if run_db else ":memory:")
-    world = World(
-        world_id=cfg.world.world_id,
-        event_log=event_log,
-        start_tick=cfg.world.start_tick,
-        config=cfg,
-    )
-    world.register(ClimateModule())
-    world.register(EcologyModule())
-    world.register(AgentModule())
-    return world
+    return build_world(cfg, event_log, modules=base_town_modules())
 
 
 def _narrate(ev: dict, names: dict[str, str]) -> str:

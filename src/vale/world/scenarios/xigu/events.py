@@ -9,10 +9,12 @@ from __future__ import annotations
 import random
 
 from vale.contracts.impacts import EcologicalImpact
+from vale.core.world import PHASE_IMPACT
 
 
 class XiguEventsModule:
     name = "xigu_events"
+    phase = PHASE_IMPACT
     depends_on = ["agents", "ecology"]
 
     def __init__(self, seed: int = 20261118) -> None:

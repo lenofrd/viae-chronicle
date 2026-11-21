@@ -2,6 +2,7 @@
 from __future__ import annotations
 from copy import deepcopy
 from vale.domains.society.state import LandRightState
+from vale.core.world import PHASE_SOCIETY
 
 def _household(world, household_id):
     household = world.state.human.households.get(household_id)
@@ -296,6 +297,7 @@ def process_service_queue(world, *, node_id, service, capacity_units):
 class TenancyEconomyModule:
     """Daily settlement hook for leases and configured service queues."""
     name = "tenancy_economy"
+    phase = PHASE_SOCIETY
     depends_on = []
 
     def step(self, world):

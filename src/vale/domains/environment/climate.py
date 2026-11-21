@@ -23,6 +23,7 @@ from vale.core.calendar import (
     start_day_of_year,
 )
 from vale.core.snapshots import ClimateSnapshot
+from vale.core.world import PHASE_NATURAL
 from vale.config.schema.natural_params import DroughtState, IrrigationGear, Season, WeatherType
 from vale.domains.environment.hydrology import regenerate_water_sources
 
@@ -57,6 +58,7 @@ def _derive_time(world) -> dict:
 
 class ClimateModule:
     name = "climate"
+    phase = PHASE_NATURAL
     depends_on: list[str] = []
 
     def __init__(self, rng: Any = None, trend_window: int = DEFAULT_TREND_WINDOW) -> None:

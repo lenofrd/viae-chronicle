@@ -191,6 +191,8 @@
 
 **P6 落地注记（2026-11-21）**：领域状态模型归各领域——`domains/environment/state.py`（地形/水源/生态容器）、`domains/wildlife/state.py`（鱼/猎物池容器 + 资源类型归属）、`domains/society/state.py`（人物/家庭/土地/建造/治理）；`core/state.py` 只剩 `WorldState` 组合根（§2.1 基础设施职责，架构测试显式豁免组合根的唯一 core→domain 导入），跨领域共享值对象落到 `core/snapshots.py`（`ClimateSnapshot`，契约查询返回的只读快照）与 `core/pools.py`（`ResourcePoolSpec`/`ResourcePoolState`，环境域与动物域共用）。家庭访问器从 `core/household.py` 迁入 `domains/society/households.py`（其操作对象是人文状态）。**回放归属（2026-11-21 老板裁决，取代同日「迁入 world」的临时做法）**：`core/replay.py` 只保留通用引擎（事件读取、事件顺序、按 `_on_<event_type>` 派发、`finalize`/`validate` 钩子），不含任何 `vale.domains.*` 导入；领域事件投影由 `domains/environment/projection.py`、`domains/wildlife/projection.py`、`domains/society/projection.py` 各自提供；`world/replay.py` 只做注册组装并对外暴露 `rebuild_state`。这样 core 不依赖具体领域，基础设施能力也不上移到协调层。架构闸新增三条：领域状态模块不得导入其他领域；`core/state.py` 只允许 `WorldState`；引擎领域无关且三投影由 world 组装。两年基线（seed 20261118，720 tick）与 P5-d 工作区逐字段 identical。
 
+**P7 落地注记（2026-11-21）**：统一世界组装入口 `world/assembly.py`——业务模块清单按 profile（`full_modules` / `base_town_modules` / `viz_modules`）只在此处声明，`scripts/run_xigu.py`、`vale/cli.py`、`viz/sim_worker.py` 只选择 profile 并调用 `build_world`，不得自行 `world.register`。调度改为「显式阶段 + 依赖拓扑」：`core/world.py` 定义 `PHASE_NATURAL/ECOLOGY/WILDLIFE/SOCIETY/IMPACT/PROJECTION`，模块必须声明 `phase`；`core/scheduler.resolve_order` 以 `(phase, 注册顺序)` 为就绪优先级做拓扑排序，重复模块名、缺少 phase、依赖自身、依赖环一律 `ValueError`，不再回退注册顺序。统一组装入口额外要求 `depends_on` 全部注册（`world.strict_schedule = True`），手工局部世界（测试夹具）只做结构性校验。可视化档案补上 `EcologyModule`——此前 `agents` 声明的 `ecology` 依赖被旧调度器静默忽略。两年基线（seed 20261118，720 tick）与 P5-d 工作区逐字段 identical，说明阶段化未改变实际执行顺序。
+
 ## 4. 配置与实现约束
 
 1. 遵循 ADR 003：通用机制与地点配置分离；通用规则进入系统机制，地点物种分布、栖息地参数和资源条件进入对应 location 配置，并使用 Pydantic 校验。

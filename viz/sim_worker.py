@@ -8,7 +8,6 @@ import math
 import os
 from pathlib import Path
 import queue
-import random
 import sys
 import threading
 import time
@@ -25,8 +24,7 @@ from vale.core.config_loader import load_config  # noqa: E402
 from vale.core.event_log import EventLog  # noqa: E402
 from vale.core.scheduler import run_tick  # noqa: E402
 from vale.core.world import World  # noqa: E402
-from vale.domains.society.agents import AgentModule  # noqa: E402
-from vale.domains.environment.climate import ClimateModule  # noqa: E402
+from vale.world.assembly import build_world, viz_modules  # noqa: E402
 
 _WORLD_ID = "brookvale-town-001"
 _DEFAULT_SPEED = 1.0
@@ -122,14 +120,7 @@ class SimulationWorker:
         self.db_path = _create_db_path()
         self.event_log = EventLog(self.db_path)
         config = load_config(_WORLD_ID)
-        self.world = World(
-            world_id=config.world.world_id,
-            event_log=self.event_log,
-            start_tick=config.world.start_tick,
-            config=config,
-        )
-        self.world.register(ClimateModule(rng=random.Random(self.seed)))
-        self.world.register(AgentModule(rng=random.Random(self.seed * 7 + 13)))
+        self.world = build_world(config, self.event_log, modules=viz_modules(self.seed))
 
         reader = threading.Thread(target=self._read_stdin, daemon=True)
         reader.start()
