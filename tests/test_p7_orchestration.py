@@ -59,6 +59,23 @@ def test_build_world_is_strict_about_declared_dependencies() -> None:
     assert world.allow_missing_dependencies is False
 
 
+def test_base_profile_is_deterministic_for_same_seed() -> None:
+    """各 profile 遵守同一随机性契约：基础聚落同 seed 事件流一致。"""
+    config = load_config("brookvale-town-001")
+
+    def dump() -> list[dict]:
+        log = EventLog(":memory:")
+        world = build_world(config, log, modules=base_town_modules(20261118))
+        for _ in range(3):
+            run_tick(world)
+        return [
+            {key: value for key, value in event.items() if key != "created_at"}
+            for event in log.all()
+        ]
+
+    assert dump() == dump()
+
+
 def test_entry_points_use_unified_assembly() -> None:
     """三个运行入口只选择 profile，不得各自 world.register(...) 维护业务模块清单。"""
     for name in ("scripts/run_xigu.py", "src/vale/cli.py", "viz/sim_worker.py"):

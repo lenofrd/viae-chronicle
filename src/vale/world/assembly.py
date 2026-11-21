@@ -21,6 +21,10 @@ from vale.domains.society.economy import TenancyEconomyModule
 from vale.domains.wildlife.wildlife import WildlifeModule
 from vale.world.scenarios.xigu.events import XiguEventsModule
 
+# 各 profile 的随机性契约：同一 seed 必须产生一致事件流。
+# CLI 基础聚落 profile 的稳定默认种子（可用 --seed 覆盖）。
+DEFAULT_SEED = 20261118
+
 
 def full_modules(seed: int) -> list[Module]:
     """完整世界：自然 → 生态 → 动物 → 人文 → 场景冲击（溪谷镇长期模拟口径）。
@@ -38,9 +42,17 @@ def full_modules(seed: int) -> list[Module]:
     ]
 
 
-def base_town_modules() -> list[Module]:
-    """基础聚落：气候 + 生态 + 人物（CLI 静态世界口径，行为保持不变）。"""
-    return [ClimateModule(), EcologyModule(), AgentModule()]
+def base_town_modules(seed: int = DEFAULT_SEED) -> list[Module]:
+    """基础聚落：气候 + 生态 + 人物（CLI 静态世界口径）。
+
+    与 ``full_modules`` 相同的随机性契约：气候与人物各自使用独立的 seeded
+    Random，同 seed 产生一致事件流；默认种子见 ``DEFAULT_SEED``。
+    """
+    return [
+        ClimateModule(rng=random.Random(seed)),
+        EcologyModule(),
+        AgentModule(rng=random.Random(seed * 7 + 13)),
+    ]
 
 
 def viz_modules(seed: int) -> list[Module]:
