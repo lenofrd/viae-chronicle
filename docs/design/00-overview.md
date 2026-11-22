@@ -205,20 +205,22 @@
 
 ## 十四、文档地图与横切层约定
 
+> **归位说明（E1，2026-11-22，裁决 5/B2）**：设计树已从旧「4 子系统」（natural-environment / human-environment / agents / interaction）归位为与代码架构一致的「内核 + 三域 + 场景」结构（ADR 009、ADR 010 §2.6）。旧编号（01–12）沿用为历史序号，不代表当前排序。各子树能力状态（已实现/部分/规划/矛盾）统一标注在每份 `00-overview.md` 头注，总依据见[设计树对齐审计](audits/ecology-foundation/design-tree-alignment.md)。
+
 ### 文档地图
 
-设计文档位于 `docs/design/`，子系统设计文档统一放在 `docs/design/systems/` 下，共 4 个子系统：
+设计文档位于 `docs/design/`：
 
-- **natural-environment（自然环境）**：`00-overview.md` + 模块 `01-spatial-skeleton`、`02-climate`、`03-hydrology`、`04-terrain`、`05-soil-and-fields`、`06-vegetation`、`07-fauna`、`08-hazards` + 横切层 `09-dynamics/`、`10-state-and-records/`。
-- **human-environment（人文环境）**：`00-overview.md` + 模块 `01-social-spaces`、`02-institutions`、`03-relationships`、`04-information`、`05-education`、`06-stratification`、`07-conflicts`、`08-rituals-beliefs`、`11-livestock`（家畜资产，横切层之后） + 横切层 `09-dynamics/`、`10-state-and-records/`。
-- **agents（人物）**：`00-overview.md`、`01-physical-state.md` … `06-actions.md`、`11-life-course.md`、`12-population-and-marriage.md` + 横切层 `09-dynamics.md`、`10-state-and-records.md`。
-- **interaction（交互）**：`00-overview.md`、`01-session-structure.md`、`02-negotiation-dynamics.md`、`03-importance-and-pacing.md`、`04-outcomes-and-consequences.md` + 横切层 `09-dynamics.md`、`10-state-and-records.md`。
+- **systems/kernel/（内核视角）**：跨域横切设计——`spatial-skeleton/`（空间单元、距离时间、可达性）、`dynamics/`（变化率、滞后累积、可逆性、空间传播，按 environment / society 分侧）、`state-and-records/`（快照、事件流、查询接口，按 environment / society 分侧）。对应代码 `src/vale/core/`。
+- **systems/environment/（环境域）**：`00-overview.md` + `02-climate/`、`03-hydrology/`、`04-terrain/`、`05-soil-and-fields/`、`06-vegetation/`、`08-hazards/`（环境机制视角）。对应代码 `src/vale/domains/environment/`。
+- **systems/wildlife/（野生动物域）**：`00-overview.md`、`game.md`、`fish-and-birds.md`、`dangerous-animals.md`。对应代码 `src/vale/domains/wildlife/`。
+- **systems/society/（人文域）**：三棵子树 + 顶层文件——`agents/`（个体：生理、认知、决策、行动、生命历程、人口婚姻）、`human-environment/`（结构：社会空间、制度、关系、信息、教育、阶层、冲突、仪式、家畜）、`interaction/`（会话：谈判、节奏、后果，整树规划）、`buildings-and-living-environment.md`、`labor-productivity-and-fatigue.md`、`tenancy-economy-and-public-services.md`。对应代码 `src/vale/domains/society/`。
+- **contracts/（跨域契约）**：暂无独立文档树；契约现状以 ADR 009 §4 与代码 `src/vale/contracts/`（queries / resources / impacts）为准。
+- **scenarios/（场景层）**：`00-overview.md`、`hazard-injection.md`、`wildlife-incidents.md`——世界特定事件的注入机制（区别于环境机制）。对应代码 `src/vale/world/scenarios/`。
+- **systems/observability/（观察层，独立）**：事件查看器与字段字典，对应 `src/vale/observability/`；按裁决保留独立，不并入 kernel。
+- **locations/**：地点内容（`brookvale-town/` 剧本、`xigu-town-worldgen.md` 迁移索引）。
+- **decisions/**：架构决策记录（ADR）；**audits/**：架构审计报告。
 
-### 横切层编号约定
+### 横切层约定（已归位）
 
-全局统一使用两个横切层编号，**每个子系统都必须实现**：
-
-- **09（动力学 / dynamics）**：该子系统状态变量的变化速率、滞后与累积、空间传播、可逆性规则。内容少的子系统用单文件 `09-dynamics.md`，内容多的用目录 `09-dynamics/`。
-- **10（状态与记录 / state-and-records）**：该子系统的快照结构、事件流规范、查询接口。可用单文件 `10-state-and-records.md` 或目录 `10-state-and-records/`。
-
-每个子系统的 `00-overview.md` 末尾都应设"横切机制引用"段，指向本子系统的 09 / 10，保证跨子系统引用不迷路。
+旧「每子系统一套 09-dynamics / 10-state-and-records」的平行建树已按 ADR 010 §2.6 归并：横切设计统一在 `systems/kernel/dynamics/` 与 `systems/kernel/state-and-records/`（按 environment / society 分侧），状态与记录的**实现真相**集中在内核（事件流、快照、回放）与契约（跨域查询）。各域 `00-overview.md` 的「横切机制引用」段指向 kernel 对应位置。

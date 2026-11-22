@@ -104,3 +104,7 @@
 1. **parity**：M5 切换后 5 种子 × 3600，按季节分层对照旧行为分布（存活数、收割量、动作混合比的量级近似）。
 2. **涌现检查**：日均动作事件数落在 4–6 区间；冬季显著少于春秋。
 3. **红线**：replay 全绿；新事件可渲染；无 `agent_error`；守恒断言（粮/水/货币不凭空增减）不破。
+
+## 落地注记（E1 审计归位，2026-11-22）
+
+本文引用的 `../systems/natural-environment/*` 现位于 `systems/environment/`（环境域）或 `systems/kernel/`（空间骨架等横切层）；`../systems/agents/*` 现位于 `systems/society/agents/`。设计树按 ADR 010 §2.6 与裁决 5（B2）归位，正文不改，链接按新路径解读。

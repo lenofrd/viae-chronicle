@@ -23,3 +23,6 @@
 ### 代价：
 - 需要维护一套相当复杂的 YAML 层级目录和 Pydantic Schema。
 - 调试时，如果查不到数据，需要同时检查 Python 代码和 YAML 配置。
+## 落地注记（E1 审计归位，2026-11-22）
+
+正文「系统层（`src/vale/modules/`）」为当时（ADR 003 期）的单层模块布局举例。阶段二分层重构（ADR 009）后，机制层为 `src/vale/domains/{environment,wildlife,society}` 三域 + `src/vale/core` 内核 + `src/vale/contracts` 契约 + `src/vale/world` 组装与场景。正文不改；「机制与内容分离」原则不变。

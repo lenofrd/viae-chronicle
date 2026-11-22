@@ -141,3 +141,7 @@
 - 家庭成员、婚姻与地方习俗：[溪古镇家庭结构](../locations/brookvale-town/02-population/02-families.md)、[亲缘关系](../systems/human-environment/03-relationships/01-kinship.md)。
 - 行动与 TU：[人物行动类型](../systems/agents/06-actions.md)。
 - 家庭经济、公共服务与事件：[土地租赁、家庭经济与公共服务队列](../systems/tenancy-economy-and-public-services.md)。
+
+## 落地注记（E1 审计归位，2026-11-22）
+
+本文引用的 `../systems/agents/06-actions.md` 现位于 `systems/society/agents/06-actions.md`；`../systems/tenancy-economy-and-public-services.md` 现位于 `systems/society/tenancy-economy-and-public-services.md`。设计树按 ADR 010 §2.6 与裁决 5（B2）归位，正文不改。

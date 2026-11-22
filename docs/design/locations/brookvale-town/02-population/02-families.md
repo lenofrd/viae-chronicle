@@ -22,7 +22,7 @@
 
 ## 5. 婚姻、从夫居与家庭财产
 
-本节定义溪古镇地方习俗；通用机制见 [人口承载与婚姻形成](../../../systems/agents/12-population-and-marriage.md)，决策依据见 [ADR 007](../../../decisions/007-population-and-marriage.md)。
+本节定义溪古镇地方习俗；通用机制见 [人口承载与婚姻形成](../../../systems/society/agents/12-population-and-marriage.md)，决策依据见 [ADR 007](../../../decisions/007-population-and-marriage.md)。
 
 ### 5.1 从夫居
 

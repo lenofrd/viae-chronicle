@@ -102,18 +102,18 @@ PHASE_PROJECTION（6）当前无注册模块。profile：`full_modules`（全部
 ## 4. 陈旧与矛盾描述清单（修正对象）
 
 1. **旧代码路径**（`src/vale/modules/*` 已于 P5 删除）：
-   - [agents/06-actions.md](../../systems/agents/06-actions.md) §4.2（`vale/modules/hydrology.py`）、§5.1（`agents.py` 单文件语境）；
-   - [agents/11-life-course.md](../../systems/agents/11-life-course.md) §18 G10（引用旧 `modules/agents.py` 路径）；
-   - [human-environment/03-relationships/05-trust-and-interest.md](../../systems/human-environment/03-relationships/05-trust-and-interest.md) 头注（`vale/modules/social.py`，现 `domains/society/social.py`）；
-   - [natural-environment/03-hydrology/00-overview.md](../../systems/natural-environment/03-hydrology/00-overview.md) P3a 注（`vale/modules/hydrology.py` 与**已不存在**的 `vale/contracts/water.py`，现为 `contracts/resources.py`）；
+   - [agents/06-actions.md](../../systems/society/agents/06-actions.md) §4.2（`vale/modules/hydrology.py`）、§5.1（`agents.py` 单文件语境）；
+   - [agents/11-life-course.md](../../systems/society/agents/11-life-course.md) §18 G10（引用旧 `modules/agents.py` 路径）；
+   - [human-environment/03-relationships/05-trust-and-interest.md](../../systems/society/human-environment/03-relationships/05-trust-and-interest.md) 头注（`vale/modules/social.py`，现 `domains/society/social.py`）；
+   - [natural-environment/03-hydrology/00-overview.md](../../systems/environment/03-hydrology/00-overview.md) P3a 注（`vale/modules/hydrology.py` 与**已不存在**的 `vale/contracts/water.py`，现为 `contracts/resources.py`）；
    - [decisions/003](../../decisions/003-config-and-location-separation.md) §系统层举例仍写 `src/vale/modules/`（ADR 属历史记录，建议加落地注记而非改写正文）。
    - `audits/layered-refactor-phase1/` 内旧路径为历史快照，已自注失效，**不需修**。
 2. **[00-overview.md](../../00-overview.md) §十四**：文档地图仍按 4 子系统描述，无三域/内核/契约/场景结构，无能力状态标注约定。
-3. **家畜动作**：[agents/06-actions.md](../../systems/agents/06-actions.md) §2.1 将 `raise_livestock/graze/use_ox/slaughter` 列入第一版动作清单，全库（src/config/tests）零实现痕迹，且无「规划」标注。
+3. **家畜动作**：[agents/06-actions.md](../../systems/society/agents/06-actions.md) §2.1 将 `raise_livestock/graze/use_ox/slaughter` 列入第一版动作清单，全库（src/config/tests）零实现痕迹，且无「规划」标注。
 4. **规划写成现状**：NE/06-vegetation、NE/07-fauna 的状态变量表（population/carrying_capacity/cover/degradation 等）未标「未实现」；interaction 全树、HE/04–06/08、NE/04 等通篇无状态标注。
 5. **灾害触发机制矛盾**：NE/08-hazards 声称累积触发；实际仅旱灾走气候累积，山洪/滑坡/野遇为 `xigu_events` 概率注入（场景层行为，非环境域机制）。
 6. **平行横切树**：两套 09-dynamics、四套 10-state-and-records 声称按子系统落地，实际为内核集中设施——与 ADR 010 §2.6「避免平行/重复设计树」冲突。
-7. **残留脚本**：`docs/design/systems/create-hydrology.ps1`——生成 03-hydrology 文档的一次性脚本体，遗留在设计树内，建议删除或移出。
+7. **残留脚本**：设计树 systems/ 根下的一次性脚本体 `create-hydrology.ps1`（生成 03-hydrology 文档用），遗留在正式设计树内，建议删除或移出。
 
 ## 5. 缺失主题清单（对照 ADR 010，E2–E5 的文档缺口）
 
@@ -142,6 +142,8 @@ PHASE_PROJECTION（6）当前无注册模块。profile：`full_modules`（全部
 | 7 | PHASE_PROJECTION 空阶段 | 调度阶段已定义、当前无注册模块；生态阶段若引入投影模块需对齐 |
 
 ## 7. 修正口径选项（待裁决项 1）
+
+> **执行注记（2026-11-22）**：老板裁决 5 已下达——①选 **方案 B2**（observability 保留独立观察层）；②残留脚本删除；③灾害拆分为「环境机制 / 场景注入」；④旧 ADR 正文不改、文末加落地注记。E1 第二步已照此执行，本节余文保留作决策过程记录。
 
 ADR 010 §2.6 约束：优先就地更新与合并；不为整齐做纯装饰性搬移；路径调整必须对应真实职责修正并更新引用。据此给三个方案：
 

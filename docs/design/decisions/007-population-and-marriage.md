@@ -86,3 +86,7 @@
 - 遵循 ADR 006：食物安全、家庭库存、劳动和公共储备是人口承载能力的重要基础；公共储备的自愿来源与家庭救济流程由 ADR 008 修订。
 - 具体机制见 [人口承载与婚姻形成系统设计](../systems/agents/12-population-and-marriage.md)。
 - 溪古镇习俗见 [溪古镇婚姻与家庭习俗](../locations/brookvale-town/02-population/02-families.md)。
+
+## 落地注记（E1 审计归位，2026-11-22）
+
+本文引用的 `../systems/agents/12-population-and-marriage.md` 现位于 `systems/society/agents/12-population-and-marriage.md`。设计树按 ADR 010 §2.6 与裁决 5（B2）归位，正文不改。

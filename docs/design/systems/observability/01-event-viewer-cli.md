@@ -1,4 +1,6 @@
-# 观察层：CLI 只读事件流查看器
+﻿# 观察层：CLI 只读事件流查看器
+
+> **能力状态**（E1 审计 2026-11-22）：**已实现**——对应 `src/vale/observability/`（CLI 只读工具）。观察层按裁决 5 保留独立，不并入 kernel。逐项依据见[设计树对齐审计](../../audits/ecology-foundation/design-tree-alignment.md)。
 
 ## 1. 目的与定位
 

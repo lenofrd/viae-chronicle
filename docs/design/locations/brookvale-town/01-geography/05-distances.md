@@ -2,7 +2,7 @@
 
 ## 1. 时间单位换算
 系统设 1 Tick = 1 天。一天的可支配劳作时间以 **TU（Time Unit）** 计，**1 TU = 1 工作小时**，夜间睡眠不占 TU（004 裁决，2026-11-17）。
-- **本镇工作窗随季节**（`[调参]`，机制见 [02-distance-and-time.md](../../../systems/natural-environment/01-spatial-skeleton/02-distance-and-time.md) §4）：**春 10 / 夏 9（午热） / 秋 10 / 冬 6** TU。
+- **本镇工作窗随季节**（`[调参]`，机制见 [02-distance-and-time.md](../../../systems/kernel/spatial-skeleton/02-distance-and-time.md) §4）：**春 10 / 夏 9（午热） / 秋 10 / 冬 6** TU。
 - 往返耗时超过**当日工作窗**，说明当天无法返回，需要在外过夜（第一版深山设定）；冬季窗口最紧（6 TU）。
 
 ## 2. 核心节点耗时矩阵（以镇中心水井为起点）

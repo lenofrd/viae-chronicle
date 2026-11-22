@@ -249,5 +249,9 @@
 - 遵循 ADR 001：状态变化以事件记录并支持 Replay。
 - 遵循 ADR 002：核心模拟由确定性规则驱动，不依赖 LLM 实时推理。
 - 遵循 ADR 003：系统机制与地点配置分离。
-- 本决策细化 `docs/design/systems/natural-environment/00-overview.md` 的自然环境子系统边界与依赖方向；原有空间骨架、气候、水文、地形、土壤、植被、动物、灾害、演化机制和状态记录文档继续有效，若与本决策冲突，以本决策确立的领域边界和状态所有权为准。
+- 本决策细化 `docs/design/systems/environment/00-overview.md`（原 natural-environment/00-overview.md，E1 归位后路径）的自然环境子系统边界与依赖方向；原有空间骨架、气候、水文、地形、土壤、植被、动物、灾害、演化机制和状态记录文档继续有效，若与本决策冲突，以本决策确立的领域边界和状态所有权为准。
 - 具体模块接口、状态模型、迁移步骤和地点参数由对应 systems / locations 设计文档后续细化。
+
+## 落地注记（E1 审计归位，2026-11-22）
+
+§4.5 第 5 条「自然环境沿用现有 `systems/natural-environment/` 文档体系、不为层次名称重排目录」已被 ADR 010 §2.6 与老板裁决 5（方案 B2）取代：设计树已归位为 `systems/{kernel, environment, wildlife, society}` + `scenarios/`，观察层 `observability/` 保留独立。域边界、状态所有权与迁移结论不变。

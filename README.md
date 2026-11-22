@@ -148,8 +148,8 @@ python scripts/run_xigu.py 360        # 按种子生成西谷镇并跑 360 天�
 - `docs/design/00-overview.md`：设计总索引。
 - `docs/design/decisions/`：架构决策记录。
 - `docs/design/systems/observability/`：事件查看器与字段字典。
-- `docs/design/systems/agents/11-life-course.md`：生命历程与家庭模型。
-- `docs/design/systems/agents/12-population-and-marriage.md`：婚配与生育模型。
+- `docs/design/systems/society/agents/11-life-course.md`：生命历程与家庭模型。
+- `docs/design/systems/society/agents/12-population-and-marriage.md`：婚配与生育模型。
 - `docs/design/decisions/007-population-and-marriage.md`、`008-household-coordination-nutrition-and-voluntary-reserves.md`：婚育与家庭协作决策。
 - `docs/design/locations/brookvale-town/`：溪谷镇剧本。
 - `docs/design/locations/xigu-town-worldgen.md`：西谷镇世界生成。
