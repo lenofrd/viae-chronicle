@@ -174,3 +174,13 @@ cause_event_id, effect_scope, reversible, recovery_time
 已析出：空间骨架、动力学、状态与记录 → [kernel/](../kernel/00-overview.md)；动物 → [wildlife/](../wildlife/00-overview.md)；灾害场景注入 → [scenarios/](../../scenarios/00-overview.md)。
 
 地点参数占位统一在 `locations/brookvale-town/natural-params.md`，本目录不写具体数值。
+
+
+## 10. 外部地理数据与 Environment Seed
+
+环境域可从外部发布的地理数据产品构建初始条件，但数据接入不改变领域状态所有权：
+
+- Xigu-Ecology-Data 是地理数据生产、分析、质量控制与发布仓库；Viae Chronicle 是世界组装、领域状态演化、事件记录与回放系统。
+- Seed 中的 DEM、坡度、坡向、TPI、土地覆盖、掩膜、河段、土壤和气候数据是初始化输入或边界条件，不是 Environment 动态状态的替代品。
+- Environment 负责把已验证的输入解释为本域初始状态，并在模拟运行中拥有和结算地形以外的动态环境变量；Kernel 不拥有环境变量。
+- 接入分阶段规划及数据边界见 [Environment Seed 接入计划](01-xigu-environment-seed-integration.md)；架构裁决见 [ADR 011](../../decisions/011-xigu-geospatial-seed-and-grid-space.md)。

@@ -119,3 +119,8 @@ lod:
 
 - 归属：[kernel/](../00-overview.md)（E1 归位后内核视角子树）；ADR 010 §2.2 为上位依据；
 - 域接入计划：E3（Environment 植被）、E4（Wildlife 种群）各自声明本域各档行为时回写「已落地」；本版不接入任何真实域。
+
+
+## 10. 与地理数据分辨率的区别
+
+**栅格数据分辨率不是 Simulation LOD。** 30 m、250 m、900 m 表示外部数据源的空间采样/像元尺度；fine、normal、coarse 表示模拟主体采用的计算细节档位。二者不存在默认一一对应关系：30 m 数据不意味着主体必须以 fine 档运行，coarse 档也不意味着把多个源数据像元无声明地重采样成一个值。GridSpace 契约见 [空间骨架 04-grid-space](../spatial-skeleton/04-grid-space.md)，上位决策见 ADR 011。

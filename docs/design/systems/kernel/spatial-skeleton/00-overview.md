@@ -62,3 +62,13 @@
 - 变化速率上限、滞后与累积、空间传播、可逆性规则见 `09-dynamics/`。
 - 事件记录、快照结构、查询接口遵循 `10-state-and-records/`。
 - 本子系统所有状态变化事件按 `10-state-and-records/event-stream.md` 的统一格式记录。
+
+
+## 9. 连续栅格空间（GridSpace）
+
+本空间骨架同时支持两种互补表示：
+
+- **离散拓扑空间**：现有 Spatial Unit、SpatialNode、DistanceEdge 与 SpatialIndex，表达地点、田块、河段、聚落节点及其连接、移动成本和可达性。
+- **连续栅格空间**：GridSpace 表达有明确 CRS、网格变换和分辨率的地理栅格，适合高程、坡度、土壤属性、气候场和覆盖分类等连续或面状数据。
+
+两者不是替代关系。空间单元可以关联一个或多个 GridSpace Cell；栅格 Cell 不因此自动成为 SpatialNode，也不自动成为可移动实体。详细契约见 [04-grid-space.md](04-grid-space.md) 与 ADR 011。

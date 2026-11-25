@@ -6,7 +6,7 @@
 
 按 ADR 010 §2.6 与老板裁决 5（2026-11-22，方案 B2），跨域的内核视角设计统一归并到本树，不再散落各子系统平行建树：
 
-- **空间骨架**（spatial-skeleton）：跨三域的空间基础设施——空间单元、距离与时间、可达性。
+- **空间骨架**（spatial-skeleton）：跨三域的空间基础设施——离散空间单元、连接/可达性，以及与之并存的连续栅格空间（GridSpace）；两者共享空间身份与映射机制，但不互相替代。
 - **动力学**（dynamics）：横切的变化率、滞后累积、可逆性、空间传播等策略，按 environment / society 两侧分子树。
 - **状态与记录**（state-and-records）：快照、事件流、查询接口的横切设计，按 environment / society 两侧分子树。
 
@@ -19,3 +19,8 @@
 ## 生态阶段注记
 
 多分辨率模拟（Simulation LOD，ADR 010 §2.2）属内核级通用能力，规范见 [lod/](lod/00-overview.md)（E2 短设计文档，待老板裁决后实现）。
+
+
+## 外部地理数据接入
+
+Xigu-Ecology-Data 的 Environment Seed 接入裁决见 [ADR 011](../../decisions/011-xigu-geospatial-seed-and-grid-space.md) 与 [Environment Seed 接入计划](../environment/01-xigu-environment-seed-integration.md)。Kernel 只提供 GridSpec、Cell ID、CRS/坐标变换、定位和索引等通用空间机制；不拥有 DEM、土壤、气候、植被等栅格值或领域状态。
