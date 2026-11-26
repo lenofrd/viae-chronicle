@@ -160,3 +160,85 @@ environment_seed:
       size_bytes: 106496
       sha256: b1b82b9be203ad4c7f2a74b916fe4c9b14399e481983415d4457a236a6d5c9d9
       lineage: 'hydrorivers_qinling_daba_hanjiang_hanzhong_screening.gpkg → bbox ∩'
+
+# Ecology Seed 冻结契约（EX-0，老板 2026-11-26 裁决有条件批准：契约冻结、
+# 静态校验、完整性验证；E3/E4/E5 运行时消费暂缓）。
+# 来源：Xigu-Ecology-Data @ 0343844 的 processed/ecology_seed_v1/（GitHub
+# Release ecology-seed-v1.0）。manifest.json 自身哈希为 Viae 侧实测冻结
+# （Xigu 变更日志曾把它误标为 SQLite 的哈希）；8 文件 size/sha256/rows 取自
+# manifest 并经本机实际文件复算核验一致；7 表行数另冻结于 table_rows。
+# 证据等级铁律（2026-11-26 裁决）：B 级记录不解释为精确空间分布；C 级关系
+# 不转化为相互作用强度；D 级假设保留假设身份、不混入实测数据。
+# initial_state.quantity_value 在本版本全部 NULL——不得用推测值填充（否决项）。
+# 缓存根与 environment_seed 共用（VALE_SEED_CACHE / 缺省 data/seed-cache），
+# 包目录隔离：environment_seed_v2 与 ecology_seed_v1 互不覆盖。
+# 升级 = 显式换 seed_id 与整节引用，旧版本可追溯、不原地覆盖；学名/分类
+# 变更换新版本线（Xigu 数据契约 §11）。
+ecology_seed:
+  seed_id: ecology_seed_v1
+  version: '1.0'
+  contract: Ecology_Seed_v1_数据契约 v1.1
+  schema_version: xigu_ecology_schema_2026-11-26
+  world_ref: brookvale-town-001
+  manifest:
+    file: manifest.json
+    bytes: 6342
+    sha256: 27d30b76bf53450d6b7db0ba64b46f5a1246dec005b9c4fb120b41d0dd1f5b44
+  source:
+    repository: git@github.com:lenofrd/Xigu-Ecology-Data.git
+    revision: 034384412dacf3ea5289a32c01af6088aa2c7bfa
+    channel: github-release
+    release: ecology-seed-v1.0
+    license: 'GBIF 记录级许可 CC BY 4.0（本包仅保留 CC0/CC BY 记录）；COL26.11 清单 CC BY 4.0；GloBI 聚合数据按逐关系保留原始引用与许可；本地推导组（SRC_VIAE_LOCAL_DERIVED）按 Copernicus DEM GLO-30 上游许可（逐条见 manifest sources）'
+    upgrade_policy: 版本显式切换，旧版本可追溯，不原地覆盖；学名/分类变更换新版本线
+  location:
+    package_dir: ecology_seed_v1
+  files:
+    - file: taxa.csv
+      table: taxa
+      rows: 14
+      bytes: 2530
+      sha256: 8ffa1b49c7468f3d28ebfd79299bfb2ab925b7725bcfd1740a67afe2a2321dff
+    - file: occurrences.csv
+      table: species_records
+      rows: 1254
+      bytes: 513858
+      sha256: dcf91d28ebbcbf75fc94bbd3a941fe2aed0146a59076b5c4f740ee35409b54fd
+    - file: functional_groups.csv
+      table: functional_groups
+      rows: 5
+      bytes: 1112
+      sha256: 22b3ef013da9158f9cf37f1c21acbfce74d83cee797f05deda2f7a9c662af37c
+    - file: traits.csv
+      table: traits
+      rows: 14
+      bytes: 1930
+      sha256: ac401f4124f82f63765627219ed2daecfba9e86e4b7817e9639702cc544357d9
+    - file: interactions.csv
+      table: ecological_interactions
+      rows: 30
+      bytes: 5437
+      sha256: 00da24c4f81115603fba57af4e1bbed343c052d5c51414f6ce2ddfa46cf81c2c
+    - file: habitat_associations.csv
+      table: habitat_associations
+      rows: 24
+      bytes: 5031
+      sha256: 1664ec5c3f62f03447b8ced50ecd9853a301f87d74651635fbcbcd27f51a3457
+    - file: initial_states.csv
+      table: initial_state
+      rows: 53
+      bytes: 12270
+      sha256: cb89288ea109bfd3c7f22d5a110685ffa1d0059c2c8bdaed05065129024ab31b
+    - file: ecology_seed_v1.sqlite
+      table: '*'
+      rows: null
+      bytes: 1261568
+      sha256: d774e970b99e56e0519aa2c66249fa24344fb0181e0d19147f60744429baec4e
+  table_rows:
+    taxa: 14
+    species_records: 1254
+    functional_groups: 5
+    traits: 14
+    ecological_interactions: 30
+    habitat_associations: 24
+    initial_state: 53
