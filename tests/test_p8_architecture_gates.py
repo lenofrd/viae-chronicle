@@ -1,7 +1,8 @@
-"""P8 架构最终验收门禁（任务书 §P8 十二条）。
+"""P8 架构最终验收门禁（任务书 §P8 十二条；P1 增补第 13 条）。
 
 前六条静态架构扫描复用 ``test_architecture_boundaries`` 的扫描器与台账，
 避免两套判定口径；第七条起补充运行时行为门禁。任何一条失败即架构未收口。
+第 13 条为 P1（Kernel GridSpace）增补的内核域中立静态检查（ADR 011）。
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from vale.core.world import World
 from vale.world.assembly import build_world, full_modules
 
 from test_architecture_boundaries import (
+    CORE_DOMAIN_IMPORT_EXEMPTIONS,
     internal_import_edges,
     test_contracts_are_never_state_writers,
     test_human_modules_read_environment_through_query_only,
@@ -196,3 +198,30 @@ def test_gate_12_no_legacy_modules_imports() -> None:
                         ):
                             offenders.append(f"{path.relative_to(ROOT)}: import {alias.name}")
     assert offenders == [], "发现旧 modules.* 导入：\n" + "\n".join(offenders)
+
+
+# ---------------------------------------------------------------------------
+# 三、P1 增补门禁（13）：内核域中立（ADR 011 · GridSpace 验收口径）
+# ---------------------------------------------------------------------------
+
+
+def test_gate_13_core_kernel_is_domain_neutral() -> None:
+    """13. 内核域中立：core 无 domains/ 导入、无 Xigu 仓库/文件依赖、无环境变量语义。"""
+    # (a) 导入方向：core 不得导入领域层（组合根 core.state 豁免沿用既有台账）。
+    for importer, imported in internal_import_edges():
+        if importer.startswith("core.") and imported.startswith("domains."):
+            if importer not in CORE_DOMAIN_IMPORT_EXEMPTIONS:
+                raise AssertionError(f"core 模块导入领域层：{importer} -> {imported}")
+
+    # (b) 源文本：无 Xigu 仓库/文件依赖、无环境变量语义。
+    offenders: list[str] = []
+    for path in sorted((SRC / "vale" / "core").rglob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        lowered = text.lower()
+        for token in ("xigu", "seed-cache", "vale_seed_cache"):
+            if token in lowered:
+                offenders.append(f"{path.relative_to(ROOT)}: 含 {token!r}（Xigu 仓库/文件依赖）")
+        for token in ("os.environ", "getenv", "environ["):
+            if token in text:
+                offenders.append(f"{path.relative_to(ROOT)}: 含 {token!r}（环境变量语义）")
+    assert offenders == [], "内核域中立被破坏：\n" + "\n".join(offenders)

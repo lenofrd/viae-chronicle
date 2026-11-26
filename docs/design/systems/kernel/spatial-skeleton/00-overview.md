@@ -72,3 +72,5 @@
 - **连续栅格空间**：GridSpace 表达有明确 CRS、网格变换和分辨率的地理栅格，适合高程、坡度、土壤属性、气候场和覆盖分类等连续或面状数据。
 
 两者不是替代关系。空间单元可以关联一个或多个 GridSpace Cell；栅格 Cell 不因此自动成为 SpatialNode，也不自动成为可移动实体。详细契约见 [04-grid-space.md](04-grid-space.md) 与 ADR 011。
+
+GridSpace 最小能力已落地（P1，2026-11-26）：`src/vale/core/grid_space.py` 提供 GridSpec、CellRef、坐标↔像元互转、四/八邻域与窗口查询、空间单元↔Cell 显式映射（`GridBinding`）；几何相交查询与多 GridSpec 间映射留后续阶段，落地口径见 [04-grid-space.md §8](04-grid-space.md)。
