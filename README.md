@@ -59,7 +59,7 @@ docs/                  设计与协作文档（核心资产，深度远超当前
 
 tests/                 pytest 测试与事件流 fixture（旧库回放样本）
 viz/                   Tkinter 本地可视化（只读事件库，不写状态）
-scripts/               世界生成与运行（run_xigu）、文档与 schema 一致性检查
+scripts/               世界生成与运行（run_xigu）、External Seed 静态校验（check_seed）、文档与 schema 一致性检查
 data/                  运行时世界实例与 SQLite 事件库（不入 Git）
 .ai/                   本地 AI 工作区：STATUS、任务裁决、验收报告（不入 Git）
 .check/                本地诊断/长程验收脚本与输出（不入 Git）
@@ -77,7 +77,7 @@ python scripts/run_xigu.py 360        # 按种子生成西谷镇并跑 360 天�
 
 模拟运行、事件查询与字段字典见 `docs/design/systems/observability/01-event-viewer-cli.md`。
 
-## 当前进展（2026-11-20）
+## 当前进展（2026-11-26）
 
 - 已合入 `main`：环境基座 → 人物生存 → 时间现实化 → 观察层 → 经济闭环 → 打猎 → 死亡/失能/渔业 → 移动校准/赶集/纺织/蔬菜 → 家庭经济模型（任务 12）→ 盈余经济补丁（任务 13）→ 债务转移窄修（任务 14）→ 社会冲突最小切片（任务 15）→ Tkinter 可视化（PR #2）→ 社会认知与关系层（任务 16，PR #7）。
 - 任务 15：集市赊账 +「有粮赖账」2 轮私下催收；5 种子 × 3600 验收通过（三种结果、守恒与无负值）。
@@ -91,6 +91,7 @@ python scripts/run_xigu.py 360        # 按种子生成西谷镇并跑 360 天�
 - 本 PR（任务 30，水模型最小切片）：激活 `hydrology_initial`（水位 0.60 / 灌溉档 low）到 `WorldState.water_level_ratio` / `irrigation_gear`，由 `ClimateModule` 确定性演化——有效降水按 `recharge_per_mm × mm × (1 − 水位)` 补水、无雨日按 `dry_loss_per_day` 下降，夹紧 0–1，跨档写 `irrigation_gear_changed`，每天变化写 `water_level_changed`。新增 `HouseholdState.water`：`collect_water` 每次产水 5；每日结算按存活成员数扣水（1/人，写 `water_consumed`），**每次进食另耗 0.5（烹饪/佐餐，水不足则该次无法进食，生存门控会先去打水）**；存水低于目标 5 时打水紧迫度线性上升（权重 2.0），成年劳力因此主动维持水缸。水随继承/分家按比例转移、无继承人时归公，不参与集市交易。产量公式 `moisture` 接灌溉档（充足 1.0 / 偏少 0.85 / 缺水 0.7 / 断水 0.5），`harvest_detail` 带 `moisture`。观察层渲染三类新事件与打水产出，replay 支持新事件、旧库无水文事件时取配置初值。验收：5 种子 × 3600 存活 8–10、`agent_error` 0、水守恒 `产出−日耗−归公−存量=0`。
 - 本 PR（西谷镇世界生成 + 婚育动作化）：新增 `src/vale/world/xigu.py` 与 `scripts/run_xigu.py`，按种子生成 30 户、40 名居民的西谷镇（开局家庭口粮 50–70 石，**临时值**）。婚配与生育从系统定时结算下沉为 agent 动作：新增 `court`（结亲）与 `try_for_child`（求子），未婚者感知最近合格候选、双方当日互选才成婚（日末 `_settle_courtship` 结算），育龄女方在生育闸门内自主决定求子；新增 `courtship_offer` 事件。断粮户坏账核销：`debt_forgiven`（含 `cause`）+ `debt.write_off_unpayable` 开关，解除逾期对借粮/借食/赊账的永久锁死。2 年基线（seed 20261118，720 tick）：婚姻 20、新生儿 18、生育户 13、死亡 41。
 - 本 PR（任务 P4，世界生成分段与领域归口）：`worldgen` 拆为自然段（`nature.py`：地形栅格、资源池目录、静态植被/栖息地描述）与聚落段（`settlement.py`：布点、路网、距离矩阵），`xigu.py` 保留为组合门面；资源池参数正式化为 `ResourcePoolSpec`（经 `LoadedConfig.resources` 进运行时，节点 attributes 不再携带 `resource_*` 副本），运行时投影为 `ResourcePoolState`；鱼/猎物池归动物域新增 `domains/wildlife/wildlife.py` 引导与结算（暂为池形式，个体/种群留待后续阶段）；植被仅结构迁移，动态生物量/退化未启用；`terrain_cells` 归口环境域；采集配置新增 `agents.tuning.gathering.*.harvests_resource_type` 声明产出类型（当前仅模型关联，运行时行为不变）。同种子 worldgen 逐字段等价、两年仿真快照 byte-identical（seed 20261118）；40 年门禁首跑 `agent_error` 0、无负值，人口仍受既有承载力问题约束（见已知问题 ⑩）。
+- 本阶段（Ecology Foundation · P0，数据契约与世界身份冻结）：接入外部地理数据包 Xigu Environment Seed v2（manifest v3）。`config/worlds/brookvale-town-001/world.yaml` 新增可选 `environment_seed` 节冻结契约（seed_id、10 个必需资产 SHA-256、自定义 WGS84 Albers 网格 668×666 @30 m、圆形模拟范围与核心流域口径、来源与升级策略）；静态校验机制在 `src/vale/world/seed_contract.py`（数据集成边界、失败关闭、不依赖 GDAL），CLI 入口 `scripts/check_seed.py`；本地缓存定位 B+C（`VALE_SEED_CACHE` 环境变量，缺省 `data/seed-cache`，**解析规则待老板条件裁决**）。真实资产哈希冻结前已对本机实际文件复算核验（10/10 一致）。尚无 Loader/导入能力（P1/P2）。
 - 本 PR（任务 P5–P8，分层架构收口）：领域层按 Environment / Wildlife / Human Society 拆包；`core/` 只留通用基础设施（含 Replay 引擎），`contracts/` 只路由请求，`world/assembly.py` 为唯一组装入口；调度按显式阶段 + `depends_on` 拓扑且默认严格（孤立夹具须显式声明例外）；可视化补 `EcologyModule`；`society/projection.py` 拆为人物/家庭/经济/土地治理四个投影（统一入口不变）；`scripts/check_schemas.py`、`check_docs_config.py` 实现真实检查，与 `tests/test_p8_architecture_gates.py` 十二条门禁共同验收；`main.py` 明确为独立气候演示入口。两年基线（seed 20261118，720 tick）逐字段 identical。
 - 已知问题（未解决）：① G1 家庭口粮承载力——长程仍有个别饿死（任务 29/30 后 5 种子 × 3600：饿死 5–7、存活 8–10），口粮承载力未做专项调平；② 弥留窗口（plan A 回滚后未修）；③ 田块封顶使成人约 47% 的休息与体力无关（G11，待老板定夺）；④ 体力上限、打分体力紧缺度除数仍为代码硬编码（G10，需单独立项；「1 动作/日」已由任务 29 的日内 TU 循环解除）；⑤ 部分还款自然流结构性低频（机制仅由单测覆盖）；⑥ 印象 P2 已接线但当前 8 种子 × 3600 中**零可观测差异**（defaulting 会话均已因前科走 full），且规则只升不降，不能减轻诉求；⑦ 少年分段与白名单为临时值；⑧ 水已用于烹饪/日耗，但未建模口渴健康惩罚与水存储上限；少年白名单不开放打水，纯儿童户缺水时无法炊事；⑨ 打猎因往返 TU 超工作窗不可达、贫民户无法耕作（任务 29 移动扣 TU 的副作用，需过夜/营地或距离调平）；⑩ 西谷镇长程承载力不足——单产 `base_yield=155`（**临时值**）下人口仍从峰值 53 回落到 t720 的 17，秋收产出只够约 52 人吃半年，第 2 年春荒崩塌后劳力不足以恢复；40 年门禁已恢复为 `test_forty_year_xigu_run_keeps_population_alive`（seed 20261118，断言终局人口 > 0），当前因 G1 以 **strict xfail** 登记，解 G1 后移除标记。
 - 下一阶段方向：阶段五收口（P2 验收与统一 PR）；G1 承载力提产与弥留窗口修复的取舍；G11 田块封顶；货币系统评估、派生系统前置（教育/地位）。

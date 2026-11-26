@@ -6,3 +6,157 @@ start_year: 1                 # 日历换算的开局年份（里程碑3：时�
 enabled_subsystems:
   - spatial
   - climate
+
+# Environment Seed 冻结契约（ADR 011 · P0，2026-11-26 冻结）。
+# 来源：Xigu-Ecology-Data @ 52e0d55 的 processed/environment_seed_v2/seed_manifest_v3.json
+#（Environment Seed v2 / manifest v3）。SHA-256 已对实际发布文件逐件复算核验一致。
+# 锚点为 P0 身份核验后的 Brookvale ↔ brookvale-town-001 映射（世界级契约，非全局事实）。
+# 数据包由部署环境下载/挂载到缓存根（B+C 裁决 2026-11-26）；本配置只含相对定位，
+# 不写开发机绝对路径。升级 = 显式换 seed_id 与整节引用，旧版本可追溯、不原地覆盖。
+environment_seed:
+  seed_id: environment-seed-v3
+  manifest_file: seed_manifest_v3.json
+  manifest_package_dir: processed/environment_seed_v2/
+  data_root_name: Xigu-Ecology-Data
+  anchor:
+    world_ref: brookvale-town-001
+    lon: 104.126366
+    lat: 35.875187
+    albers_xy: [-394804.54, 327448.73]
+  grid:
+    # 自定义 WGS84 Albers Equal Area（米制，不冒用 EPSG）；本 Seed 的输入契约，
+    # 不是 Kernel 全局默认网格参数。所有 GeoTIFF 资产须与本网格严格对齐。
+    crs: '+proj=aea +lat_1=30 +lat_2=36 +lat_0=33 +lon_0=108.5 +datum=WGS84 +units=m +no_defs +type=crs'
+    resolution_m: 30.0
+    nodata: -9999        # 数值栅格基线 NoData；类别/掩膜资产的 NoData 冻结在资产级
+    width: 668
+    height: 666
+    transform: [30.0, 0.0, -404820.0, 0.0, -30.0, 337440.0]
+    # 每个栅格资产 WKT 必须包含的参数片段（冻结 Albers 关键参数，不引入 CRS 库）
+    wkt_fragments:
+      - 'PROJECTION["Albers_Conic_Equal_Area"]'
+      - 'DATUM["WGS_1984"'
+      - 'PARAMETER["latitude_of_center",33]'
+      - 'PARAMETER["longitude_of_center",108.5]'
+      - 'PARAMETER["standard_parallel_1",30]'
+      - 'PARAMETER["standard_parallel_2",36]'
+      - 'UNIT["metre",1'
+  scope:
+    # 模拟范围 = 以锚点为圆心、半径 10 km 的圆形（314.1 km²）；判定必须用
+    # sim_extent_mask（圆内=1），不得用 bbox 或流域代替。
+    shape: circle
+    radius_m: 10000.0
+    area_km2: 314.1
+    pixel_count: 349046
+    mask_asset: sim_extent_mask
+  core_watershed:
+    # 核心水文单元（8.55 km²，占模拟范围 2.72%）；不是全域 Mask。
+    asset: watershed
+    area_km2: 8.55
+    share_of_scope_pct: 2.72
+  source:
+    repository: git@github.com:lenofrd/Xigu-Ecology-Data.git
+    revision: 52e0d5517ea7d3d83c5641b9cf714d26fefe2944
+    channel: github-release     # B 机制：正式分发渠道；Xigu 侧发布 Release 标签后回填
+    release: null
+    license: '上游 Copernicus DEM GLO-30、ESA WorldCover 2021 v200、HydroRIVERS v1.0；许可以各上游数据方条款为准（资产级溯源见 lineage，总链见 Xigu 数据契约 §5）'
+    upgrade_policy: 版本显式切换，旧版本可追溯，不原地覆盖
+  location:
+    # C 机制：相对缓存根的包目录；缓存根 = VALE_SEED_CACHE 环境变量，缺省
+    # <仓库根>/data/seed-cache（解析规则为 2026-11-26「有条件采纳」的临时实现，条件待老板明示）
+    package_dir: environment_seed_v2
+  required_assets:
+    - asset_id: dem
+      file: processed/environment_seed_v2/pilot_dem_30m.tif
+      format: GeoTIFF
+      status: active
+      dtype: float32
+      nodata: -9999
+      size_bytes: 1477518
+      sha256: d035790215b401291b600386aea45d5a75d85c9a5519fc13b675e4c04ecf1d53
+      lineage: 'Copernicus DEM GLO-30 → VRT → 双线性标准化'
+    - asset_id: slope
+      file: processed/environment_seed_v2/pilot_slope_30m.tif
+      format: GeoTIFF
+      status: active
+      dtype: float32
+      nodata: -9999
+      size_bytes: 1615137
+      sha256: 099935dedd985ee433879bae76563c9c12170a52b8c7ac9a49150d8ffae4ffd6
+      lineage: 'dem_30m_albers.tif → Horn'
+    - asset_id: aspect
+      file: processed/environment_seed_v2/pilot_aspect_30m.tif
+      format: GeoTIFF
+      status: active
+      dtype: float32
+      nodata: -9999
+      size_bytes: 1602652
+      sha256: 7d6631265b65d1e26b4ee10b6bdbe23811d507f4903e5185c13a7c70e5c2266d
+      lineage: 'dem_30m_albers.tif → Horn'
+    - asset_id: tpi_300m
+      file: processed/environment_seed_v2/pilot_tpi_300m_30m.tif
+      format: GeoTIFF
+      status: active
+      dtype: float32
+      nodata: -9999
+      size_bytes: 1672765
+      sha256: a322e5fe8f582fcc4c2156b7bdbc218dd4ecf18e1ebb5afe0d5a6268ac2eda16
+      lineage: 'dem_30m_albers.tif → 圆形邻域均值差'
+    - asset_id: tpi_1000m
+      file: processed/environment_seed_v2/pilot_tpi_1000m_30m.tif
+      format: GeoTIFF
+      status: active
+      dtype: float32
+      nodata: -9999
+      size_bytes: 1675643
+      sha256: 5b07a44ed86f9c8058bd06cf5381192229fe2e920db6ea7949b30d12fc5b7f48
+      lineage: 'dem_30m_albers.tif → 圆形邻域均值差'
+    - asset_id: tpi_3000m
+      file: processed/environment_seed_v2/pilot_tpi_3000m_30m.tif
+      format: GeoTIFF
+      status: active
+      dtype: float32
+      nodata: -9999
+      size_bytes: 1597394
+      sha256: d8350fcb7ffd25ae1b45b60e6ac0c432f6cb334a7b62f12818119a9c6ffe1a83
+      lineage: 'dem_30m_albers.tif → 圆形邻域均值差'
+    - asset_id: worldcover
+      file: processed/environment_seed_v2/pilot_worldcover_30m.tif
+      format: GeoTIFF
+      status: active
+      dtype: uint8
+      nodata: 0        # 0 为无数据，不是类别；类别码沿用 ESA 标准
+      size_bytes: 66298
+      sha256: df374a7d5183e28d01656e51d3d52ee4369500f884cbcec7a4c90cd7157fda5b
+      lineage: '8 个 *_Map_screening.tif → Albers 30 m warp 合并'
+    - asset_id: sim_extent_mask
+      file: processed/environment_seed_v2/pilot_sim_extent_mask.tif
+      format: GeoTIFF
+      status: active
+      dtype: uint8
+      nodata: null     # 无 NoData 定义：圆外=0 是有效值（不是缺失）
+      size_bytes: 4215
+      sha256: f54af97b97dc6a1f52fa7b1852f7fed511291d3417f0394a19973bf469cfdb56
+      lineage: '候选 6 中心 + 半径 10 km 圆形'
+    - asset_id: watershed
+      file: processed/environment_seed_v2/pilot_watershed_8_55km2_30m.tif
+      format: GeoTIFF
+      status: active
+      dtype: uint8
+      nodata: 0        # 流域内=1；0 为流域外（有效值，非缺失）
+      size_bytes: 3188
+      sha256: 303c7cb77f59b9712fce93a86f68ba66e4dadbb255ef3cabefce6cf3d68260c7
+      lineage: 'H2 缓冲窗口 fix_flats 填洼 → D8 pointer → watershed → 裁入试点网格'
+    - asset_id: rivers
+      # 矢量资产：保留完整 LineString 几何；河段几何可超出 bbox（bounds 可达
+      # bbox 外约 1–4 km），按查询目标显式裁剪，不直接累加 geometry.length。
+      file: processed/environment_seed_v2/pilot_rivers.gpkg
+      format: GeoPackage
+      status: active
+      layer: rivers
+      geometry_types: [LineString]
+      feature_count: 25
+      bounds_albers_m: [-405503.04, 313286.41, -375867.97, 343550.68]
+      size_bytes: 106496
+      sha256: b1b82b9be203ad4c7f2a74b916fe4c9b14399e481983415d4457a236a6d5c9d9
+      lineage: 'hydrorivers_qinling_daba_hanjiang_hanzhong_screening.gpkg → bbox ∩'

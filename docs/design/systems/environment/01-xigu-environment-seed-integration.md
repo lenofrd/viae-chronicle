@@ -109,3 +109,38 @@
 - Xigu Environment Seed v2 已发布并登记；其发布核验属于 Xigu 侧结果。
 - Viae 侧 Seed 导入、GridSpace、Loader 与 Ecology-only 初始化验收**尚未据此证明完成**。
 - 本文冻结的是接入方向与分阶段验收，不声明任何 Viae 代码能力已实现。
+
+## 7. 落地注记（2026-11-26，P0）
+
+P0（数据契约与世界身份冻结）已落地，范围与偏差如下：
+
+- **Seed 描述与冻结**：`config/worlds/brookvale-town-001/world.yaml` 新增可选
+  `environment_seed` 节（schema：`src/vale/config/schema/environment_seed.py`），
+  冻结 seed_id `environment-seed-v3`、10 个必需资产（含 SHA-256 与 size）、
+  网格契约（CRS PROJ 串 + WKT 参数片段、668×666、30 m、Transform）、
+  锚点、模拟范围/流域口径、来源与升级策略。真实 SHA-256 冻结前已对
+  本机实际发布文件（Xigu 工作区）逐件复算核验一致（10/10）。
+- **身份映射结论**：Viae 唯一世界 `brookvale-town-001`（溪谷镇）与 Xigu
+  锚点 `brookvale-town-001（候选 6）` ID 级一致，锚点坐标
+  104.126366°E / 35.875187°N（Albers -394804.54, 327448.73）经
+  P0 核验后进入世界级契约（`anchor.world_ref` 必须等于 `world_id`，
+  由 `seed_world_binding_errors` 核对）；两侧均无平行世界身份。
+  过程性坐标在 Viae 既有生成身份（本地 64×40 过程网格）与 Albers
+  668×666 网格之间**尚无几何映射**——那是 P1 显式映射的范畴，本节不隐含。
+- **静态契约校验**：机制在 `src/vale/world/seed_contract.py`（可复用模块，
+  数据集成边界，P2 Loader 复用；不依赖 GDAL/Rasterio）；CLI 入口
+  `scripts/check_seed.py`（`--world` / `--contract` / `--cache-root`，
+  退出码 0/1/2）。校验失败关闭：版本、哈希（manifest 与实际文件双重）、
+  CRS、Transform、网格尺寸、NoData 语义、必需资产缺失均明确拒绝；
+  manifest 中冻结清单外的资产（如 `watershed_legacy_nofix`）显式报告、
+  不作通过条件。专项测试 `tests/test_seed_contract.py`（38 项，fixture 驱动）。
+- **B+C 分发定位**：部署环境把包挂载到缓存根（环境变量 `VALE_SEED_CACHE`，
+  缺省 `<仓库根>/data/seed-cache`），包内资产以 manifest 所在目录 +
+  basename 解析（兼容整仓镜像与仅挂载包目录两种布局）。**待裁决**：该
+  缓存根解析规则为老板 2026-11-26「有条件采纳」的临时实现，条件明示前
+  不改语义；世界配置不含任何机器绝对路径。
+- **与 §2/§P0 清单的偏差**：① 矢量资产（rivers）在真实 manifest 中不写
+  `status` 键（惯例：仅非 active 资产显式标注），校验器按 active 处理并
+  在报告中显式说明；② Xigu 侧正式 GitHub Release 标签尚未发布，
+  `source.release` 暂为 null（发布后回填）；③ GridSpace/Loader/导入
+  本身属 P1/P2，本节不声明完成（见 §6）。
